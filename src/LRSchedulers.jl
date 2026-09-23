@@ -93,3 +93,18 @@ function step_scheduler!(s::ReduceLROnPlateau,opt_state,epoch,current_loss;verbo
     s.wait[] = 0
   end
 end
+
+struct Optimiser
+  opt::Optimisers.AbstractRule 
+  lr_scheduler::LRScheduler
+end
+
+function Optimiser(;
+  lr_scheduler::LRScheduler,
+  opt=Optimisers.Adam(get_lr(lr_scheduler)),
+  weight_decay::Real=0.0
+  )
+
+  opt = weight_decay > 0 ? Optimisers.OptimiserChain(opt,Optimisers.WeightDecay(weight_decay)) : opt
+  Optimiser(opt,lr_scheduler)
+end

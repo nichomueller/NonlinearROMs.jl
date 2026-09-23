@@ -76,6 +76,7 @@ include("Utils.jl")
 export LRScheduler
 export CosineAnnealing
 export ReduceLROnPlateau
+export Optimiser
 export step_scheduler!
 export get_lr
 include("LRSchedulers.jl")
@@ -117,7 +118,10 @@ export build_model
 export KernelNeuralOperator
 include("NeuralModels.jl")
 
-export NeuralOptimiser
+export NNOperatorReduction
+export NNHyperReduction
+export TransientNNOperatorReduction
+export TransientNNHyperReduction
 export NeuralStrategy
 export NeuralReduction
 export DeepONetReduction
@@ -154,35 +158,17 @@ export TrainedVAE
 export resolve_batch_size
 include("NeuralTraining.jl")
 
-include("TransientNeuralTraining.jl")
-
-include("TransientNeuralSolver.jl")
-
-export NNOperatorReduction
-export NNHyperReduction
-include("SteadyReductions.jl")
-
 export NNHRProjection
 export NNOperator
 export NNContribution
-include("SteadyHyperReductions.jl")
-
-export NNInterpolation
-include("SteadyInterpolations.jl")
-
-include("SteadyReducedOperators.jl")
-
-export TransientNNOperatorReduction
-export TransientNNHyperReduction
-include("TransientReductions.jl")
-
 export TransientNNProjection
 export TransientNNContribution
 export TransientNNContributionTuple
-include("TransientHyperReductions.jl")
+include("HyperReductions.jl")
 
-include("TransientInterpolations.jl")
+export NNInterpolation
+include("Interpolations.jl")
 
-include("TransientReducedOperators.jl")
+include("RBOperators.jl")
 
 end # module

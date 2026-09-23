@@ -1,17 +1,148 @@
-struct NeuralOptimiser
-  opt::Optimisers.AbstractRule 
-  lr_scheduler::LRScheduler
+# interface for RB subspace + NN hyper-reduction machinery 
+
+abstract type AbstractNNHyperReduction{A<:ReductionStyle} <: HyperReduction{A} end
+
+"""
+    struct NNOperatorReduction <: AbstractNNHyperReduction{NoReduction}
+      nparams::Int
+      strategy::NeuralStrategy
+    end
+
+A hyper-reduction strategy for **operator regression**: the NN directly maps
+parameter values to the Galerkin-projected residual vector, bypassing FE
+assembly entirely during the online phase. Only suitable for residual
+(vector-valued) operators.
+
+The offline phase projects the residual snapshots onto the test space and
+trains the NN to reproduce the projected vectors. The online phase calls
+the NN forward pass, producing the projected residual without any assembly.
+
+`strategy` controls the [`MultiLayerPerceptron`](@ref) architecture and training.
+`nparams` controls how many parameter samples to use for NN training.
+"""
+struct NNOperatorReduction <: AbstractNNHyperReduction{NoReductionStyle}
+  nparams::Int
+  strategy::NeuralStrategy
 end
 
-function NeuralOptimiser(;
-  lr_scheduler::LRScheduler,
-  opt=Optimisers.Adam(get_lr(lr_scheduler)),
-  weight_decay::Real=0.0
+function NNOperatorReduction(
+  args...;
+  nparams::Int=20,
+  model::NeuralNetwork=MultiLayerPerceptron(),
+  strategy::NeuralStrategy=NeuralStrategy(model),
+  kwargs...
   )
 
-  opt = weight_decay > 0 ? Optimisers.OptimiserChain(opt,Optimisers.WeightDecay(weight_decay)) : opt
-  NeuralOptimiser(opt,lr_scheduler)
+  NNOperatorReduction(nparams,strategy)
 end
+
+ParamDataStructures.num_params(r::NNOperatorReduction) = r.nparams
+get_strategy(r::NNOperatorReduction) = r.strategy
+
+"""
+    struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
+      reduction::Reduction{A,EuclideanNorm}
+      strategy::NeuralStrategy
+    end
+
+A hyper-reduction strategy that uses a neural network to predict EIM
+coefficients from parameter values. The offline phase:
+
+1. applies empirical interpolation on the snapshot basis to extract coefficients
+2. trains a [`MultiLayerPerceptron`](@ref) via `strategy` on the `(μ,coefficient)` pairs
+
+The online phase calls the NN forward pass instead of assembling the FE
+operator on the reduced integration domain.
+"""
+struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
+  reduction::Reduction{A,EuclideanNorm}
+  strategy::NeuralStrategy
+end
+
+"""
+    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralStrategy(model),kwargs...) -> NNHyperReduction
+
+Constructs a `NNHyperReduction` from a `Reduction` built with the same
+positional/keyword arguments accepted by `Reduction`. An optional
+`strategy` keyword overrides the default [`NeuralStrategy`](@ref).
+"""
+function NNHyperReduction(
+  args...;
+  model::NeuralNetwork=MultiLayerPerceptron(),
+  strategy::NeuralStrategy=NeuralStrategy(model),
+  kwargs...
+  )
+
+  reduction = Reduction(args...;kwargs...)
+  NNHyperReduction(reduction,strategy)
+end
+
+RBSteady.get_reduction(r::NNHyperReduction) = r.reduction
+get_strategy(r::NNHyperReduction) = r.strategy
+
+# transient 
+
+abstract type AbstractTransientNNHyperReduction{A} <: TransientHyperReduction{A} end
+
+"""
+    struct TransientNNOperatorReduction <: AbstractTransientNNHyperReduction{NoReductionStyle}
+
+Transient counterpart of [`NNOperatorReduction`](@ref). The NN maps parameter
+values to the time-combined Galerkin-projected Jacobian, bypassing FE assembly.
+Carry the `combination::TimeCombination` from the ODE solver.
+"""
+struct TransientNNOperatorReduction <: AbstractTransientNNHyperReduction{NoReductionStyle}
+  combination::TimeCombination
+  nparams::Int
+  strategy::NeuralStrategy
+end
+
+function TransientNNOperatorReduction(
+  combination::TimeCombination,
+  args...;
+  nparams::Int=20,
+  model::NeuralNetwork=MultiLayerPerceptron(),
+  strategy::NeuralStrategy=NeuralStrategy(model),
+  kwargs...
+  )
+
+  TransientNNOperatorReduction(combination,nparams,strategy)
+end
+
+ParamDataStructures.num_params(r::TransientNNOperatorReduction) = r.nparams
+get_strategy(r::TransientNNOperatorReduction) = r.strategy
+RBTransient.get_time_combination(r::TransientNNOperatorReduction) = r.combination
+
+"""
+    struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
+
+Transient counterpart of [`NNHyperReduction`](@ref). The NN predicts EIM
+coefficients from parameter values; the time combination is applied at the
+basis-projection stage.
+"""
+struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
+  combination::TimeCombination
+  reduction::Reduction{A,EuclideanNorm}
+  strategy::NeuralStrategy
+end
+
+function TransientNNHyperReduction(
+  combination::TimeCombination,
+  args...;
+  model::NeuralNetwork=MultiLayerPerceptron(),
+  strategy::NeuralStrategy=NeuralStrategy(model),
+  kwargs...
+  )
+
+  reduction = Reduction(args...;kwargs...)
+  TransientNNHyperReduction(combination,reduction,strategy)
+end
+
+RBSteady.get_reduction(r::TransientNNHyperReduction) = r.reduction
+get_strategy(r::TransientNNHyperReduction) = r.strategy
+RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
+
+# neural reductions
 
 """
     Base.@kwdef struct NeuralStrategy{M,S}
@@ -77,7 +208,7 @@ struct NeuralStrategy{A<:NeuralNetwork}
   epochs::Int
   batch_size::Int
   sampler::MultiSampler
-  optimiser::NeuralOptimiser
+  optimiser::Optimiser
   trainlog::TrainingLog
 end
 
@@ -96,7 +227,7 @@ function NeuralStrategy(
   )
 
   sampler = MultiSampler(;space_step,param_step,time_step)
-  optimiser = NeuralOptimiser(;lr_scheduler,kwargs...)
+  optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
   NeuralStrategy(
     model,
