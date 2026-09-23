@@ -98,7 +98,7 @@ end
 
     # dof-sharing-a-cell adjacency is symmetric, even though each direction
     # is inserted independently while looping over cells
-    for s in vertices(g), d in outneighbors(g,s)
+    for s in vertices(g),d in outneighbors(g,s)
       @test has_edge(g,d,s)
     end
   end

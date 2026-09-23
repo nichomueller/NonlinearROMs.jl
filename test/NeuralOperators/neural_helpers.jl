@@ -21,7 +21,7 @@ using Optimisers
 end
 
 @testset "Z-Score stats computation" begin
-  data = Float32[1 2 3; 4 5 6] # 2 features,3 samples
+  data = Float32[1 2 3;4 5 6] # 2 features,3 samples
   stats = ZscoreStats(data)
 
   @test size(stats.μ) == (2,)

@@ -60,7 +60,7 @@ jac_reduction = NNHyperReduction(tol;nparams_jac,compression)
 rbsolver = RBSolver(fesolver,state_reduction,res_reduction,jac_reduction)
 
 feop = LinearParamOperator(res,stiffness,pspace,trial,test,domains)
-fesnaps, = solution_snapshots(rbsolver,feop)
+fesnaps,= solution_snapshots(rbsolver,feop)
 rbop = reduced_operator(rbsolver,feop,fesnaps)
 
 μon = realisation(feop;nparams=10,sampling=:uniform)

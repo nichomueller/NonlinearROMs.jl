@@ -3,9 +3,9 @@
 
 An [`Interpolation`](@ref) backed by a neural network model. During the
 online phase, `interpolate!` replaces the EIM linear solve with a NN forward
-pass: `coeff[:, i] = model(μ_i)`.
+pass: `coeff[:,i] = model(μ_i)`.
 
-Constructed automatically by `Interpolation(red::NNHyperReduction, basis, s)`.
+Constructed automatically by `Interpolation(red::NNHyperReduction,basis,s)`.
 """
 struct NNInterpolation{A<:NeuralNetwork} <: Interpolation
   interpolation::A

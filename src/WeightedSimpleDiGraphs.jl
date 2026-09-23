@@ -57,7 +57,7 @@ WeightedSimpleDiGraph(n::Ti) where {Ti<:Integer} = WeightedSimpleDiGraph{Ti,Floa
 WeightedSimpleDiGraph() = WeightedSimpleDiGraph{Int,Float64}()
 
 """
-    WeightedSimpleDiGraph(g::SimpleDiGraph, fw::Real=one(Float64), bw::Real=fw)
+    WeightedSimpleDiGraph(g::SimpleDiGraph,fw::Real=one(Float64),bw::Real=fw)
 
 Build a `WeightedSimpleDiGraph` from an existing `SimpleDiGraph`, assigning the
 constant weights `fw`/`bw` to every edge.
@@ -115,8 +115,8 @@ end
 # weighted edge insertion/removal
 
 """
-    add_edge!(g::WeightedSimpleDiGraph, e, fw, bw=fw)
-    add_edge!(g::WeightedSimpleDiGraph, s, d, fw, bw=fw)
+    add_edge!(g::WeightedSimpleDiGraph,e,fw,bw=fw)
+    add_edge!(g::WeightedSimpleDiGraph,s,d,fw,bw=fw)
 
 Insert the directed edge `s -> d` with forward weight `fw` (cached on the
 `s`-side, next to `fadjlist[s]`) and backward weight `bw` (cached on the
@@ -185,7 +185,7 @@ end
 # weight accessors
 
 """
-    get_weight(g::WeightedSimpleDiGraph, s, d) -> Real
+    get_weight(g::WeightedSimpleDiGraph,s,d) -> Real
 
 Forward weight of the edge `s -> d` (i.e. the value stored in
 `fweights[s]`), or `zero(Tv)` if the edge does not exist.
@@ -202,7 +202,7 @@ end
 get_weight(g::WeightedSimpleDiGraph,e::Edge) = get_weight(g,src(e),dst(e))
 
 """
-    out_weights(g::WeightedSimpleDiGraph, v) -> Vector
+    out_weights(g::WeightedSimpleDiGraph,v) -> Vector
 
 Forward weights of the outgoing edges of `v`, in the same order as
 `outneighbors(g,v)`.
@@ -210,7 +210,7 @@ Forward weights of the outgoing edges of `v`, in the same order as
 out_weights(g::WeightedSimpleDiGraph,v::Integer) = g.fweights[v]
 
 """
-    in_weights(g::WeightedSimpleDiGraph, v) -> Vector
+    in_weights(g::WeightedSimpleDiGraph,v) -> Vector
 
 Backward weights of the incoming edges of `v`, in the same order as
 `inneighbors(g,v)`.

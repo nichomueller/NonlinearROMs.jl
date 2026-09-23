@@ -106,7 +106,7 @@ end
   pretrained_op = reduced_operator(solver,feop,snaps)
   
   # Fine-tuning
-  new_op = reduced_operator(solver,feop,snaps,pretrained_op; update_stats=true)
+  new_op = reduced_operator(solver,feop,snaps,pretrained_op;update_stats=true)
   
   @test new_op isa NeuralOperator
   @test new_op.model.chain === pretrained_op.model.chain

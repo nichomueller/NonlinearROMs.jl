@@ -9,7 +9,7 @@ implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 Wrap external Flux/Lux models with [`GenericNeuralNetwork`](@ref):
 
     model = GenericNeuralNetwork(flux_chain)     # Flux
-    model = GenericNeuralNetwork(p -> lux_apply(chain, p, ps, st))  # Lux closure
+    model = GenericNeuralNetwork(p -> lux_apply(chain,p,ps,st))  # Lux closure
 """
 abstract type NeuralNetwork <: Map end
 

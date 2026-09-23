@@ -33,8 +33,8 @@ strategies for the offline phase.
 # Fields
 - `model`: A [`DeepONet`](@ref) or [`NOMAD`](@ref) architecture. Build one either with
   explicit `branch_layers`/`trunk_layers` (or `approximator_layers`/`decoder_layers`), or
-  via the convenience `DeepONet(nbranch_in, ntrunk_in; width, depth, activation)` /
-  `NOMAD(nsensors_in, ncoords_in; width, depth, activation)` constructors, which build a
+  via the convenience `DeepONet(nbranch_in,ntrunk_in;width,depth,activation)` /
+  `NOMAD(nsensors_in,ncoords_in;width,depth,activation)` constructors, which build a
   uniform stack of `depth` hidden layers of `width` neurons from the given input dimensions.
 - `epochs::Int`: Total number of training epochs. Default: `20000`.
 - `batch_size::Int`: The batch size for training. If set to `0` or a negative value, it defaults to the total number of available samples (full-batch). Default: `0`.
@@ -54,12 +54,12 @@ strategies for the offline phase.
 ```julia
 using Lux
 
-strategy = NeuralStrategy(
-  DeepONet(2, 2; width=64, depth=3, activation=Lux.gelu), # 2 params -> Branch; 2D coords -> Trunk
+s = NeuralStrategy(
+  DeepONet(2,2;width=64,depth=3,activation=Lux.gelu), # 2 params -> Branch; 2D coords -> Trunk
   epochs = 5000,
   batch_size = 32,
   space_step = 2, # Use half of the spatial DoFs for training
-  lr_scheduler = CosineAnnealing(5000, lr_max=1e-3, lr_min=1e-6)
+  lr_scheduler = CosineAnnealing(5000,lr_max=1e-3,lr_min=1e-6)
   )
 ```
 
@@ -67,7 +67,7 @@ strategy = NeuralStrategy(
 ```julia
 # Log-transform for parameters spanning huge ranges (e.g., 1e-(beta) with beta = 1:0.2:5)
 strategy_log = NeuralStrategy(
-  DeepONet(2, 3; width=64, depth=3), # 2 params -> Branch; 3D coords -> Trunk
+  DeepONet(2,3;width=64,depth=3), # 2 params -> Branch; 3D coords -> Trunk
   param_step = p -> log10.(p)
   )
 ```
@@ -89,6 +89,7 @@ function NeuralStrategy(
   param_step=1,
   time_step=nothing,
   lr_scheduler=CosineAnnealing(epochs),
+  name=string(nameof(typeof(model))),
   verbose::Bool=true,
   print_every::Int=500,
   kwargs...
@@ -96,7 +97,6 @@ function NeuralStrategy(
 
   sampler = MultiSampler(;space_step,param_step,time_step)
   optimiser = NeuralOptimiser(;lr_scheduler,kwargs...)
-  name = string(nameof(typeof(model)))
   trainlog = TrainingLog(name,epochs;verbose,print_every)
   NeuralStrategy(
     model,
@@ -108,22 +108,22 @@ function NeuralStrategy(
   )
 end
 
-get_sampler(strategy::NeuralStrategy) = strategy.sampler
-get_optimiser(strategy::NeuralStrategy) = strategy.optimiser.opt
-get_scheduler(strategy::NeuralStrategy) = strategy.optimiser.lr_scheduler
-get_logger(strategy::NeuralStrategy) = strategy.trainlog
+get_sampler(s::NeuralStrategy) = s.sampler
+get_optimiser(s::NeuralStrategy) = s.optimiser.opt
+get_scheduler(s::NeuralStrategy) = s.optimiser.lr_scheduler
+get_logger(s::NeuralStrategy) = s.trainlog
 
-function build_model(strategy::NeuralStrategy)
-  build_model(strategy.model)
+function build_model(s::NeuralStrategy)
+  build_model(s.model)
 end
 
 struct NeuralReduction{A<:NeuralNetwork} <: Reduction{NoReductionStyle,EuclideanNorm}
-  strategy::NeuralStrategy{A}
+  s::NeuralStrategy{A}
 end
 
 RBSteady.ReductionStyle(r::NeuralReduction) = NoReductionStyle()
 RBSteady.NormStyle(r::NeuralReduction) = EuclideanNorm()
-get_strategy(r::NeuralReduction) = r.strategy
+get_strategy(r::NeuralReduction) = r.s
 
 """
     const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction{M}
@@ -136,21 +136,21 @@ const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction
 """
     const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
 
-A reduction wrapper for the Deep Operator Network (DeepONet) strategy.
+A reduction wrapper for the Deep Operator Network (DeepONet) s.
 It instructs the ROM solvers to use the DeepONet pipeline during the offline and online phases.
 
 # Constructors
-- `DeepONetReduction(s::NeuralStrategy)`: Wraps an explicitly defined strategy.
-- `DeepONetReduction(; model::DeepONet, kwargs...)`: Automatically builds the strategy, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
+- `DeepONetReduction(s::NeuralStrategy)`: Wraps an explicitly defined s.
+- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
 
 # Examples
 ```julia
-# Using an explicit strategy
-strategy = NeuralStrategy(DeepONet(2,3;width=64,depth=3), epochs=1000)
-reduction = DeepONetReduction(strategy)
+# Using an explicit s
+s = NeuralStrategy(DeepONet(2,3;width=64,depth=3),epochs=1000)
+reduction = DeepONetReduction(s)
 
 # Using kwargs directly
-reduction = DeepONetReduction(model=DeepONet(2,3;width=64,depth=3), epochs=1000, batch_size=32)
+reduction = DeepONetReduction(model=DeepONet(2,3;width=64,depth=3),epochs=1000,batch_size=32)
 ```
 """
 const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
@@ -158,21 +158,21 @@ const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
 """
     const NOMADReduction{M<:NOMAD} = NeuralReduction{M}
 
-A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator strategy.
+A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator s.
 It instructs the ROM solvers to use the NOMAD pipeline during the offline and online phases.
 
 # Constructors
-- `NOMADReduction(s::NeuralStrategy)`: Wraps an explicitly defined strategy.
-- `NOMADReduction(; model::NOMAD, kwargs...)`: Automatically builds the strategy, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
+- `NOMADReduction(s::NeuralStrategy)`: Wraps an explicitly defined s.
+- `NOMADReduction(;model::NOMAD,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
 
 # Examples
 ```julia
-# Using an explicit strategy
-strategy = NeuralStrategy(NOMAD(2,3;width=32,depth=2), epochs=1000)
-reduction = NOMADReduction(strategy)
+# Using an explicit s
+s = NeuralStrategy(NOMAD(2,3;width=32,depth=2),epochs=1000)
+reduction = NOMADReduction(s)
 
 # Using kwargs directly
-reduction = NOMADReduction(model=NOMAD(2,3;width=32,depth=2), epochs=1000)
+reduction = NOMADReduction(model=NOMAD(2,3;width=32,depth=2),epochs=1000)
 ```
 """
 const NOMADReduction{M<:NOMAD} = NeuralReduction{M}
@@ -186,12 +186,12 @@ Reduction wrappers for the reconstruction-based architectures, analogous to
 [`DeepONetReduction`](@ref)/[`NOMADReduction`](@ref): they instruct
 [`reduced_operator`](@ref) to train an [`AutoEncoder`](@ref)/[`AutoDecoder`](@ref)/
 [`VariationalAutoEncoder`](@ref) on the snapshot data itself (no parameters/coordinates
-involved), producing a [`NeuralOperator`](@ref) with `metadata === nothing`.
+involved), producing a [`NeuralOperator`](@ref) with `metadata === identity`.
 
 # Constructors
 Same pattern as `DeepONetReduction`/`NOMADReduction`: wrap an explicit `NeuralStrategy`,
 or build one from `model=...`/kwargs directly, e.g.
-`AutoEncoderReduction(model=AutoEncoder(width=32,depth=2), epochs=1000)`.
+`AutoEncoderReduction(model=AutoEncoder(width=32,depth=2),epochs=1000)`.
 """
 const AutoEncoderReduction{M<:AutoEncoder} = NeuralReduction{M}
 const AutoDecoderReduction{M<:AutoDecoder} = NeuralReduction{M}
@@ -209,8 +209,8 @@ for (f,m) in (
     $f(s::NeuralStrategy{<:$m}) = NeuralReduction(s)
 
     function $f(;model::$m,kwargs...)
-      strategy = NeuralStrategy(model;kwargs...)
-      NeuralReduction(strategy)
+      s = NeuralStrategy(model;kwargs...)
+      NeuralReduction(s)
     end
   end
 end

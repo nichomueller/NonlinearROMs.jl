@@ -95,6 +95,7 @@ function NormStats(data,params,coords;normalise=false)
 end
 
 normalise!(args...) = @abstractmethod
+normalise!(data,::typeof(identity)) = data
 
 function normalise!(data::AbstractVector,stats::ZscoreStats)
   data .-= stats.μ
@@ -232,7 +233,7 @@ function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVect
   TS = promote_type(T,S)
   coords_mat = zeros(TS,D+1,length(coords)*length(times))
   col = 0
-  for t in times, coord in coords
+  for t in times,coord in coords
     col += 1
     for d in 1:D
       coords_mat[d,col] = coord.data[d]

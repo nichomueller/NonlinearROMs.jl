@@ -1,7 +1,7 @@
 """
-    const NeuralSolver{A,C<:NeuralReduction} = GlobalRBSolver{A,C,Nothing,Nothing}
+    const NeuralSolver{A,B<:NeuralReduction} = GlobalRBSolver{A,B,Nothing,Nothing}
 
-    NeuralSolver(fesolver::GridapType, reduction::NeuralReduction)
+    NeuralSolver(fesolver::GridapType,reduction::NeuralReduction)
 
 Initializes the Reduced Basis Solver for Neural Operators.
 
@@ -14,28 +14,28 @@ Initializes the Reduced Basis Solver for Neural Operators.
 **Minimal Default Initialization:**
 ```julia
 # Default hyperparameters (20000 epochs, full-batch, etc.), 2 params -> Branch, 2D coords -> Trunk
-solver = NeuralSolver(LUSolver(), DeepONetReduction(model=DeepONet(2,2)))
+solver = NeuralSolver(LUSolver(),DeepONetReduction(model=DeepONet(2,2)))
 ```
 **Custom Initialization:**
 ```julia
 using Lux
 
 strategy = NeuralStrategy(
-  DeepONet(2, 2; width=128, depth=4, activation=Lux.gelu),
+  DeepONet(2,2;width=128,depth=4,activation=Lux.gelu),
   epochs = 1000
   )
 reduction = DeepONetReduction(strategy)
-solver = NeuralSolver(ThetaMethod(LUSolver(), dt, θ), reduction)
+solver = NeuralSolver(ThetaMethod(LUSolver(),dt,θ),reduction)
 ```
 """
-const NeuralSolver{A,C<:NeuralReduction} = GlobalRBSolver{A,C,Nothing,Nothing}
 
-function NeuralSolver(fesolver,reduction::NeuralReduction)
-  RBSolver(fesolver,GlobalContext(),reduction,nothing,nothing)
+struct NeuralSolver{A,B<:NeuralReduction} <: ROMSolver
+  fesolver::A
+  reduction::B
 end
 
 """
-    struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ReducedOperator{O,T}
+    struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
       op::ParamOperator{O,T}
       model::A
       metadata::B
@@ -50,19 +50,19 @@ and any normalization metadata needed to scale the data.
 # Fields
 - `op`: The original high-fidelity parametric operator.
 - `model`: The trained [`TrainedNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
-- `metadata`: Either `nothing` (no normalisation) or a [`NormStats`](@ref) bundling the
+- `metadata`: Either `identity` (no normalisation) or a [`NormStats`](@ref) bundling the
   z-score statistics used to normalize the inputs and the absolute maximum scalar value of
   the snapshot target data (`metadata.dmax`), used for the final denormalization of the
   network predictions.
 """
-struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ReducedOperator{O,T}
+struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
   op::ParamOperator{O,T}
   model::A
   metadata::B
 end
 
 function NeuralOperator(op,model)
-  NeuralOperator(op,model,nothing)
+  NeuralOperator(op,model,identity)
 end
 
 ParamSteady.get_fe_operator(op::NeuralOperator) = op.op
@@ -121,20 +121,20 @@ It initializes the neural network with the weights and states of the `pretrained
 model_arch = DeepONet(2,2)
 
 # Base Training
-base_strategy = NeuralStrategy(model_arch, epochs=5000)
-solver_base = NeuralSolver(LUSolver(), DeepONetReduction(base_strategy))
-pretrained_op = reduced_operator(solver_base, feop, snapshots_base)
+base_strategy = NeuralStrategy(model_arch,epochs=5000)
+solver_base = NeuralSolver(LUSolver(),DeepONetReduction(base_strategy))
+pretrained_op = reduced_operator(solver_base,feop,snapshots_base)
 
 # Fine-Tuning with a smaller learning rate on a refined dataset
 ft_strategy = NeuralStrategy(
   model_arch, # match the pretrained one
   epochs = 1000,
-  lr_scheduler = CosineAnnealing(1000, lr_max=1e-5) # Smaller LR
+  lr_scheduler = CosineAnnealing(1000,lr_max=1e-5) # Smaller LR
   )
-solver_ft = NeuralSolver(LUSolver(), DeepONetReduction(ft_strategy))
+solver_ft = NeuralSolver(LUSolver(),DeepONetReduction(ft_strategy))
 
 # Continual learning (inherits original stats)
-new_op = reduced_operator(solver_ft, feop, snapshots_new, pretrained_op; update_stats=false)
+new_op = reduced_operator(solver_ft,feop,snapshots_new,pretrained_op;update_stats=false)
 ```
 """
 function RBSteady.reduced_operator(
@@ -171,9 +171,6 @@ function RBSteady.reduced_operator(
   reduced_operator(solver,feop,s,pretrained_op;update_stats=update_stats)
 end
 
-# No-op when a NeuralOperator carries no normalisation metadata.
-normalise!(x,::Nothing) = x
-
 function Algebra.solve(
   solver::NeuralSolver{A,<:KernelOperatorReduction},
   op::NeuralOperator,
@@ -200,10 +197,10 @@ function Algebra.solve(
   end
 
   # Reshaping the [out_channels, N_nodes, Batch] output back to Snapshots format (N_dofs, n_samples)
-  out_channels = size(pred_cpu, 1)
-  n_nodes = size(coords, 2)
-  n_samples = size(params, 2)
-  pred_2d = reshape(pred_cpu, out_channels * n_nodes, n_samples)
+  out_channels = size(pred_cpu,1)
+  n_nodes = size(coords,2)
+  n_samples = size(params,2)
+  pred_2d = reshape(pred_cpu,out_channels * n_nodes,n_samples)
 
   x̂ = Snapshots(ConsecutiveParamArray(pred_2d),r)
   stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")

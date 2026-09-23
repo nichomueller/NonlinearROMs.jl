@@ -35,13 +35,13 @@ end
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
 a plain matrix). `metadata` optionally denormalises the output by `metadata.dmax`; it
-is a no-op when `metadata === nothing` (a `NeuralOperator` with no normalisation stats).
+is a no-op when `metadata === identity` (a `NeuralOperator` with no normalisation stats).
 """
 function (m::TrainedNeuralModel)(inputs)
   first(m.chain(inputs,m.parameters,m.states))
 end
 
-(m::TrainedNeuralModel)(inputs,metadata::Nothing) = m(inputs)
+(m::TrainedNeuralModel)(inputs,metadata::typeof(identity)) = m(inputs)
 
 function (m::TrainedNeuralModel)(inputs,metadata::NormStats)
   pred = m(inputs)

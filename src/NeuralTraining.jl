@@ -86,8 +86,8 @@ function train(
     stats = pretrained_op.metadata
     expected_param_in = length(stats.pscore.μ)
     expected_coord_in = length(stats.xscore.μ)
-    @assert size(params,1) == expected_param_in "Parameter dimension mismatch: expected $expected_param_in, got $(size(params, 1))."
-    @assert size(coords,1) == expected_coord_in "Coordinate dimension mismatch: expected $expected_coord_in, got $(size(coords, 1))."
+    @assert size(params,1) == expected_param_in "Parameter dimension mismatch: expected $expected_param_in, got $(size(params,1))."
+    @assert size(coords,1) == expected_coord_in "Coordinate dimension mismatch: expected $expected_coord_in, got $(size(coords,1))."
     normalise!((data,params,coords),stats)
   end
 
@@ -355,7 +355,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   n_samples = size(data,2)
 
   rng = Random.default_rng()
@@ -371,7 +371,7 @@ function train(
 
   trained = train_autoencoder!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 function train(
@@ -385,7 +385,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   n_samples = size(data,2)
 
   # Pretrained model
@@ -400,7 +400,7 @@ function train(
 
   trained = train_autoencoder!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 function train(
@@ -412,7 +412,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   nin,n_train = size(data,1),size(data,2)
 
   rng = Random.default_rng()
@@ -429,7 +429,7 @@ function train(
 
   trained = train_autodecoder!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 function train(
@@ -443,7 +443,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   n_train = size(data,2)
 
   # Latent codes are optimised per training sample, so they can't be inherited across a
@@ -467,7 +467,7 @@ function train(
 
   trained = train_autodecoder!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 function train(
@@ -479,7 +479,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   n_samples = size(data,2)
 
   rng = Random.default_rng()
@@ -495,7 +495,7 @@ function train(
 
   trained = train_vae!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 function train(
@@ -509,7 +509,7 @@ function train(
   strategy = get_strategy(red)
 
   # Data extraction
-  data, = get_formatted_data(Float32,s)
+  data,= get_formatted_data(Float32,s)
   n_samples = size(data,2)
 
   # Pretrained model
@@ -524,7 +524,7 @@ function train(
 
   trained = train_vae!(train_state,dataloader,strategy)
 
-  return trained,nothing
+  return trained,identity
 end
 
 """

@@ -6,7 +6,7 @@ Abstract supertype for integral kernel implementations used within the iterative
 abstract type AbstractIntegralKernel <: Lux.AbstractLuxLayer end
 
 """
-    struct NeuralOperatorLayer{K<:AbstractIntegralKernel, L, B, F} <: Lux.AbstractLuxContainerLayer{(:kernel, :local_linear)}
+    struct NeuralOperatorLayer{K<:AbstractIntegralKernel,L,B,F} <: Lux.AbstractLuxContainerLayer{(:kernel,:local_linear)}
 
 A single iterative layer of a Kernel Neural Operator.
 It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(x)), where:

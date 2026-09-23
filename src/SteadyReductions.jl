@@ -1,4 +1,4 @@
-abstract type AbstractNNHyperReduction{A<:ReductionStyle} <: RBSteady.HyperReduction{A} end
+abstract type AbstractNNHyperReduction{A<:ReductionStyle} <: HyperReduction{A} end
 
 """
     struct NNOperatorReduction <: AbstractNNHyperReduction{NoReduction}
@@ -47,7 +47,7 @@ A hyper-reduction strategy that uses a neural network to predict EIM
 coefficients from parameter values. The offline phase:
 
 1. applies empirical interpolation on the snapshot basis to extract coefficients
-2. trains a [`MultiLayerPerceptron`](@ref) via `strategy` on the `(μ, coefficient)` pairs
+2. trains a [`MultiLayerPerceptron`](@ref) via `strategy` on the `(μ,coefficient)` pairs
 
 The online phase calls the NN forward pass instead of assembling the FE
 operator on the reduced integration domain.
@@ -58,7 +58,7 @@ struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
 end
 
 """
-    NNHyperReduction(args...; model=MultiLayerPerceptron(), strategy=NeuralStrategy(model), kwargs...) -> NNHyperReduction
+    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralStrategy(model),kwargs...) -> NNHyperReduction
 
 Constructs a `NNHyperReduction` from a `Reduction` built with the same
 positional/keyword arguments accepted by `Reduction`. An optional

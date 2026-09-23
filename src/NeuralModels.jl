@@ -1,5 +1,5 @@
 """
-    struct KernelNeuralOperator{K, F} <: AbstractKernelNeuralOperator
+    struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
 
 Generic architecture for Kernel-based Neural Operators.
 It maps an input function to an output function through three main stages:
@@ -37,8 +37,8 @@ The layers are defined as standard Julia tuples.
 # Branch Net: 2 inputs -> 64 hidden -> 32 output (latent dimension p=32)
 # Trunk Net: 3 inputs (e.g., 2D space + time) -> 64 hidden -> 32 output
 model = DeepONet(
-  branch_layers = (2, 64, 32),
-  trunk_layers = (3, 64, 32),
+  branch_layers = (2,64,32),
+  trunk_layers = (3,64,32),
   activation = relu
   )
 ```
@@ -83,8 +83,8 @@ The layers are defined as standard Julia tuples.
 # Approximator: 5 sensors -> 32 hidden -> 16 latent space
 # Decoder: 19 inputs (16 latent + 3 spatial coords) -> 32 hidden -> 1 output
 model = NOMAD(
-  approximator_layers = (5, 32, 16),
-  decoder_layers = (19, 32, 1),
+  approximator_layers = (5,32,16),
+  decoder_layers = (19,32,1),
   activation = relu
   )
 ```
