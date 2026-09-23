@@ -8,10 +8,10 @@ It maps an input function to an output function through three main stages:
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
 struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
-    lifting_layers::Tuple{Vararg{Int}}
-    kernel_configs::Tuple{Vararg{Any}}
-    projection_layers::Tuple{Vararg{Int}}
-    activation::F
+  lifting_layers::Tuple{Vararg{Int}}
+  kernel_configs::Tuple{Vararg{Any}}
+  projection_layers::Tuple{Vararg{Int}}
+  activation::F
 end
 
 """

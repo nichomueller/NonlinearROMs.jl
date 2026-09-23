@@ -103,7 +103,7 @@ function normalise!(data::AbstractVector,stats::ZscoreStats)
 end
 
 function normalise!(data::AbstractMatrix,stats::ZscoreStats)
-  for v in eachcol(data)
+  @inbounds for v in eachcol(data)
     normalise!(v,stats)
   end
   data
@@ -128,7 +128,7 @@ function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)
   map(get_free_dof_coordinates,V.spaces)
 end
 
-struct CoordinateSnapshots{T,N,Tc,Nc,A<:AbstractSnapshots{T,N},B<:AbstractArray{Tc,Nc}} <:AbstractSnapshots{T,N}
+struct CoordinateSnapshots{T,N,Tc,Nc,A<:AbstractSnapshots{T,N},B<:AbstractArray{Tc,Nc}} <: AbstractSnapshots{T,N}
   snaps::A
   coords::B
 end
@@ -174,38 +174,14 @@ end
 
 function get_formatted_data(::Type{T},s::CoordinateSnapshots) where T
   data,params = get_formatted_data(T,s.snaps)
-  coords = T.(stack(p -> collect(p.data),vec(get_coordinates(s))))
+  coords = T.(matrix_of_coords(get_coordinates(s)))
   return (data,params,coords)
-end
-
-"""
-    _spacetime_coords(coords_raw::AbstractMatrix,t_grid::AbstractVector) -> Matrix
-
-Builds the flattened `(D_phys+1,N_dofs*N_time)` space-time trunk-input grid used by
-transient DeepONet/NOMAD: for every time value (outer loop) and every spatial DoF
-(inner loop), appends the time as an extra last coordinate. Space varies fastest, so
-the column order matches how `get_formatted_data`/`_flatten` flatten the target data.
-"""
-function _spacetime_coords(coords_raw::AbstractMatrix{T},t_grid::AbstractVector{T}) where T
-  D_phys,N_dofs = size(coords_raw)
-  N_time = length(t_grid)
-  coords = zeros(T,D_phys+1,N_dofs*N_time)
-  col = 1
-  @views for t_val in t_grid
-    for x_idx in 1:N_dofs
-      coords[1:D_phys,col] .= coords_raw[:,x_idx]
-      coords[D_phys+1,col] = t_val
-      col += 1
-    end
-  end
-  return coords
 end
 
 function get_formatted_data(::Type{T},s::TransientCoordinateSnapshots) where T
   data_3d,params = get_formatted_data(T,s.snaps) # data_3d: (N_dofs,n_samples,N_time)
-  t_grid = T.(get_times(get_realisation(s)))
-  coords_raw = T.(stack(p -> collect(p.data),vec(get_coordinates(s)))) # (D_phys,N_dofs)
-  coords = _spacetime_coords(coords_raw,t_grid)
+  times = get_times(get_realisation(s))
+  coords = T.(matrix_of_coords(get_coordinates(s),times)) # (D_phys,N_dofs*N_time)
 
   N_dofs,n_samples,N_time = size(data_3d)
   data = zeros(T,N_dofs*N_time,n_samples)
@@ -220,48 +196,69 @@ function get_formatted_data(::Type{T},s::TransientCoordinateSnapshots) where T
   return data,params,coords
 end
 
-function get_formatted_data(::Type{T},r::AbstractRealisation,coords::AbstractArray{<:Point}) where T
+function get_formatted_data(::Type{T},r::AbstractRealisation,x::AbstractArray{<:Point}) where T
   params = T.(matrix_of_params(r))
-  coords_mat = T.(stack(p -> collect(p.data),vec(coords)))
-  return (params,coords_mat)
+  coords = T.(matrix_of_coords(x))
+  return (params,coords)
 end
 
-function get_formatted_data(::Type{T},r::TransientRealisation,coords::AbstractArray{<:Point}) where T
+function get_formatted_data(::Type{T},r::TransientRealisation,x::AbstractArray{<:Point}) where T
   params = T.(matrix_of_params(r))
-  t_grid = T.(get_times(r))
-  coords_raw = T.(stack(p -> collect(p.data),vec(coords))) # (D_phys,N_dofs)
-  coords_mat = _spacetime_coords(coords_raw,t_grid)
-  return (params,coords_mat)
+  times = get_times(get_realisation(r))
+  coords = T.(matrix_of_coords(x,times))
+  return (params,coords)
 end
 
 function get_formatted_data(s)
   get_formatted_data(Float32,s)
 end
 
-# Constructs the 3D input tensor required by Kernel Neural Operators.
-# It concatenates the physical coordinates and parameter values to form the 
-# vector field (x, a(x)) representing the geometry and input function.
-# Returns a 3D tensor of size (dim_params + dim_x, n_nodes, n_samples) ready for the Lifting layer.
-function _build_kernel_inputs(params::AbstractArray{T,2}, coords::AbstractArray{T,2}) where T
-    dim_params,n_samples = size(params)
-    dim_x,n_nodes = size(coords)
-    
-    # Preallocate the 3D tensor: [Features, Nodes, Samples]
-    input_tensor = zeros(T,dim_params + dim_x,n_nodes,n_samples)
-    
-    @views for s in 1:n_samples
-        pₛ = params[:,s]
-        for n in 1:n_nodes
-            # Concatenate input parameters a(x) and spatial coords x
-            input_tensor[1:dim_params,n,s] .= pₛ
-            input_tensor[dim_params+1:end,n,s] .= coords[:,n]
-        end
-    end
-    
-    return input_tensor
-end
-
 # utils 
 
 get_dof_to_nodes(b) = @abstractmethod
 get_dof_to_nodes(b::LagrangianDofBasis) = b.nodes[b.dof_to_node]
+
+function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
+  coords_mat = zeros(T,D,length(coords))
+  for (i,coord) in enumerate(coords)
+    for d in 1:D 
+      coords_mat[d,i] = coord.data[d]
+    end
+  end
+  return coords_mat
+end
+
+function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVector{S}) where {D,T,S}
+  TS = promote_type(T,S)
+  coords_mat = zeros(TS,D+1,length(coords)*length(times))
+  col = 0
+  for t in times, coord in coords
+    col += 1
+    for d in 1:D
+      coords_mat[d,col] = coord.data[d]
+    end
+    coords_mat[D+1,col] = t
+  end
+  return coords_mat
+end
+
+#TODO @Isaia: your old tensor_of_coords function stacked params before the coords 
+# on the rows, are you sure it's correct? I am doing the opposite here, please fix it 
+# in case it's wrong.
+function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) where {T,S}
+  TS = promote_type(T,S)
+  D,nx = size(coords)
+  P,np = size(params)
+  tensor = zeros(TS,D+P,nx,np)
+  for (i,x) in enumerate(eachcol(coords))
+    for (j,μ) in enumerate(eachcol(params))
+      for d in 1:D
+        tensor[d,i,j] = x[d]
+      end
+      for p in 1:P
+        tensor[D+p,i,j] = μ[p]
+      end
+    end
+  end
+  return tensor
+end

@@ -198,13 +198,13 @@ const AutoDecoderReduction{M<:AutoDecoder} = NeuralReduction{M}
 const VAEReduction{M<:VariationalAutoEncoder} = NeuralReduction{M}
 
 for (f,m) in (
-    (:DeepONetReduction,:DeepONet),
-    (:NOMADReduction,:NOMAD),
-    (:AutoEncoderReduction,:AutoEncoder),
-    (:AutoDecoderReduction,:AutoDecoder),
-    (:VAEReduction,:VariationalAutoEncoder),
-    (:KernelOperatorReduction,:AbstractKernelNeuralOperator)
-  )
+  (:DeepONetReduction,:DeepONet),
+  (:NOMADReduction,:NOMAD),
+  (:AutoEncoderReduction,:AutoEncoder),
+  (:AutoDecoderReduction,:AutoDecoder),
+  (:VAEReduction,:VariationalAutoEncoder),
+  (:KernelOperatorReduction,:AbstractKernelNeuralOperator)
+)
   @eval begin
     $f(s::NeuralStrategy{<:$m}) = NeuralReduction(s)
 

@@ -10,7 +10,7 @@ function Algebra.solve(
   strategy = get_strategy(red)
   V = get_test(op.op)
   coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(get_sampler(strategy),r)
+  r_sampled = sample(strategy,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords0)
   normalise!((params,coords),op.metadata)
 
@@ -36,7 +36,7 @@ function Algebra.solve(
   strategy = get_strategy(red)
   V = get_test(op.op)
   coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(get_sampler(strategy),r)
+  r_sampled = sample(strategy,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords0)
   pin,xin = _flatten(params,coords)
   normalise!((pin,xin),op.metadata)

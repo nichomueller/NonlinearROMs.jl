@@ -38,54 +38,33 @@ function build_graph!(
 end
 
 struct DistanceGraph <: GraphStrategy
-  k::Int
-  max_distance::Real
+  radius::Real
 end
+
+DistanceGraph(;radius=1.0) = DistanceGraph(radius)
 
 function build_graph(s::DistanceGraph,V::FESpace)
   dof_to_coords = get_free_dof_coordinates(V)
   data = map(x -> SVector(Tuple(x)),dof_to_coords)
-  D = num_cell_dims(get_triangulation(V))
-  metric = Minkowski(D)
-  kdtree = KDTree(data,metric)
+  tree = BallTree(data)
   g = WeightedSimpleDiGraph(length(dof_to_coords))
-  build_graph!(g,s,kdtree,dof_to_coords)
+  build_graph!(g,s,tree,dof_to_coords)
 end
 
 function build_graph!(
   g::WeightedSimpleDiGraph,
   s::DistanceGraph,
-  kdtree::NNTree,
+  tree::NNTree,
   dof_to_coords::AbstractVector{<:Point}
   )
 
   for (dof,coord) in enumerate(dof_to_coords)
-    neighbors,distances = search(s,kdtree,coord)
-    for (neighbor,w) in zip(neighbors,distances)
+    coord′ = get_array(ForwardDiff.value(coord))
+    dofs = inrange(tree,coord′,s.radius)
+    for neighbor in dofs
+      w = norm(coord - dof_to_coords[neighbor])
       add_edge!(g,dof,neighbor,w)
     end
   end
   g
-end
-
-function search(strategy::DistanceGraph,kdtree::NNTree,x::Point)
-  x′ = get_array(ForwardDiff.value(x))
-  v,d = knn(kdtree,x′,strategy.k,true)
-  nkeep = 0
-  for di in d
-    if di <= strategy.max_distance
-      nkeep += 1
-    end
-  end
-  vk = zeros(eltype(v),nkeep)
-  dk = zeros(eltype(d),nkeep)
-  nkeep = 0
-  for (vi,di) in zip(v,d)
-    if di <= strategy.max_distance
-      nkeep += 1
-      vk[nkeep] = vi
-      dk[nkeep] = di
-    end
-  end
-  vk,dk
 end

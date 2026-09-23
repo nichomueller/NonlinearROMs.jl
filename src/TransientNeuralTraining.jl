@@ -8,7 +8,7 @@ function train(
 
   # Data extraction
   sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(get_sampler(strategy),sx)
+  target = sample(strategy,sx)
   data,params,coords = get_formatted_data(Float32,target)
 
   # Normalisation
@@ -51,7 +51,7 @@ function train(
 
   # Data extraction
   sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(get_sampler(strategy),sx)
+  target = sample(strategy,sx)
   data,params,coords = get_formatted_data(Float32,target)
 
   # Normalisation
@@ -95,7 +95,7 @@ function train(
 
   # Data extraction
   sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(get_sampler(strategy),sx)
+  target = sample(strategy,sx)
   data,params,coords = get_formatted_data(Float32,target)
   dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
   N_tot = size(dout,2)
@@ -139,7 +139,7 @@ function train(
 
   # Data extraction
   sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(get_sampler(strategy),sx)
+  target = sample(strategy,sx)
   data,params,coords = get_formatted_data(Float32,target)
   dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
   N_tot = size(dout,2)

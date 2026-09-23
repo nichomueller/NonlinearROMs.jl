@@ -104,17 +104,16 @@ end
   end
 
   @testset "DistanceGraph" begin
-    k,maxd = 5,0.3
-    g = build_graph(DistanceGraph(k,maxd),V)
+    radius = 0.3
+    g = build_graph(DistanceGraph(radius),V)
 
     @test nv(g) == ndofs
 
     for s in vertices(g)
       nbrs = outneighbors(g,s)
-      @test length(nbrs) <= k
       for d in nbrs
         w = get_weight(g,s,d)
-        @test w <= maxd
+        @test w <= radius
         @test w ≈ norm(coords[s]-coords[d])
       end
     end

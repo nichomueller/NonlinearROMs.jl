@@ -8,6 +8,7 @@ NoSampler() = Sampler(nothing)
 
 sample(args...) = @notimplemented
 sample(s::Sampler,x,args...) = @abstractmethod
+sample(red::Reduction,x,args...) = sample(get_strategy(red),x,args...)
 
 sample(s::Sampler{typeof(identity)},x,args...) = x
 
