@@ -123,6 +123,14 @@ function normalise!(inout::NTuple{3,AbstractArray},stats::NormStats)
   normalise!(c,stats.xscore)
 end
 
+rescale!(args...) = @abstractmethod
+rescale!(data,::typeof(identity)) = data
+
+function rescale!(data::AbstractArray,stats::NormStats)
+  data .*= stats.dmax
+  data
+end
+
 # Data types
 
 function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)

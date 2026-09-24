@@ -13,16 +13,27 @@ as `(a::TrainedNeuralModel)(x::AbstractMatrix) -> AbstractMatrix` via the standa
 `Arrays.evaluate!`/`return_cache` interface. Returned by [`train_neural_coefficient`](@ref)
 for [`MultiLayerPerceptron`](@ref) strategies.
 """
-struct TrainedNeuralModel{A,B,C} <: NeuralModel
+struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
   chain::A
   parameters::B
   states::C
+  stats::D
 end
 
-function TrainedNeuralModel(train_state::Lux.Training.TrainState)
+function TrainedNeuralModel(chain,parameters,states)
+  TrainedNeuralModel(chain,parameters,states,identity)
+end
+
+function TrainedNeuralModel(chain,parameters,states,args...)
   parameters = train_state.parameters |> CDEV
   states = Lux.testmode(train_state.states) |> CDEV
-  TrainedNeuralModel(train_state.model,parameters,states)
+  TrainedNeuralModel(train_state.model,parameters,states,args...)
+end
+
+function TrainedNeuralModel(train_state::Lux.Training.TrainState,args...)
+  parameters = train_state.parameters |> CDEV
+  states = Lux.testmode(train_state.states) |> CDEV
+  TrainedNeuralModel(train_state.model,parameters,states,args...)
 end
 
 function Arrays.evaluate!(cache,a::TrainedNeuralModel,x::AbstractMatrix)
@@ -38,14 +49,9 @@ a plain matrix). `metadata` optionally denormalises the output by `metadata.dmax
 is a no-op when `metadata === identity` (a `NeuralOperator` with no normalisation stats).
 """
 function (m::TrainedNeuralModel)(inputs)
-  first(m.chain(inputs,m.parameters,m.states))
-end
-
-(m::TrainedNeuralModel)(inputs,metadata::typeof(identity)) = m(inputs)
-
-function (m::TrainedNeuralModel)(inputs,metadata::NormStats)
-  pred = m(inputs)
-  pred .*= metadata.dmax
+  normalise!(inputs,m.stats)
+  pred = first(m.chain(inputs,m.parameters,m.states))
+  rescale!(pred,m.stats)
   return pred
 end
 

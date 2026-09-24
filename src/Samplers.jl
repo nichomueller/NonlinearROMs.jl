@@ -4,7 +4,6 @@ end
 
 Sampler(s::Sampler) = s
 Sampler() = Sampler(identity)
-NoSampler() = Sampler(nothing)
 
 sample(args...) = @notimplemented
 sample(s::Sampler,x,args...) = @abstractmethod
@@ -182,7 +181,7 @@ for (f,g) in zip((:get_param_ids,:get_time_ids),(:num_params,:num_times))
     end
 
     function $f(s::Sampler{Nothing},x::Snapshots)
-      return 1:$g(x)
+      return nothing
     end
   end
 end

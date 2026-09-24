@@ -33,34 +33,23 @@ struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
 end
 
 """
-    struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
+    struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
       op::ParamOperator{O,T}
       model::A
-      metadata::B
     end
 
 The evaluated Reduced Basis Operator for Neural Operators.
 This struct is the direct output of the offline training phase and is passed to the `solve` function during the online phase.
 
-It stores the high-fidelity operator, the trained model (weights/states bundled inside it),
-and any normalization metadata needed to scale the data.
+It stores the high-fidelity operator, and the trained model (weights/states bundled inside it).
 
 # Fields
 - `op`: The original high-fidelity parametric operator.
 - `model`: The trained [`TrainedNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
-- `metadata`: Either `identity` (no normalisation) or a [`NormStats`](@ref) bundling the
-  z-score statistics used to normalize the inputs and the absolute maximum scalar value of
-  the snapshot target data (`metadata.dmax`), used for the final denormalization of the
-  network predictions.
 """
-struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
+struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
   op::ParamOperator{O,T}
   model::A
-  metadata::B
-end
-
-function NeuralOperator(op,model)
-  NeuralOperator(op,model,identity)
 end
 
 ParamSteady.get_fe_operator(op::NeuralOperator) = op.op
@@ -86,8 +75,8 @@ function RBSteady.reduced_operator(
   )
 
   reduction = get_state_reduction(solver)
-  model,metadata... = train(reduction,feop,s)
-  NeuralOperator(feop,model,metadata...)
+  model = train(reduction,feop,s)
+  NeuralOperator(feop,model)
 end
 
 """
@@ -144,8 +133,8 @@ function RBSteady.reduced_operator(
   )
 
   reduction = get_state_reduction(solver)
-  model,metadata... = train(reduction,feop,s,pretrained_op;update_stats=update_stats)
-  NeuralOperator(feop,model,metadata...)
+  model = train(reduction,feop,s,pretrained_op;update_stats=update_stats)
+  NeuralOperator(feop,model)
 end
 
 """
@@ -169,150 +158,165 @@ function RBSteady.reduced_operator(
   reduced_operator(solver,feop,s,pretrained_op;update_stats=update_stats)
 end
 
-function Algebra.solve(
-  solver::NeuralSolver{<:KernelReduction},
-  op::NeuralOperator,
-  r::Realisation
-  )
-
+function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
   # Prepare input
-  red = get_state_reduction(solver)
-  coords = get_free_dof_coordinates(get_test(op.op))
+  input = collect_input(solver,op,r)
   
-  r_sampled = sample(red,r)
-  params,coords = get_formatted_data(Float32,r_sampled,coords)
-  
-  # Normalize inputs using training metadata prior to concatenation
-  normalise!((params,coords),op.metadata)
-  
-  # Build the 3D tensor expected by the Lifting Layer
-  input_tensor = tensor_of_coords(coords,params)
-
   # Inference (denormalizes the output internally via the metadata fallback)
   t = @timed begin
-    pred_cpu = op.model(input_tensor,op.metadata)
+    pred = op.model(input)
   end
 
-  # Reshaping the [out_channels, N_nodes, Batch] output back to Snapshots format (N_dofs, n_samples)
-  out_channels = size(pred_cpu,1)
-  n_nodes = size(coords,2)
-  n_samples = size(params,2)
-  pred_2d = reshape(pred_cpu,out_channels * n_nodes,n_samples)
-
-  x̂ = Snapshots(ConsecutiveParamArray(pred_2d),r)
+  # Prepare output
+  output = to_snapshots(pred,r)
   stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")
 
-  return x̂,stats
+  return output,stats
 end
 
-function Algebra.solve(
-  solver::NeuralSolver{<:DeepONetReduction},
-  op::NeuralOperator,
-  r::Realisation
-  )
+# function Algebra.solve(
+#   solver::NeuralSolver{<:KernelReduction},
+#   op::NeuralOperator,
+#   r::Realisation
+#   )
 
-  # Prepare input
-  red = get_state_reduction(solver)
-  coords = get_free_dof_coordinates(get_test(op.op))
-  r_sampled = sample(red,r)
-  params,coords = get_formatted_data(Float32,r_sampled,coords)
-  normalise!((params,coords),op.metadata)
+#   # Prepare input
+#   red = get_state_reduction(solver)
+#   coords = get_free_dof_coordinates(get_test(op.op))
+  
+#   r_sampled = sample(red,r)
+#   params,coords = get_formatted_data(Float32,r_sampled,coords)
+  
+#   # Normalize inputs using training metadata prior to concatenation
+#   normalise!((params,coords),op.metadata)
+  
+#   # Build the 3D tensor expected by the Lifting Layer
+#   input_tensor = tensor_of_coords(coords,params)
 
-  # Inference Execution (denormalizes the output internally, using op.metadata.dmax)
-  t = @timed begin
-    pred_cpu = op.model((params,coords),op.metadata)
-  end
+#   # Inference (denormalizes the output internally via the metadata fallback)
+#   t = @timed begin
+#     pred_cpu = op.model(input_tensor,op.metadata)
+#   end
 
-  x̂ = Snapshots(ConsecutiveParamArray(pred_cpu),r)
-  stats = CostTracker(t,nruns=num_params(r),name="DeepONet Inference")
+#   # Reshaping the [out_channels, N_nodes, Batch] output back to Snapshots format (N_dofs, n_samples)
+#   x̂ = to_snapshots(pred_cpu,r)
+#   stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")
 
-  return x̂,stats
+#   return x̂,stats
+# end
+
+# function Algebra.solve(
+#   solver::NeuralSolver{<:DeepONetReduction},
+#   op::NeuralOperator,
+#   r::Realisation
+#   )
+
+#   # Prepare input
+#   red = get_state_reduction(solver)
+#   coords = get_free_dof_coordinates(get_test(op.op))
+#   r_sampled = sample(red,r)
+#   params,coords = get_formatted_data(Float32,r_sampled,coords)
+#   normalise!((params,coords),op.metadata)
+
+#   # Inference Execution (denormalizes the output internally, using op.metadata.dmax)
+#   t = @timed begin
+#     pred_cpu = op.model((params,coords),op.metadata)
+#   end
+
+#   x̂ = to_snapshots(pred_cpu,r)
+#   stats = CostTracker(t,nruns=num_params(r),name="DeepONet Inference")
+
+#   return x̂,stats
+# end
+
+# function Algebra.solve(
+#   solver::NeuralSolver{<:NOMADReduction},
+#   op::NeuralOperator,
+#   r::Realisation
+#   )
+
+#   # Prepare input
+#   red = get_state_reduction(solver)
+#   coords = get_free_dof_coordinates(get_test(op.op))
+#   r_sampled = sample(red,r)
+#   params,coords = get_formatted_data(Float32,r_sampled,coords)
+#   pin,xin = _flatten(params,coords)
+#   normalise!((pin,xin),op.metadata)
+
+#   # Inference (denormalizes the output internally, using op.metadata.dmax)
+#   t = @timed begin
+#     pred_cpu = op.model((pin,xin),op.metadata)
+#   end
+
+#   # Reshaping of the output for GridapROMs (N_dofs,n_samples)
+#   x̂ = to_snapshots(pred_cpu,r)
+#   stats = CostTracker(t,nruns=num_params(r),name="NOMAD Inference")
+
+#   return x̂,stats
+# end
+
+# # transient
+
+# function Algebra.solve(
+#   solver::NeuralSolver{<:DeepONetReduction},
+#   op::NeuralOperator,
+#   r::TransientRealisation,
+#   args...
+#   )
+
+#   # Prepare input
+#   red = get_state_reduction(solver)
+#   V = get_test(op.op)
+#   coords0 = get_free_dof_coordinates(V)
+#   r_sampled = sample(red,r)
+#   params,coords = get_formatted_data(Float32,r_sampled,coords0)
+#   normalise!((params,coords),op.metadata)
+
+#   t = @timed begin
+#     pred_cpu = op.model((params,coords),op.metadata)
+#   end
+
+#   x̂ = to_snapshots(pred_cpu,r)
+#   stats = CostTracker(t,nruns=num_params(r),name="DeepONet Transient Inference")
+
+#   return x̂,stats
+# end
+
+# function Algebra.solve(
+#   solver::NeuralSolver{<:NOMADReduction},
+#   op::NeuralOperator,
+#   r::TransientRealisation,
+#   args...
+#   )
+
+#   # Prepare input
+#   red = get_state_reduction(solver)
+#   V = get_test(op.op)
+#   coords0 = get_free_dof_coordinates(V)
+#   r_sampled = sample(red,r)
+#   params,coords = get_formatted_data(Float32,r_sampled,coords0)
+#   pin,xin = _flatten(params,coords)
+#   normalise!((pin,xin),op.metadata)
+
+#   t = @timed begin
+#     pred_cpu = op.model((pin,xin),op.metadata)
+#   end
+
+#   x̂ = to_snapshots(pred_cpu,r)
+#   stats = CostTracker(t,nruns= num_params(r),name="NOMAD Transient Inference")
+
+#   return x̂,stats
+# end
+
+# utils
+
+function to_snapshots(x,r::Realisation)
+  np = num_params(r)
+  d = reshape(x,:,np)
+  Snapshots(ConsecutiveParamArray(d),r)
 end
 
-function Algebra.solve(
-  solver::NeuralSolver{<:NOMADReduction},
-  op::NeuralOperator,
-  r::Realisation
-  )
-
-  # Prepare input
-  red = get_state_reduction(solver)
-  coords = get_free_dof_coordinates(get_test(op.op))
-  r_sampled = sample(red,r)
-  params,coords = get_formatted_data(Float32,r_sampled,coords)
-  pin,xin = _flatten(params,coords)
-  normalise!((pin,xin),op.metadata)
-
-  # Inference (denormalizes the output internally, using op.metadata.dmax)
-  t = @timed begin
-    pred_cpu = op.model((pin,xin),op.metadata)
-  end
-
-  # Reshaping of the output for GridapROMs (N_dofs,n_samples)
-  pred_2d = reshape(pred_cpu,size(coords,2),size(params,2))
-
-  x̂ = Snapshots(ConsecutiveParamArray(pred_2d),r)
-  stats = CostTracker(t,nruns=num_params(r),name="NOMAD Inference")
-
-  return x̂,stats
-end
-
-# transient
-
-function Algebra.solve(
-  solver::NeuralSolver{<:DeepONetReduction},
-  op::NeuralOperator,
-  r::TransientRealisation,
-  args...
-  )
-
-  # Prepare input
-  red = get_state_reduction(solver)
-  V = get_test(op.op)
-  coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(red,r)
-  params,coords = get_formatted_data(Float32,r_sampled,coords0)
-  normalise!((params,coords),op.metadata)
-
-  t = @timed begin
-    pred_cpu = op.model((params,coords),op.metadata)
-  end
-
-  x̂ = _to_snapshots(pred_cpu,r)
-  stats = CostTracker(t,nruns=num_params(r),name="DeepONet Transient Inference")
-
-  return x̂,stats
-end
-
-function Algebra.solve(
-  solver::NeuralSolver{<:NOMADReduction},
-  op::NeuralOperator,
-  r::TransientRealisation,
-  args...
-  )
-
-  # Prepare input
-  red = get_state_reduction(solver)
-  V = get_test(op.op)
-  coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(red,r)
-  params,coords = get_formatted_data(Float32,r_sampled,coords0)
-  pin,xin = _flatten(params,coords)
-  normalise!((pin,xin),op.metadata)
-
-  t = @timed begin
-    pred_cpu = op.model((pin,xin),op.metadata)
-  end
-
-  x̂ = _to_snapshots(pred_cpu,r)
-  stats = CostTracker(t,nruns= num_params(r),name="NOMAD Transient Inference")
-
-  return x̂,stats
-end
-
-# utils 
-
-function _to_snapshots(x,r)
+function to_snapshots(x,r::TransientRealisation)
   np = num_params(r)
   nt = num_times(r)
   d = reshape(permutedims(reshape(x,:,nt,np),(1,3,2)),:,nt*np)
