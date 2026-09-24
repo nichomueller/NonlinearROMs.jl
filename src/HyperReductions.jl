@@ -1,49 +1,50 @@
-const NNHRProjection{A<:AbstractNNHyperReduction,B<:Projection} = HRProjection{A,B}
+const NNHRProjection{A<:NNHyperReduction,B<:Projection} = HRProjection{A,B}
 
 function FESpaces.interpolate!(
   b̂::AbstractArray,
   cache,
-  a::NNHRProjection{<:NNHyperReduction,<:Projection},
+  a::NNHRProjection,
   r::AbstractRealisation
   )
 
   o = one(eltype2(b̂))
   x = matrix_of_params(r)
   i = get_interpolation(a)
-  coeff = ConsecutiveParamArray(evaluate!(cache,i.interpolation,x))
+  _coeff = evaluate!(cache,i.interpolation,x)
+  coeff = ConsecutiveParamArray(_coeff)
   mul!(b̂,a,coeff,o,o)
   return b̂
 end
 
-struct NNOperator{A,B} <: NNHRProjection{NNOperatorReduction,B}
+struct NNRegressor{A,B} <: Map
   model::A
   bias::B
 end
 
-function NNOperator(model::AbstractNeuralModel,test::RBSpace)
+function NNRegressor(model::NeuralModel,test::RBSpace)
   T = get_dof_value_type(test)
   nrows = num_reduced_dofs(test)
   basis = ReducedProjection(zeros(T,nrows,1))
-  NNOperator(model,basis)
+  NNRegressor(model,basis)
 end
 
-function NNOperator(model::AbstractNeuralModel,trial::RBSpace,test::RBSpace)
+function NNRegressor(model::NeuralModel,trial::RBSpace,test::RBSpace)
   T = get_dof_value_type(trial)
   nrows = num_reduced_dofs(test)
   ncols = num_reduced_dofs(trial)
   basis = ReducedProjection(zeros(T,nrows,ncols,1))
-  NNOperator(model,basis)
+  NNRegressor(model,basis)
 end
 
-RBSteady.get_basis(a::NNOperator) = a.bias
-RBSteady.get_style(a::NNOperator) = NNOperatorReduction()
-RBSteady.get_interpolation(a::NNOperator) = EmptyInterpolation()
-RBSteady.projection_eltype(a::NNOperator) = RBSteady.projection_eltype(a.bias)
+RBSteady.get_basis(a::NNRegressor) = a.bias
+RBSteady.get_style(a::NNRegressor) = NNRegression()
+RBSteady.get_interpolation(a::NNRegressor) = EmptyInterpolation()
+RBSteady.projection_eltype(a::NNRegressor) = RBSteady.projection_eltype(a.bias)
 
 function FESpaces.interpolate!(
   b̂::AbstractArray,
   cache,
-  a::NNOperator,
+  a::NNRegressor,
   r::AbstractRealisation
   )
 
@@ -54,7 +55,7 @@ function FESpaces.interpolate!(
 end
 
 function RBSteady.HRProjection(
-  red::NNOperatorReduction,
+  red::NNRegression,
   s::Snapshots,
   trian::Triangulation,
   test::RBSpace
@@ -65,11 +66,11 @@ function RBSteady.HRProjection(
   y = galerkin_projection(test,b)
   ϕ = get_basis(y)
   model = train_neural_coefficient(get_strategy(red),r,ϕ)
-  return NNOperator(model,test)
+  return NNRegressor(model,test)
 end
 
 function RBSteady.HRProjection(
-  red::NNOperatorReduction,
+  red::NNRegression,
   s::Snapshots,
   trian::Triangulation,
   trial::RBSpace,
@@ -81,7 +82,7 @@ function RBSteady.HRProjection(
   y = galerkin_projection(test,A,trial)
   ϕ = get_basis(y)
   model = train_neural_coefficient(get_strategy(red),r,ϕ)
-  return NNOperator(model,trial,test)
+  return NNRegressor(model,trial,test)
 end
 
 function RBSteady.HRProjection(
@@ -111,12 +112,12 @@ function RBSteady.HRProjection(
   return HRProjection(proj_basis,red,interp)
 end
 
-function RBSteady.allocate_coefficient(a::NNOperator,r::AbstractRealisation)
+function RBSteady.allocate_coefficient(a::NNRegressor,r::AbstractRealisation)
   x = matrix_of_params(r)
   return_cache(a.model,x)
 end
 
-function RBSteady.allocate_coefficient(a::NNHRProjection{<:NNHyperReduction,<:Projection},r::AbstractRealisation)
+function RBSteady.allocate_coefficient(a::NNHRProjection,r::AbstractRealisation)
   x = matrix_of_params(r)
   i = get_interpolation(a)
   return_cache(i.interpolation,x)
@@ -139,7 +140,7 @@ end
 
 function FESpaces.interpolate!(
   hypred::AbstractArray,
-  cache,
+  cache::AbstractArray,
   a::NNContribution,
   r::AbstractRealisation
   )
@@ -151,26 +152,10 @@ function FESpaces.interpolate!(
   return hypred
 end
 
-function RBSteady.allocate_coefficient(
-  a::BlockHRProjection{<:AbstractNNHyperReduction,<:Any,<:Any,N},
-  r::AbstractRealisation
-  ) where N
-
-  i0 = findfirst(a.touched)
-  A = typeof(allocate_coefficient(a.array[i0],r))
-  block_cache = Array{A,N}(undef,size(a))
-  for i in eachindex(a)
-    if a.touched[i]
-      block_cache[i] = allocate_coefficient(a.array[i],r)
-    end
-  end
-  return ArrayBlock(block_cache,a.touched)
-end
-
 # transient 
 
 function RBSteady.HRProjection(
-  red::TransientNNOperatorReduction,
+  red::TransientNNRegression,
   s::Snapshots,
   trian::Triangulation,
   test::RBSpace
@@ -181,11 +166,11 @@ function RBSteady.HRProjection(
   y = galerkin_projection(test,b)
   ϕ = get_basis(y)
   model = train_neural_coefficient(get_strategy(red),r,ϕ)
-  return NNOperator(model,test)
+  return NNRegressor(model,test)
 end
 
 function RBSteady.HRProjection(
-  red::TransientNNOperatorReduction,
+  red::TransientNNRegression,
   s::Snapshots,
   trian::Triangulation,
   trial::RBSpace,
@@ -197,7 +182,7 @@ function RBSteady.HRProjection(
   y = galerkin_projection(test,A,trial,get_time_combination(red))
   ϕ = get_basis(y)
   model = train_neural_coefficient(get_strategy(red),r,ϕ)
-  return NNOperator(model,trial,test)
+  return NNRegressor(model,trial,test)
 end
 
 function RBSteady.HRProjection(
@@ -227,8 +212,8 @@ function RBSteady.HRProjection(
   return HRProjection(proj_basis,red,interp)
 end
 
-const TransientNNProjection{A<:Projection} = HRProjection{<:AbstractTransientNNHyperReduction,A}
-const TransientNNContribution = AffineContribution{<:TransientNNProjection}
+const TransientNNRegressor{A<:Projection} = HRProjection{<:AbstractTransientNNHyperReduction,A}
+const TransientNNContribution = AffineContribution{<:TransientNNRegressor}
 const TransientNNContributionTuple = ContributionTuple{N,<:TransientNNContribution} where N
 
 function FESpaces.interpolate!(

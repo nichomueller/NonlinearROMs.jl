@@ -35,7 +35,7 @@ I changed several file names and introduced new files, so that the overall struc
 This is purely organizational: no behavior changed, other than the load-order constraints Julia imposes when a type moves to a file that now `include`s too late for another file's function signature to reference it (hit and fixed a few times over the course of this review).
 
 **2. One `NeuralReduction` for every neural-network use case, not two.**
-Before, DeepONet/NOMAD had their own training configuration, while the MLP-based hyper-reduction regressors (`NNOperatorReduction`, `NNHyperReduction`) had a completely separate `NNStrategy` (`type=MLPType()`, `layers`, `lr`, `optimiser`, `loss`, `epochs`, `weight_decay`, `batch_size`, `lr_schedule`, `patience`, `val_fraction`). Now a single
+Before, DeepONet/NOMAD had their own training configuration, while the MLP-based hyper-reduction regressors (`NNRegression`, `NNHyperReduction`) had a completely separate `NNStrategy` (`type=MLPType()`, `layers`, `lr`, `optimiser`, `loss`, `epochs`, `weight_decay`, `batch_size`, `lr_schedule`, `patience`, `val_fraction`). Now a single
 `NeuralReduction{A<:AbstractNeuralModel}` (model + epochs + batch_size + sampler + optimiser + training log) configures all of them. Also, I removed the `AutoDeepONet`/`AutoNOMAD` structs, as these can easily be merged with the non-`Auto` versions. Consequently, `resolve_model` was also removed.
 
 **3. One subsampling abstraction (`Sampler`/`MultiSampler`) instead of separate steady/transient code.**

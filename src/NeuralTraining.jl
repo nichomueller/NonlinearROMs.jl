@@ -504,9 +504,9 @@ function train(
 end
 
 """
-    train_neural_coefficient(red::NeuralReduction,r::AbstractRealisation,coeff) -> AbstractNeuralModel
+    train_neural_coefficient(red::NeuralReduction,r::AbstractRealisation,coeff) -> NeuralModel
 
-Builds and trains a [`AbstractNeuralModel`](@ref) from `red.model`'s recipe and
+Builds and trains a [`NeuralModel`](@ref) from `red.model`'s recipe and
 `(r,coeff)` data, through the same Lux/Reactant/Enzyme pipeline used for DeepONet/NOMAD.
 For a [`MultiLayerPerceptron`](@ref), the input/output dimensions are inferred from
 `r`/`coeff` and appended to `red.model.hidden_layers`; for an [`AutoEncoder`](@ref),

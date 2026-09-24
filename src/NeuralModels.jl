@@ -1,19 +1,12 @@
 """
-    abstract type AbstractNeuralModel <: Map end
+    abstract type NeuralModel <: Map end
 
 Abstract supertype for neural network models. Any concrete subtype must
 implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 `(param_dim × batch_size)` matrix of parameters and the output is a
 `(output_dim × batch_size)` matrix of predictions.
 """
-abstract type AbstractNeuralModel <: Map end
-
-"""
-    abstract type NeuralModel <: AbstractNeuralModel end
-
-Abstract supertype for neural models, which learn mappings between infinite-dimensional function spaces (Function -> Function).
-"""
-abstract type NeuralModel <: AbstractNeuralModel end
+abstract type NeuralModel <: Map end
 
 """
     abstract type CoordinateNeuralModel <: NeuralModel end
@@ -138,11 +131,11 @@ function NOMAD(
 end
 
 """
-    abstract type FiniteDimensionalModel <: AbstractNeuralModel end
+    abstract type FiniteDimensionalModel <: NeuralModel end
 
 Abstract supertype for standard neural networks mapping between finite-dimensional Euclidean spaces (Vector -> Vector).
 """
-abstract type FiniteDimensionalModel <: AbstractNeuralModel end
+abstract type FiniteDimensionalModel <: NeuralModel end
 
 """
     struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
@@ -252,7 +245,7 @@ end
 
 # Build model
 
-build_model(::AbstractNeuralModel) = @abstractmethod
+build_model(::NeuralModel) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
   lux_layers = []

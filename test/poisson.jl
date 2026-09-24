@@ -70,10 +70,10 @@ perf = eval_performance(rbsolver,rbop,x,x̂,festats,rbstats)
 
 @test all(isfinite,get_all_data(x̂))
 
-# operator regression (NNOperatorReduction)
+# operator regression (NNRegression)
 
-res_reduction_2 = NNOperatorReduction(tol;nparams=nparams_res)
-jac_reduction_2 = NNOperatorReduction(tol;nparams=nparams_jac)
+res_reduction_2 = NNRegression(tol;nparams=nparams_res)
+jac_reduction_2 = NNRegression(tol;nparams=nparams_jac)
 rbsolver_2 = RBSolver(fesolver,state_reduction,res_reduction_2,jac_reduction_2)
 
 rbop_2 = reduced_operator(rbsolver_2,feop,fesnaps)

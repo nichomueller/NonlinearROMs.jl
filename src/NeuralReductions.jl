@@ -1,149 +1,3 @@
-# interface for RB subspace + NN hyper-reduction machinery 
-
-abstract type AbstractNNHyperReduction{A<:ReductionStyle} <: HyperReduction{A} end
-
-"""
-    struct NNOperatorReduction <: AbstractNNHyperReduction{NoReduction}
-      nparams::Int
-      reduction::NeuralReduction
-    end
-
-A hyper-reduction strategy for **operator regression**: the NN directly maps
-parameter values to the Galerkin-projected residual vector, bypassing FE
-assembly entirely during the online phase. Only suitable for residual
-(vector-valued) operators.
-
-The offline phase projects the residual snapshots onto the test space and
-trains the NN to reproduce the projected vectors. The online phase calls
-the NN forward pass, producing the projected residual without any assembly.
-
-`reduction` controls the [`MultiLayerPerceptron`](@ref) architecture and training.
-`nparams` controls how many parameter samples to use for NN training.
-"""
-struct NNOperatorReduction <: AbstractNNHyperReduction{NoReductionStyle}
-  nparams::Int
-  reduction::NeuralReduction
-end
-
-function NNOperatorReduction(
-  args...;
-  nparams::Int=20,
-  model::AbstractNeuralModel=MultiLayerPerceptron(),
-  reduction::NeuralReduction=NeuralReduction(model),
-  kwargs...
-  )
-
-  NNOperatorReduction(nparams,reduction)
-end
-
-ParamDataStructures.num_params(r::NNOperatorReduction) = r.nparams
-RBSteady.get_reduction(r::NNOperatorReduction) = r.reduction
-
-"""
-    struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
-      reduction::Reduction{A,EuclideanNorm}
-      strategy::NeuralReduction
-    end
-
-A hyper-reduction strategy that uses a neural network to predict EIM
-coefficients from parameter values. The offline phase:
-
-1. applies empirical interpolation on the snapshot basis to extract coefficients
-2. trains a [`MultiLayerPerceptron`](@ref) via `strategy` on the `(μ,coefficient)` pairs
-
-The online phase calls the NN forward pass instead of assembling the FE
-operator on the reduced integration domain.
-"""
-struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
-  reduction::Reduction{A,EuclideanNorm}
-  strategy::NeuralReduction
-end
-
-"""
-    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralReduction(model),kwargs...) -> NNHyperReduction
-
-Constructs a `NNHyperReduction` from a `Reduction` built with the same
-positional/keyword arguments accepted by `Reduction`. An optional
-`strategy` keyword overrides the default [`NeuralReduction`](@ref).
-"""
-function NNHyperReduction(
-  args...;
-  model::AbstractNeuralModel=MultiLayerPerceptron(),
-  strategy::NeuralReduction=NeuralReduction(model),
-  kwargs...
-  )
-
-  reduction = Reduction(args...;kwargs...)
-  NNHyperReduction(reduction,strategy)
-end
-
-RBSteady.get_reduction(r::NNHyperReduction) = r.reduction
-get_strategy(r::NNHyperReduction) = r.strategy
-
-# transient 
-
-abstract type AbstractTransientNNHyperReduction{A} <: TransientHyperReduction{A} end
-
-"""
-    struct TransientNNOperatorReduction <: AbstractTransientNNHyperReduction{NoReductionStyle}
-
-Transient counterpart of [`NNOperatorReduction`](@ref). The NN maps parameter
-values to the time-combined Galerkin-projected Jacobian, bypassing FE assembly.
-Carry the `combination::TimeCombination` from the ODE solver.
-"""
-struct TransientNNOperatorReduction <: AbstractTransientNNHyperReduction{NoReductionStyle}
-  combination::TimeCombination
-  nparams::Int
-  strategy::NeuralReduction
-end
-
-function TransientNNOperatorReduction(
-  combination::TimeCombination,
-  args...;
-  nparams::Int=20,
-  model::AbstractNeuralModel=MultiLayerPerceptron(),
-  strategy::NeuralReduction=NeuralReduction(model),
-  kwargs...
-  )
-
-  TransientNNOperatorReduction(combination,nparams,strategy)
-end
-
-ParamDataStructures.num_params(r::TransientNNOperatorReduction) = r.nparams
-get_strategy(r::TransientNNOperatorReduction) = r.strategy
-RBTransient.get_time_combination(r::TransientNNOperatorReduction) = r.combination
-
-"""
-    struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
-
-Transient counterpart of [`NNHyperReduction`](@ref). The NN predicts EIM
-coefficients from parameter values; the time combination is applied at the
-basis-projection stage.
-"""
-struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
-  combination::TimeCombination
-  reduction::Reduction{A,EuclideanNorm}
-  strategy::NeuralReduction
-end
-
-function TransientNNHyperReduction(
-  combination::TimeCombination,
-  args...;
-  model::AbstractNeuralModel=MultiLayerPerceptron(),
-  strategy::NeuralReduction=NeuralReduction(model),
-  kwargs...
-  )
-
-  reduction = Reduction(args...;kwargs...)
-  TransientNNHyperReduction(combination,reduction,strategy)
-end
-
-RBSteady.get_reduction(r::TransientNNHyperReduction) = r.reduction
-get_strategy(r::TransientNNHyperReduction) = r.strategy
-RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
-
-# neural reductions
-
 """
     Base.@kwdef struct NeuralReduction{M,S}
       model::M
@@ -203,7 +57,7 @@ strategy_log = NeuralReduction(
   )
 ```
 """
-struct NeuralReduction{A<:AbstractNeuralModel}
+struct NeuralReduction{A<:NeuralModel}
   model::A
   epochs::Int
   batch_size::Int
@@ -213,7 +67,7 @@ struct NeuralReduction{A<:AbstractNeuralModel}
 end
 
 function NeuralReduction(
-  model::AbstractNeuralModel;
+  model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
   space_step=1,
@@ -247,6 +101,152 @@ get_logger(s::NeuralReduction) = s.trainlog
 function build_model(s::NeuralReduction)
   build_model(s.model)
 end
+
+# interface for RB subspace + NN hyper-reduction machinery
+
+struct NNRegressionStyle <: ReductionStyle end
+
+"""
+    struct NNRegression <: Reduction{NNRegressionStyle,EuclideanNorm}
+      reduction::NeuralReduction
+      nparams::Int
+    end
+
+A hyper-reduction strategy for **operator regression**: the NN directly maps
+parameter values to the Galerkin-projected residual vector, bypassing FE
+assembly entirely during the online phase. Only suitable for residual
+(vector-valued) operators.
+
+The offline phase projects the residual snapshots onto the test space and
+trains the NN to reproduce the projected vectors. The online phase calls
+the NN forward pass, producing the projected residual without any assembly.
+
+`reduction` controls the [`MultiLayerPerceptron`](@ref) architecture and training.
+`nparams` controls how many parameter samples to use for NN training.
+"""
+struct NNRegression <: Reduction{NNRegressionStyle,EuclideanNorm}
+  reduction::NeuralReduction
+  nparams::Int
+end
+
+function NNRegression(
+  args...;
+  nparams::Int=20,
+  model::NeuralModel=MultiLayerPerceptron(),
+  reduction::NeuralReduction=NeuralReduction(model),
+  kwargs...
+  )
+
+  NNRegression(reduction,nparams)
+end
+
+ParamDataStructures.num_params(r::NNRegression) = r.nparams
+RBSteady.get_reduction(r::NNRegression) = r.reduction
+
+"""
+    struct NNHyperReduction{A} <: HyperReduction{A}
+      reduction::Reduction{A,EuclideanNorm}
+      strategy::NeuralReduction
+    end
+
+A hyper-reduction strategy that uses a neural network to predict EIM
+coefficients from parameter values. The offline phase:
+
+1. applies empirical interpolation on the snapshot basis to extract coefficients
+2. trains a [`MultiLayerPerceptron`](@ref) via `strategy` on the `(μ,coefficient)` pairs
+
+The online phase calls the NN forward pass instead of assembling the FE
+operator on the reduced integration domain.
+"""
+struct NNHyperReduction{A} <: HyperReduction{A}
+  reduction::Reduction{A,EuclideanNorm}
+  strategy::NeuralReduction
+end
+
+"""
+    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralReduction(model),kwargs...) -> NNHyperReduction
+
+Constructs a `NNHyperReduction` from a `Reduction` built with the same
+positional/keyword arguments accepted by `Reduction`. An optional
+`strategy` keyword overrides the default [`NeuralReduction`](@ref).
+"""
+function NNHyperReduction(
+  args...;
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
+  kwargs...
+  )
+
+  reduction = Reduction(args...;kwargs...)
+  NNHyperReduction(reduction,strategy)
+end
+
+RBSteady.get_reduction(r::NNHyperReduction) = r.reduction
+get_strategy(r::NNHyperReduction) = r.strategy
+
+# transient 
+
+abstract type AbstractTransientNNHyperReduction{A} <: TransientHyperReduction{A} end
+
+"""
+    struct TransientNNRegression <: AbstractTransientNNHyperReduction{NoReductionStyle}
+
+Transient counterpart of [`NNRegression`](@ref). The NN maps parameter
+values to the time-combined Galerkin-projected Jacobian, bypassing FE assembly.
+Carry the `combination::TimeCombination` from the ODE solver.
+"""
+struct TransientNNRegression <: AbstractTransientNNHyperReduction{NoReductionStyle}
+  combination::TimeCombination
+  nparams::Int
+  strategy::NeuralReduction
+end
+
+function TransientNNRegression(
+  combination::TimeCombination,
+  args...;
+  nparams::Int=20,
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
+  kwargs...
+  )
+
+  TransientNNRegression(combination,nparams,strategy)
+end
+
+ParamDataStructures.num_params(r::TransientNNRegression) = r.nparams
+get_strategy(r::TransientNNRegression) = r.strategy
+RBTransient.get_time_combination(r::TransientNNRegression) = r.combination
+
+"""
+    struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
+
+Transient counterpart of [`NNHyperReduction`](@ref). The NN predicts EIM
+coefficients from parameter values; the time combination is applied at the
+basis-projection stage.
+"""
+struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
+  combination::TimeCombination
+  reduction::Reduction{A,EuclideanNorm}
+  strategy::NeuralReduction
+end
+
+function TransientNNHyperReduction(
+  combination::TimeCombination,
+  args...;
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
+  kwargs...
+  )
+
+  reduction = Reduction(args...;kwargs...)
+  TransientNNHyperReduction(combination,reduction,strategy)
+end
+
+RBSteady.get_reduction(r::TransientNNHyperReduction) = r.reduction
+get_strategy(r::TransientNNHyperReduction) = r.strategy
+RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
+
+# neural reductions
 
 """
     const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}

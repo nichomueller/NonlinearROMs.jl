@@ -2,54 +2,54 @@ const CDEV = Lux.cpu_device()
 const XDEV = Lux.reactant_device(;force=true)
 
 """
-    struct TrainedAbstractNeuralModel{A,B,C} <: AbstractNeuralModel
+    struct TrainedNeuralModel{A,B,C} <: NeuralModel
       chain::A
       parameters::B
       states::C
     end
 
 A trained Lux `chain` bundled with its optimised parameters/states, evaluable
-as `(a::TrainedAbstractNeuralModel)(x::AbstractMatrix) -> AbstractMatrix` via the standard
+as `(a::TrainedNeuralModel)(x::AbstractMatrix) -> AbstractMatrix` via the standard
 `Arrays.evaluate!`/`return_cache` interface. Returned by [`train_neural_coefficient`](@ref)
 for [`MultiLayerPerceptron`](@ref) strategies.
 """
-struct TrainedAbstractNeuralModel{A,B,C} <: AbstractNeuralModel
+struct TrainedNeuralModel{A,B,C} <: NeuralModel
   chain::A
   parameters::B
   states::C
 end
 
-function TrainedAbstractNeuralModel(train_state::Lux.Training.TrainState)
+function TrainedNeuralModel(train_state::Lux.Training.TrainState)
   parameters = train_state.parameters |> CDEV
   states = Lux.testmode(train_state.states) |> CDEV
-  TrainedAbstractNeuralModel(train_state.model,parameters,states)
+  TrainedNeuralModel(train_state.model,parameters,states)
 end
 
-function Arrays.evaluate!(cache,a::TrainedAbstractNeuralModel,x::AbstractMatrix)
+function Arrays.evaluate!(cache,a::TrainedNeuralModel,x::AbstractMatrix)
   first(a.chain(Float32.(x),a.parameters,a.states))
 end
 
 """
-    (m::TrainedAbstractNeuralModel)(inputs) -> AbstractArray
-    (m::TrainedAbstractNeuralModel)(inputs,metadata) -> AbstractArray
+    (m::TrainedNeuralModel)(inputs) -> AbstractArray
+    (m::TrainedNeuralModel)(inputs,metadata) -> AbstractArray
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
 a plain matrix). `metadata` optionally denormalises the output by `metadata.dmax`; it
 is a no-op when `metadata === identity` (a `NeuralOperator` with no normalisation stats).
 """
-function (m::TrainedAbstractNeuralModel)(inputs)
+function (m::TrainedNeuralModel)(inputs)
   first(m.chain(inputs,m.parameters,m.states))
 end
 
-(m::TrainedAbstractNeuralModel)(inputs,metadata::typeof(identity)) = m(inputs)
+(m::TrainedNeuralModel)(inputs,metadata::typeof(identity)) = m(inputs)
 
-function (m::TrainedAbstractNeuralModel)(inputs,metadata::NormStats)
+function (m::TrainedNeuralModel)(inputs,metadata::NormStats)
   pred = m(inputs)
   pred .*= metadata.dmax
   return pred
 end
 
-const TrainedAutoEncoder = TrainedAbstractNeuralModel{<:AutoEncoder}
+const TrainedAutoEncoder = TrainedNeuralModel{<:AutoEncoder}
 
 function Arrays.evaluate!(cache,a::TrainedAutoEncoder,z::AbstractMatrix)
   decode(a,z)
@@ -63,7 +63,7 @@ function decode(a::TrainedAutoEncoder,Z::AbstractMatrix)
   first(a.chain.layers.layer_2(Float32.(Z),a.parameters.layer_2,a.states.layer_2))
 end
 
-const TrainedAutoDecoder = TrainedAbstractNeuralModel{<:AutoDecoder}
+const TrainedAutoDecoder = TrainedNeuralModel{<:AutoDecoder}
 
 function Arrays.evaluate!(cache,a::TrainedAutoDecoder,z::AbstractMatrix)
   first(a.chain.layers.layer_2(Float32.(z),a.parameters.layer_2,a.states.layer_2))
@@ -95,7 +95,7 @@ function infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,r::NeuralRe
 end
 
 """
-    struct TrainedVAE{E,D,PE,SE,PD,SD} <: AbstractNeuralModel
+    struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
       encoder::E
       decoder::D
       ps_enc::PE
@@ -109,7 +109,7 @@ A trained [`VariationalAutoEncoder`](@ref). `evaluate!(cache,a,z)` applies the
 **decoder** (latent → high-dim); use [`encode`](@ref) for the encoder direction,
 which returns `(μ,log_var,z)` with a freshly sampled `z`.
 """
-struct TrainedVAE{E,D,PE,SE,PD,SD} <: AbstractNeuralModel
+struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
   encoder::E
   decoder::D
   ps_enc::PE
@@ -175,5 +175,5 @@ function train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=L
   end
 
   finalize!(logger)
-  return TrainedAbstractNeuralModel(train_state)
+  return TrainedNeuralModel(train_state)
 end

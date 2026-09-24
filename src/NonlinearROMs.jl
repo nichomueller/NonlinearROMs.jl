@@ -7,21 +7,21 @@ components for [`GridapROMs.jl`](https://github.com/gridap/GridapROMs.jl).
 This package was extracted out of `GridapROMs.RBSteady`/`GridapROMs.RBTransient`
 into its own repository, and plugs back into them via multiple dispatch:
 
-- **Neural network models** (`AbstractNeuralModels.jl`) — `DeepONet`, `NOMAD`,
+- **Neural network models** (`NeuralModels.jl`) — `DeepONet`, `NOMAD`,
   `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`, `AutoDecoder`;
   all trained through the same Lux/Reactant/Enzyme pipeline (`NeuralReduction`, 
   `train_model!`, `train_neural_coefficient`).
 
-- **Steady hyper-reduction** — `NNOperatorReduction` (operator regression),
-  `NNHyperReduction` (NN-predicted EIM coefficients), `NNOperator`,
+- **Steady hyper-reduction** — `NNRegression` (operator regression),
+  `NNHyperReduction` (NN-predicted EIM coefficients), `NNRegressor`,
   `NNInterpolation`, extending `RBSteady.HRProjection`/`RBSteady.Interpolation`
   and the `Algebra.residual!`/`Algebra.jacobian!` dispatch for `RBOperator`.
 
-- **Transient hyper-reduction** — `TransientNNOperatorReduction`,
+- **Transient hyper-reduction** — `TransientNNRegression`,
   `TransientNNHyperReduction`, the transient counterparts extending
   `RBTransient`'s space-time hyper-reduction machinery analogously.
 
-Usage: construct a `NNHyperReduction`/`NNOperatorReduction`
+Usage: construct a `NNHyperReduction`/`NNRegression`
 (or their `Transient*` transient counterparts) and pass it to `RBSolver` wherever
 a steady/transient `HyperReduction` is expected, exactly as you would
 `MDEIMHyperReduction` or `RBFHyperReduction`.
@@ -99,9 +99,8 @@ export VAELayer
 export NeuralLayer
 include("NeuralLayers.jl")
 
-export AbstractNeuralModel
-export FiniteDimensionalModel
 export NeuralModel
+export FiniteDimensionalModel
 export CoordinateNeuralModel
 export AbstractIntegralKernel
 export DeepONet
@@ -114,9 +113,9 @@ export build_model
 export KernelNeuralModel
 include("NeuralModels.jl")
 
-export NNOperatorReduction
+export NNRegression
 export NNHyperReduction
-export TransientNNOperatorReduction
+export TransientNNRegression
 export TransientNNHyperReduction
 export NeuralReduction
 export DeepONetReduction
@@ -127,7 +126,7 @@ export VAEReduction
 export KernelReduction
 include("NeuralReductions.jl")
 
-export TrainedAbstractNeuralModel
+export TrainedNeuralModel
 export TrainedAutoEncoder
 export TrainedAutoDecoder
 export train_model!
@@ -153,10 +152,9 @@ export TrainedVAE
 export resolve_batch_size
 include("NeuralTraining.jl")
 
-export NNHRProjection
-export NNOperator
+export NNRegressor
 export NNContribution
-export TransientNNProjection
+export TransientNNRegressor
 export TransientNNContribution
 export TransientNNContributionTuple
 include("HyperReductions.jl")
