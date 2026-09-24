@@ -37,7 +37,7 @@ a `HyperReduction` is expected, exactly like `MDEIMHyperReduction` or
 
 ## Contents
 
-- `NeuralModels.jl` — `MultiLayerPerceptron`, `GenericNeuralModel`,
+- `AbstractNeuralModels.jl` — `MultiLayerPerceptron`,
   `AutoEncoder`, `VariationalAutoEncoder`, `AutoDecoder`, `train_neural_coefficient`,
   `NNStrategy`.
 - `SteadyReductions.jl` / `SteadyHyperReductions.jl` / `SteadyInterpolations.jl` /

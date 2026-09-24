@@ -28,7 +28,7 @@ end
 function NNOperatorReduction(
   args...;
   nparams::Int=20,
-  model::NeuralModel=MultiLayerPerceptron(),
+  model::AbstractNeuralModel=MultiLayerPerceptron(),
   reduction::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
@@ -68,7 +68,7 @@ positional/keyword arguments accepted by `Reduction`. An optional
 """
 function NNHyperReduction(
   args...;
-  model::NeuralModel=MultiLayerPerceptron(),
+  model::AbstractNeuralModel=MultiLayerPerceptron(),
   strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
@@ -101,7 +101,7 @@ function TransientNNOperatorReduction(
   combination::TimeCombination,
   args...;
   nparams::Int=20,
-  model::NeuralModel=MultiLayerPerceptron(),
+  model::AbstractNeuralModel=MultiLayerPerceptron(),
   strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
@@ -129,7 +129,7 @@ end
 function TransientNNHyperReduction(
   combination::TimeCombination,
   args...;
-  model::NeuralModel=MultiLayerPerceptron(),
+  model::AbstractNeuralModel=MultiLayerPerceptron(),
   strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
@@ -157,7 +157,7 @@ RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
       print_every::Int = 500
     end
 
-The central configuration struct for training Neural Operators. It defines the
+The central configuration struct for training neural models. It defines the
 neural architecture, the training hyperparameters, and the data subsampling
 strategies for the offline phase.
 
@@ -203,7 +203,7 @@ strategy_log = NeuralReduction(
   )
 ```
 """
-struct NeuralReduction{A<:NeuralModel}
+struct NeuralReduction{A<:AbstractNeuralModel}
   model::A
   epochs::Int
   batch_size::Int
@@ -213,7 +213,7 @@ struct NeuralReduction{A<:NeuralModel}
 end
 
 function NeuralReduction(
-  model::NeuralModel;
+  model::AbstractNeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
   space_step=1,
@@ -249,12 +249,12 @@ function build_model(s::NeuralReduction)
 end
 
 """
-    const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction{M}
+    const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
 
-A reduction wrapper for Kernel-based Neural Operators.
-It instructs the ROM solvers to use the Kernel Neural Operator pipeline (tensor formatting and iterative integration) during the offline and online phases.
+A reduction wrapper for kernel-based neural models.
+It instructs the ROM solvers to use the kernel neural model pipeline (tensor formatting and iterative integration) during the offline and online phases.
 """
-const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction{M}
+const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
 
 """
     const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
@@ -326,7 +326,7 @@ for (f,m) in (
   (:AutoEncoderReduction,:AutoEncoder),
   (:AutoDecoderReduction,:AutoDecoder),
   (:VAEReduction,:VariationalAutoEncoder),
-  (:KernelOperatorReduction,:AbstractKernelNeuralOperator)
+  (:KernelReduction,:KernelNeuralModel)
 )
   @eval begin
     function $f(;model::$m,kwargs...)

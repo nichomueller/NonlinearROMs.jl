@@ -27,13 +27,13 @@ reduction = NeuralReduction(
 solver = NeuralSolver(ThetaMethod(LUSolver(),dt,θ),reduction)
 ```
 """
-struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
+struct NeuralSolver{A<:AbstractNeuralModel,B} <: ROMSolver
   fesolver::B
   reduction::NeuralReduction{A}
 end
 
 """
-    struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
+    struct NeuralOperator{O,T,A<:TrainedAbstractNeuralModel,B} <: ROMOperator{O,T}
       op::ParamOperator{O,T}
       model::A
       metadata::B
@@ -47,13 +47,13 @@ and any normalization metadata needed to scale the data.
 
 # Fields
 - `op`: The original high-fidelity parametric operator.
-- `model`: The trained [`TrainedNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
+- `model`: The trained [`TrainedAbstractNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
 - `metadata`: Either `identity` (no normalisation) or a [`NormStats`](@ref) bundling the
   z-score statistics used to normalize the inputs and the absolute maximum scalar value of
   the snapshot target data (`metadata.dmax`), used for the final denormalization of the
   network predictions.
 """
-struct NeuralOperator{O,T,A<:TrainedNeuralModel,B} <: ROMOperator{O,T}
+struct NeuralOperator{O,T,A<:TrainedAbstractNeuralModel,B} <: ROMOperator{O,T}
   op::ParamOperator{O,T}
   model::A
   metadata::B
@@ -170,7 +170,7 @@ function RBSteady.reduced_operator(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver{<:KernelOperatorReduction},
+  solver::NeuralSolver{<:KernelReduction},
   op::NeuralOperator,
   r::Realisation
   )

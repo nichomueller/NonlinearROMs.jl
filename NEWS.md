@@ -22,9 +22,9 @@ I changed several file names and introduced new files, so that the overall struc
 
   | File | Now holds |
   |---|---|
-  | `NeuralModels.jl` | the `NeuralModel` abstract type only |
-  | `NeuralModels.jl` | DeepONet/NOMAD/MLP/AutoEncoder/VAE/AutoDecoder architectures |
-  | `NeuralModelsTraining.jl` | `TrainedNeuralModel`, `train_model!`, generic trained-network wrappers |
+  | `AbstractNeuralModels.jl` | the `AbstractNeuralModel` abstract type only |
+  | `AbstractNeuralModels.jl` | DeepONet/NOMAD/MLP/AutoEncoder/VAE/AutoDecoder architectures |
+  | `AbstractNeuralModelsTraining.jl` | `TrainedAbstractNeuralModel`, `train_model!`, generic trained-network wrappers |
   | `NeuralReductions.jl` | `NeuralReduction`/`DeepONetReduction`/`NOMADReduction` |
   | `NeuralSolvers.jl` / `TransientNeuralSolver.jl` | `NeuralOperator`, `reduced_operator`, `Algebra.solve` |
   | `NeuralTraining.jl` / `TransientNeuralTraining.jl` | the DeepONet/NOMAD `train(...)` pipelines |
@@ -36,7 +36,7 @@ This is purely organizational: no behavior changed, other than the load-order co
 
 **2. One `NeuralReduction` for every neural-network use case, not two.**
 Before, DeepONet/NOMAD had their own training configuration, while the MLP-based hyper-reduction regressors (`NNOperatorReduction`, `NNHyperReduction`) had a completely separate `NNStrategy` (`type=MLPType()`, `layers`, `lr`, `optimiser`, `loss`, `epochs`, `weight_decay`, `batch_size`, `lr_schedule`, `patience`, `val_fraction`). Now a single
-`NeuralReduction{A<:NeuralModel}` (model + epochs + batch_size + sampler + optimiser + training log) configures all of them. Also, I removed the `AutoDeepONet`/`AutoNOMAD` structs, as these can easily be merged with the non-`Auto` versions. Consequently, `resolve_model` was also removed.
+`NeuralReduction{A<:AbstractNeuralModel}` (model + epochs + batch_size + sampler + optimiser + training log) configures all of them. Also, I removed the `AutoDeepONet`/`AutoNOMAD` structs, as these can easily be merged with the non-`Auto` versions. Consequently, `resolve_model` was also removed.
 
 **3. One subsampling abstraction (`Sampler`/`MultiSampler`) instead of separate steady/transient code.**
 Selecting a subset of spatial DoFs, parameters, and (for transient problems) time steps before training used to be separate, independently-written logic for the steady and transient cases. It's now one `sample(...)` multiple-dispatch entry point, driven by a
@@ -48,9 +48,9 @@ fields of a `mutable struct`. The cosine/plateau math itself is unchanged.
 
 **5. `NeuralOperator`: weights and states now live inside the trained model.**
 Before, `NeuralOperator` carried `model` (a bare Lux chain), `model_weights`, `model_states`, `norm_stats` and `max_u` as separate fields. I see these fields as two macro-structures: 
-- Chain + parameters + states: these make up a single `TrainedNeuralModel`.
+- Chain + parameters + states: these make up a single `TrainedAbstractNeuralModel`.
 - The rest can be seen as a structure collecting information on the normalisation factors of the data. By default, this structure is a `NormStats` which basically contains the old `norm_stats` and `max_u`; however, this could also be of type `Nothing`, if no normalisation is applied.
-In essence, now a `NeuralOperator` contains only two fields: a `model <: TrainedNeuralModel`, and `metadata <: Union{NormStats, Nothing}`.
+In essence, now a `NeuralOperator` contains only two fields: a `model <: TrainedAbstractNeuralModel`, and `metadata <: Union{NormStats, Nothing}`.
 
 **6. Now using my proposed coordinates builder.**
 

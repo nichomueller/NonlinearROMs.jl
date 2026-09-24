@@ -6,7 +6,7 @@ Abstract supertype for integral kernel implementations used within the iterative
 abstract type AbstractIntegralKernel <: Lux.AbstractLuxLayer end
 
 """
-    struct NeuralOperatorLayer{K<:AbstractIntegralKernel,L,B,F} <: Lux.AbstractLuxContainerLayer{(:kernel,:local_linear)}
+    struct NeuralLayer{K<:AbstractIntegralKernel,L,B,F} <: Lux.AbstractLuxContainerLayer{(:kernel,:local_linear)}
 
 A single iterative layer of a Kernel Neural Operator.
 It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(x)), where:
@@ -15,7 +15,7 @@ It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(
 - `bias_shape` represents the dimensions of the learnable pointwise bias.
 - `activation` (σ) is a fixed pointwise non-linearity.
 """
-struct NeuralOperatorLayer{K<:AbstractIntegralKernel,L,S,F} <: Lux.AbstractLuxLayer
+struct NeuralLayer{K<:AbstractIntegralKernel,L,S,F} <: Lux.AbstractLuxLayer
   kernel::K
   local_linear::L
   bias_shape::S
@@ -23,7 +23,7 @@ struct NeuralOperatorLayer{K<:AbstractIntegralKernel,L,S,F} <: Lux.AbstractLuxLa
 end
 
 # Initialize trainable parameters (ps)
-function Lux.initialparameters(rng::Random.AbstractRNG,layer::NeuralOperatorLayer)
+function Lux.initialparameters(rng::Random.AbstractRNG,layer::NeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,layer.kernel),
     local_linear = Lux.initialparameters(rng,layer.local_linear),
@@ -33,7 +33,7 @@ function Lux.initialparameters(rng::Random.AbstractRNG,layer::NeuralOperatorLaye
 end
 
 # Initialize states (st)
-function Lux.initialstates(rng::Random.AbstractRNG,layer::NeuralOperatorLayer)
+function Lux.initialstates(rng::Random.AbstractRNG,layer::NeuralLayer)
   return (
     kernel = Lux.initialstates(rng,layer.kernel),
     local_linear = Lux.initialstates(rng,layer.local_linear)
@@ -41,7 +41,7 @@ function Lux.initialstates(rng::Random.AbstractRNG,layer::NeuralOperatorLayer)
 end
 
 # Pre-calculate the total number of trainable parameters in this layer
-function Lux.parameterlength(layer::NeuralOperatorLayer)
+function Lux.parameterlength(layer::NeuralLayer)
   kernel_params = Lux.parameterlength(layer.kernel)
   linear_params = Lux.parameterlength(layer.local_linear)
   bias_params = prod(layer.bias_shape) # Number of elements in the bias tensor
@@ -50,7 +50,7 @@ function Lux.parameterlength(layer::NeuralOperatorLayer)
 end
 
 # Pre-calculate the total number of states in this layer
-function Lux.statelength(layer::NeuralOperatorLayer)
+function Lux.statelength(layer::NeuralLayer)
   kernel_states = Lux.statelength(layer.kernel)
   linear_states = Lux.statelength(layer.local_linear)
 
@@ -58,7 +58,7 @@ function Lux.statelength(layer::NeuralOperatorLayer)
 end
 
 # Foward pass
-function (layer::NeuralOperatorLayer)(x,ps,st)
+function (layer::NeuralLayer)(x,ps,st)
   # Non-local integration via specific kernel dispatch
   k_out,st_k = layer.kernel(x,ps.kernel,st.kernel)
 

@@ -1,5 +1,5 @@
 """
-    struct NNInterpolation{A<:NeuralModel} <: Interpolation
+    struct NNInterpolation{A<:AbstractNeuralModel} <: Interpolation
 
 An [`Interpolation`](@ref) backed by a neural network model. During the
 online phase, `interpolate!` replaces the EIM linear solve with a NN forward
@@ -7,7 +7,7 @@ pass: `coeff[:,i] = model(μ_i)`.
 
 Constructed automatically by `Interpolation(red::NNHyperReduction,basis,s)`.
 """
-struct NNInterpolation{A<:NeuralModel} <: Interpolation
+struct NNInterpolation{A<:AbstractNeuralModel} <: Interpolation
   interpolation::A
 end
 

@@ -1,71 +1,37 @@
 """
-    abstract type NeuralModel <: Map end
+    abstract type AbstractNeuralModel <: Map end
 
 Abstract supertype for neural network models. Any concrete subtype must
 implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 `(param_dim × batch_size)` matrix of parameters and the output is a
 `(output_dim × batch_size)` matrix of predictions.
-
-Wrap external Flux/Lux models with [`GenericNeuralModel`](@ref):
-
-    model = GenericNeuralModel(flux_chain)     # Flux
-    model = GenericNeuralModel(p -> lux_apply(chain,p,ps,st))  # Lux closure
 """
-abstract type NeuralModel <: Map end
+abstract type AbstractNeuralModel <: Map end
 
 """
-    abstract type AbstractNeuralOperator <: NeuralModel end
+    abstract type NeuralModel <: AbstractNeuralModel end
 
-Abstract supertype for neural operators, which learn mappings between infinite-dimensional function spaces (Function -> Function).
+Abstract supertype for neural models, which learn mappings between infinite-dimensional function spaces (Function -> Function).
 """
-abstract type AbstractNeuralOperator <: NeuralModel end
-
-"""
-    abstract type AbstractCoordinateBasedOperator <: AbstractNeuralOperator end
-
-Abstract supertype for neural operators that evaluate the solution point-by-point using continuous physical coordinates.
-"""
-abstract type AbstractCoordinateBasedOperator <: AbstractNeuralOperator end
+abstract type NeuralModel <: AbstractNeuralModel end
 
 """
-    abstract type AbstractKernelNeuralOperator <: AbstractNeuralOperator end
+    abstract type CoordinateNeuralModel <: NeuralModel end
 
-Abstract supertype for neural operators based on iterative kernel integration.
-These models process the entire spatial field or graph simultaneously rather than point-by-point.
+Abstract supertype for neural models that evaluate the solution point-by-point using continuous physical coordinates.
 """
-abstract type AbstractKernelNeuralOperator <: AbstractNeuralOperator end
-
-"""
-    struct GenericNeuralModel{A} <: NeuralModel
-      model::A
-    end
-
-Wraps any callable `A` (Flux chain, Lux closure, plain Julia function) as
-an [`NeuralModel`](@ref). The wrapped callable must accept a
-`(d × k)` parameter matrix and return an `(n × k)` prediction matrix.
-"""
-struct GenericNeuralModel{A} <: NeuralModel
-  model::A
-end
-
-function Arrays.return_cache(a::GenericNeuralModel,x::AbstractMatrix)
-  return_cache(a.model,x)
-end
-
-function Arrays.evaluate!(cache,a::GenericNeuralModel,x::AbstractMatrix)
-  evaluate!(cache,a.model,x)
-end
+abstract type CoordinateNeuralModel <: NeuralModel end
 
 """
-    struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
+    struct KernelNeuralModel{K,F} <: NeuralModel
 
-Generic architecture for Kernel-based Neural Operators.
+Generic architecture for kernel-based neural models.
 It maps an input function to an output function through three main stages:
 1. Lifting (P): A local operator mapping input features to a higher-dimensional hidden representation.
-2. Iterative Kernel Integration: A sequence of `NeuralOperatorLayer`s representing the non-local processing.
+2. Iterative Kernel Integration: A sequence of `NeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
+struct KernelNeuralModel{K,F} <: NeuralModel
   lifting_layers::Tuple{Vararg{Int}}
   kernel_configs::Tuple{Vararg{Any}}
   projection_layers::Tuple{Vararg{Int}}
@@ -73,7 +39,7 @@ struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
 end
 
 """
-    struct DeepONet{F} <: AbstractCoordinateBasedOperator
+    struct DeepONet{F} <: CoordinateNeuralModel
       branch_layers::Tuple{Vararg{Int}}
       trunk_layers::Tuple{Vararg{Int}}
       activation::F
@@ -101,7 +67,7 @@ model = DeepONet(
   )
 ```
 """
-struct DeepONet{F} <: AbstractCoordinateBasedOperator
+struct DeepONet{F} <: CoordinateNeuralModel
   branch_layers::Tuple{Vararg{Int}}
   trunk_layers::Tuple{Vararg{Int}}
   activation::F
@@ -126,7 +92,7 @@ function DeepONet(
 end
 
 """
-    struct NOMAD{F} <: AbstractCoordinateBasedOperator
+    struct NOMAD{F} <: CoordinateNeuralModel
       approximator_layers::Tuple{Vararg{Int}}
       decoder_layers::Tuple{Vararg{Int}}
       activation::F
@@ -147,7 +113,7 @@ model = NOMAD(
   )
 ```
 """
-struct NOMAD{F} <: AbstractCoordinateBasedOperator
+struct NOMAD{F} <: CoordinateNeuralModel
   approximator_layers::Tuple{Vararg{Int}}
   decoder_layers::Tuple{Vararg{Int}}
   activation::F
@@ -172,11 +138,11 @@ function NOMAD(
 end
 
 """
-    abstract type FiniteDimensionalModel <: NeuralModel end
+    abstract type FiniteDimensionalModel <: AbstractNeuralModel end
 
 Abstract supertype for standard neural networks mapping between finite-dimensional Euclidean spaces (Vector -> Vector).
 """
-abstract type FiniteDimensionalModel <: NeuralModel end
+abstract type FiniteDimensionalModel <: AbstractNeuralModel end
 
 """
     struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
@@ -286,7 +252,7 @@ end
 
 # Build model
 
-build_model(::NeuralModel) = @abstractmethod
+build_model(::AbstractNeuralModel) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
   lux_layers = []

@@ -7,10 +7,10 @@ components for [`GridapROMs.jl`](https://github.com/gridap/GridapROMs.jl).
 This package was extracted out of `GridapROMs.RBSteady`/`GridapROMs.RBTransient`
 into its own repository, and plugs back into them via multiple dispatch:
 
-- **Neural network models** (`NeuralModels.jl`) — `DeepONet`, `NOMAD`,
-  `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`, `AutoDecoder`,
-  `GenericNeuralModel`; all trained through the same Lux/Reactant/Enzyme
-  pipeline (`NeuralReduction`, `train_model!`, `train_neural_coefficient`).
+- **Neural network models** (`AbstractNeuralModels.jl`) — `DeepONet`, `NOMAD`,
+  `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`, `AutoDecoder`;
+  all trained through the same Lux/Reactant/Enzyme pipeline (`NeuralReduction`, 
+  `train_model!`, `train_neural_coefficient`).
 
 - **Steady hyper-reduction** — `NNOperatorReduction` (operator regression),
   `NNHyperReduction` (NN-predicted EIM coefficients), `NNOperator`,
@@ -96,18 +96,14 @@ include("GraphsInterface.jl")
 
 export LatentCodeLayer
 export VAELayer
-export NeuralOperatorLayer
+export NeuralLayer
 include("NeuralLayers.jl")
 
-export NeuralModel
+export AbstractNeuralModel
 export FiniteDimensionalModel
-export AbstractNeuralOperator
-export AbstractCoordinateBasedOperator
-export AbstractKernelNeuralOperator
+export NeuralModel
+export CoordinateNeuralModel
 export AbstractIntegralKernel
-export GenericNeuralModel
-include("NeuralModels.jl")
-
 export DeepONet
 export NOMAD
 export MultiLayerPerceptron
@@ -115,7 +111,7 @@ export AutoEncoder
 export VariationalAutoEncoder
 export AutoDecoder
 export build_model
-export KernelNeuralOperator
+export KernelNeuralModel
 include("NeuralModels.jl")
 
 export NNOperatorReduction
@@ -128,10 +124,10 @@ export NOMADReduction
 export AutoEncoderReduction
 export AutoDecoderReduction
 export VAEReduction
-export KernelOperatorReduction
+export KernelReduction
 include("NeuralReductions.jl")
 
-export TrainedNeuralModel
+export TrainedAbstractNeuralModel
 export TrainedAutoEncoder
 export TrainedAutoDecoder
 export train_model!
