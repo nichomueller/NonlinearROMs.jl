@@ -20,14 +20,14 @@ struct NNOperator{A,B} <: NNHRProjection{NNOperatorReduction,B}
   bias::B
 end
 
-function NNOperator(model::NeuralNetwork,test::RBSpace)
+function NNOperator(model::NeuralModel,test::RBSpace)
   T = get_dof_value_type(test)
   nrows = num_reduced_dofs(test)
   basis = ReducedProjection(zeros(T,nrows,1))
   NNOperator(model,basis)
 end
 
-function NNOperator(model::NeuralNetwork,trial::RBSpace,test::RBSpace)
+function NNOperator(model::NeuralModel,trial::RBSpace,test::RBSpace)
   T = get_dof_value_type(trial)
   nrows = num_reduced_dofs(test)
   ncols = num_reduced_dofs(trial)

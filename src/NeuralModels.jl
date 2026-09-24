@@ -1,4 +1,62 @@
 """
+    abstract type NeuralModel <: Map end
+
+Abstract supertype for neural network models. Any concrete subtype must
+implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
+`(param_dim × batch_size)` matrix of parameters and the output is a
+`(output_dim × batch_size)` matrix of predictions.
+
+Wrap external Flux/Lux models with [`GenericNeuralModel`](@ref):
+
+    model = GenericNeuralModel(flux_chain)     # Flux
+    model = GenericNeuralModel(p -> lux_apply(chain,p,ps,st))  # Lux closure
+"""
+abstract type NeuralModel <: Map end
+
+"""
+    abstract type AbstractNeuralOperator <: NeuralModel end
+
+Abstract supertype for neural operators, which learn mappings between infinite-dimensional function spaces (Function -> Function).
+"""
+abstract type AbstractNeuralOperator <: NeuralModel end
+
+"""
+    abstract type AbstractCoordinateBasedOperator <: AbstractNeuralOperator end
+
+Abstract supertype for neural operators that evaluate the solution point-by-point using continuous physical coordinates.
+"""
+abstract type AbstractCoordinateBasedOperator <: AbstractNeuralOperator end
+
+"""
+    abstract type AbstractKernelNeuralOperator <: AbstractNeuralOperator end
+
+Abstract supertype for neural operators based on iterative kernel integration.
+These models process the entire spatial field or graph simultaneously rather than point-by-point.
+"""
+abstract type AbstractKernelNeuralOperator <: AbstractNeuralOperator end
+
+"""
+    struct GenericNeuralModel{A} <: NeuralModel
+      model::A
+    end
+
+Wraps any callable `A` (Flux chain, Lux closure, plain Julia function) as
+an [`NeuralModel`](@ref). The wrapped callable must accept a
+`(d × k)` parameter matrix and return an `(n × k)` prediction matrix.
+"""
+struct GenericNeuralModel{A} <: NeuralModel
+  model::A
+end
+
+function Arrays.return_cache(a::GenericNeuralModel,x::AbstractMatrix)
+  return_cache(a.model,x)
+end
+
+function Arrays.evaluate!(cache,a::GenericNeuralModel,x::AbstractMatrix)
+  evaluate!(cache,a.model,x)
+end
+
+"""
     struct KernelNeuralOperator{K,F} <: AbstractKernelNeuralOperator
 
 Generic architecture for Kernel-based Neural Operators.
@@ -21,7 +79,7 @@ end
       activation::F
     end
 
-Explicit architectural configuration for a Deep Operator Network (DeepONet).
+Explicit architectural configuration for a Deep Operator Model (DeepONet).
 A DeepONet consists of two sub-networks:
 1. **Branch Net**: Processes the input parameters/sensors \$u\$.
 2. **Trunk Net**: Processes the spatial/spatiotemporal continuous coordinates \$y\$.
@@ -114,7 +172,14 @@ function NOMAD(
 end
 
 """
-    struct MultiLayerPerceptron{F} <: AbstractFiniteDimensionalNetwork
+    abstract type FiniteDimensionalModel <: NeuralModel end
+
+Abstract supertype for standard neural networks mapping between finite-dimensional Euclidean spaces (Vector -> Vector).
+"""
+abstract type FiniteDimensionalModel <: NeuralModel end
+
+"""
+    struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
       hidden_layers::Tuple{Vararg{Int}}
       activation::F
     end
@@ -123,10 +188,10 @@ Recipe for a dense feed-forward network used for scalar/vector regression (e.g.
 predicting EIM/reduced-basis coefficients from parameter values). `hidden_layers`
 holds only the hidden widths (e.g. `(64,64)`); the input/output dimensions are
 inferred from the training data at [`train_neural_coefficient`](@ref) call time, since
-one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralStrategy`](@ref))
+one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralReduction`](@ref))
 to train many differently-shaped networks (one per triangulation/reduced quantity).
 """
-struct MultiLayerPerceptron{F} <: AbstractFiniteDimensionalNetwork
+struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
   hidden_layers::Tuple{Vararg{Int}}
   activation::F
 end
@@ -142,7 +207,7 @@ function MultiLayerPerceptron(;
 end
 
 """
-    struct AutoEncoder{F} <: AbstractFiniteDimensionalNetwork
+    struct AutoEncoder{F} <: FiniteDimensionalModel
       hidden_layers::Tuple{Vararg{Int}}
       activation::F
     end
@@ -152,7 +217,7 @@ Recipe for an encoder-decoder pair for unsupervised dimensionality reduction.
 `(h₁,…,h_{L-1})` and the decoder mirrors them symmetrically; the input dimension
 is inferred from the training data.
 """
-struct AutoEncoder{F} <: AbstractFiniteDimensionalNetwork
+struct AutoEncoder{F} <: FiniteDimensionalModel
   hidden_layers::Tuple{Vararg{Int}}
   activation::F
 end
@@ -168,7 +233,7 @@ function AutoEncoder(
 end
 
 """
-    struct VariationalAutoEncoder{F} <: AbstractFiniteDimensionalNetwork
+    struct VariationalAutoEncoder{F} <: FiniteDimensionalModel
       hidden_layers::Tuple{Vararg{Int}}
       activation::F
       β::Float64
@@ -178,7 +243,7 @@ Recipe for a VAE with the reparameterisation trick. `hidden_layers = (h₁,…,h
 interpreted as for [`AutoEncoder`](@ref); `β` weighs the KL term against the
 reconstruction loss.
 """
-struct VariationalAutoEncoder{F} <: AbstractFiniteDimensionalNetwork
+struct VariationalAutoEncoder{F} <: FiniteDimensionalModel
   hidden_layers::Tuple{Vararg{Int}}
   activation::F
   β::Float64
@@ -196,7 +261,7 @@ function VariationalAutoEncoder(
 end
 
 """
-    struct AutoDecoder{F} <: AbstractFiniteDimensionalNetwork
+    struct AutoDecoder{F} <: FiniteDimensionalModel
       hidden_layers::Tuple{Vararg{Int}}
       activation::F
     end
@@ -205,7 +270,7 @@ Recipe for a decoder-only model (Park et al., 2019). Per-sample latent codes are
 optimised jointly with the decoder parameters. `hidden_layers = (h₁,…,latent_dim)`;
 the decoder is built from last to first, i.e. `(latent_dim,reverse(h₁,…,h_{L-1})…,n_h)`.
 """
-struct AutoDecoder{F} <: AbstractFiniteDimensionalNetwork
+struct AutoDecoder{F} <: FiniteDimensionalModel
   hidden_layers::Tuple{Vararg{Int}}
   activation::F
 end
@@ -221,7 +286,7 @@ end
 
 # Build model
 
-build_model(::NeuralNetwork) = @abstractmethod
+build_model(::NeuralModel) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
   lux_layers = []

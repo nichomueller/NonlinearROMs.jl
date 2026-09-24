@@ -48,7 +48,7 @@ s_base,_ = solution_snapshots(fesolver,feop_base,σ_base,uh₀ₚ_base)
 model_arch = DeepONet(1,2;width=128,depth=4,activation=Lux.gelu) # High capacity; 1 param -> Branch, 1D coords + time -> Trunk
 
 # Neural Setup (Log transform + Space-Time subsampling)
-strategy_base = NeuralStrategy(
+red_base = NeuralReduction(
     model_arch,
     epochs = 3000,
     batch_size = 10, # Mini-batching over 50 samples
@@ -58,7 +58,7 @@ strategy_base = NeuralStrategy(
     print_every = 500
 )
 
-solver_base = NeuralSolver(fesolver,DeepONetReduction(strategy_base))
+solver_base = NeuralSolver(fesolver,red_base)
 
 println("\nTraining Base Transient Model...")
 pretrained_op = reduced_operator(solver_base,feop_base,s_base)
@@ -85,7 +85,7 @@ n_ext = 30
 uh₀ₚ_ext(σ) = interpolate_everywhere(u₀ₚ(σ),trial(σ,t0))
 s_ext,_ = solution_snapshots(fesolver,feop_ext,σ_ext,uh₀ₚ_ext)
 
-strategy_transfer = NeuralStrategy(
+red_transfer = NeuralReduction(
     model_arch,
     epochs = 1500,
     batch_size = 10,
@@ -94,7 +94,7 @@ strategy_transfer = NeuralStrategy(
     lr_scheduler = ReduceLROnPlateau(patience=100,start_lr=5e-4),
     print_every = 500
 )
-solver_transfer = NeuralSolver(fesolver,DeepONetReduction(strategy_transfer))
+solver_transfer = NeuralSolver(fesolver,red_transfer)
 
 # update_stats=true forces the model to recompute normalization statistics for the shifted, radically different physical scale
 transfer_op = reduced_operator(solver_transfer,feop_ext,s_ext,pretrained_op;update_stats=true)

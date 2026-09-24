@@ -20,18 +20,16 @@ solver = NeuralSolver(LUSolver(),DeepONetReduction(model=DeepONet(2,2)))
 ```julia
 using Lux
 
-strategy = NeuralStrategy(
+reduction = NeuralReduction(
   DeepONet(2,2;width=128,depth=4,activation=Lux.gelu),
   epochs = 1000
-  )
-reduction = DeepONetReduction(strategy)
+)
 solver = NeuralSolver(ThetaMethod(LUSolver(),dt,θ),reduction)
 ```
 """
-
-struct NeuralSolver{A,B<:NeuralReduction} <: ROMSolver
-  fesolver::A
-  reduction::B
+struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
+  fesolver::B
+  reduction::NeuralReduction{A}
 end
 
 """
@@ -121,12 +119,12 @@ It initializes the neural network with the weights and states of the `pretrained
 model_arch = DeepONet(2,2)
 
 # Base Training
-base_strategy = NeuralStrategy(model_arch,epochs=5000)
+base_strategy = NeuralReduction(model_arch,epochs=5000)
 solver_base = NeuralSolver(LUSolver(),DeepONetReduction(base_strategy))
 pretrained_op = reduced_operator(solver_base,feop,snapshots_base)
 
 # Fine-Tuning with a smaller learning rate on a refined dataset
-ft_strategy = NeuralStrategy(
+ft_strategy = NeuralReduction(
   model_arch, # match the pretrained one
   epochs = 1000,
   lr_scheduler = CosineAnnealing(1000,lr_max=1e-5) # Smaller LR
@@ -172,17 +170,16 @@ function RBSteady.reduced_operator(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver{A,<:KernelOperatorReduction},
+  solver::NeuralSolver{<:KernelOperatorReduction},
   op::NeuralOperator,
   r::Realisation
-  ) where A
+  )
 
   # Prepare input
   red = get_state_reduction(solver)
-  strategy = get_strategy(red)
   coords = get_free_dof_coordinates(get_test(op.op))
   
-  r_sampled = sample(strategy,r)
+  r_sampled = sample(red,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords)
   
   # Normalize inputs using training metadata prior to concatenation
@@ -209,16 +206,15 @@ function Algebra.solve(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver{A,<:DeepONetReduction},
+  solver::NeuralSolver{<:DeepONetReduction},
   op::NeuralOperator,
   r::Realisation
-  ) where A
+  )
 
   # Prepare input
   red = get_state_reduction(solver)
-  strategy = get_strategy(red)
   coords = get_free_dof_coordinates(get_test(op.op))
-  r_sampled = sample(strategy,r)
+  r_sampled = sample(red,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords)
   normalise!((params,coords),op.metadata)
 
@@ -234,16 +230,15 @@ function Algebra.solve(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver{A,<:NOMADReduction},
+  solver::NeuralSolver{<:NOMADReduction},
   op::NeuralOperator,
   r::Realisation
-  ) where A
+  )
 
   # Prepare input
   red = get_state_reduction(solver)
-  strategy = get_strategy(red)
   coords = get_free_dof_coordinates(get_test(op.op))
-  r_sampled = sample(strategy,r)
+  r_sampled = sample(red,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords)
   pin,xin = _flatten(params,coords)
   normalise!((pin,xin),op.metadata)
@@ -265,18 +260,17 @@ end
 # transient
 
 function Algebra.solve(
-  solver::NeuralSolver{A,<:DeepONetReduction},
+  solver::NeuralSolver{<:DeepONetReduction},
   op::NeuralOperator,
   r::TransientRealisation,
   args...
-  ) where A
+  )
 
   # Prepare input
   red = get_state_reduction(solver)
-  strategy = get_strategy(red)
   V = get_test(op.op)
   coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(strategy,r)
+  r_sampled = sample(red,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords0)
   normalise!((params,coords),op.metadata)
 
@@ -291,18 +285,17 @@ function Algebra.solve(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver{A,<:NOMADReduction},
+  solver::NeuralSolver{<:NOMADReduction},
   op::NeuralOperator,
   r::TransientRealisation,
   args...
-  ) where A
+  )
 
   # Prepare input
   red = get_state_reduction(solver)
-  strategy = get_strategy(red)
   V = get_test(op.op)
   coords0 = get_free_dof_coordinates(V)
-  r_sampled = sample(strategy,r)
+  r_sampled = sample(red,r)
   params,coords = get_formatted_data(Float32,r_sampled,coords0)
   pin,xin = _flatten(params,coords)
   normalise!((pin,xin),op.metadata)

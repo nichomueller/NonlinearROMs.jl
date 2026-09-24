@@ -5,7 +5,7 @@ abstract type AbstractNNHyperReduction{A<:ReductionStyle} <: HyperReduction{A} e
 """
     struct NNOperatorReduction <: AbstractNNHyperReduction{NoReduction}
       nparams::Int
-      strategy::NeuralStrategy
+      reduction::NeuralReduction
     end
 
 A hyper-reduction strategy for **operator regression**: the NN directly maps
@@ -17,32 +17,32 @@ The offline phase projects the residual snapshots onto the test space and
 trains the NN to reproduce the projected vectors. The online phase calls
 the NN forward pass, producing the projected residual without any assembly.
 
-`strategy` controls the [`MultiLayerPerceptron`](@ref) architecture and training.
+`reduction` controls the [`MultiLayerPerceptron`](@ref) architecture and training.
 `nparams` controls how many parameter samples to use for NN training.
 """
 struct NNOperatorReduction <: AbstractNNHyperReduction{NoReductionStyle}
   nparams::Int
-  strategy::NeuralStrategy
+  reduction::NeuralReduction
 end
 
 function NNOperatorReduction(
   args...;
   nparams::Int=20,
-  model::NeuralNetwork=MultiLayerPerceptron(),
-  strategy::NeuralStrategy=NeuralStrategy(model),
+  model::NeuralModel=MultiLayerPerceptron(),
+  reduction::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
 
-  NNOperatorReduction(nparams,strategy)
+  NNOperatorReduction(nparams,reduction)
 end
 
 ParamDataStructures.num_params(r::NNOperatorReduction) = r.nparams
-get_strategy(r::NNOperatorReduction) = r.strategy
+RBSteady.get_reduction(r::NNOperatorReduction) = r.reduction
 
 """
     struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
       reduction::Reduction{A,EuclideanNorm}
-      strategy::NeuralStrategy
+      strategy::NeuralReduction
     end
 
 A hyper-reduction strategy that uses a neural network to predict EIM
@@ -56,20 +56,20 @@ operator on the reduced integration domain.
 """
 struct NNHyperReduction{A} <: AbstractNNHyperReduction{A}
   reduction::Reduction{A,EuclideanNorm}
-  strategy::NeuralStrategy
+  strategy::NeuralReduction
 end
 
 """
-    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralStrategy(model),kwargs...) -> NNHyperReduction
+    NNHyperReduction(args...;model=MultiLayerPerceptron(),strategy=NeuralReduction(model),kwargs...) -> NNHyperReduction
 
 Constructs a `NNHyperReduction` from a `Reduction` built with the same
 positional/keyword arguments accepted by `Reduction`. An optional
-`strategy` keyword overrides the default [`NeuralStrategy`](@ref).
+`strategy` keyword overrides the default [`NeuralReduction`](@ref).
 """
 function NNHyperReduction(
   args...;
-  model::NeuralNetwork=MultiLayerPerceptron(),
-  strategy::NeuralStrategy=NeuralStrategy(model),
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
 
@@ -94,15 +94,15 @@ Carry the `combination::TimeCombination` from the ODE solver.
 struct TransientNNOperatorReduction <: AbstractTransientNNHyperReduction{NoReductionStyle}
   combination::TimeCombination
   nparams::Int
-  strategy::NeuralStrategy
+  strategy::NeuralReduction
 end
 
 function TransientNNOperatorReduction(
   combination::TimeCombination,
   args...;
   nparams::Int=20,
-  model::NeuralNetwork=MultiLayerPerceptron(),
-  strategy::NeuralStrategy=NeuralStrategy(model),
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
 
@@ -123,14 +123,14 @@ basis-projection stage.
 struct TransientNNHyperReduction{A} <: AbstractTransientNNHyperReduction{A}
   combination::TimeCombination
   reduction::Reduction{A,EuclideanNorm}
-  strategy::NeuralStrategy
+  strategy::NeuralReduction
 end
 
 function TransientNNHyperReduction(
   combination::TimeCombination,
   args...;
-  model::NeuralNetwork=MultiLayerPerceptron(),
-  strategy::NeuralStrategy=NeuralStrategy(model),
+  model::NeuralModel=MultiLayerPerceptron(),
+  strategy::NeuralReduction=NeuralReduction(model),
   kwargs...
   )
 
@@ -145,7 +145,7 @@ RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
 # neural reductions
 
 """
-    Base.@kwdef struct NeuralStrategy{M,S}
+    Base.@kwdef struct NeuralReduction{M,S}
       model::M
       epochs::Int = 20000
       batch_size::Int = 0
@@ -185,7 +185,7 @@ strategies for the offline phase.
 ```julia
 using Lux
 
-s = NeuralStrategy(
+s = NeuralReduction(
   DeepONet(2,2;width=64,depth=3,activation=Lux.gelu), # 2 params -> Branch; 2D coords -> Trunk
   epochs = 5000,
   batch_size = 32,
@@ -197,13 +197,13 @@ s = NeuralStrategy(
 **Advanced Usage (Multi-Scale Learning):**
 ```julia
 # Log-transform for parameters spanning huge ranges (e.g., 1e-(beta) with beta = 1:0.2:5)
-strategy_log = NeuralStrategy(
+strategy_log = NeuralReduction(
   DeepONet(2,3;width=64,depth=3), # 2 params -> Branch; 3D coords -> Trunk
   param_step = p -> log10.(p)
   )
 ```
 """
-struct NeuralStrategy{A<:NeuralNetwork}
+struct NeuralReduction{A<:NeuralModel}
   model::A
   epochs::Int
   batch_size::Int
@@ -212,8 +212,8 @@ struct NeuralStrategy{A<:NeuralNetwork}
   trainlog::TrainingLog
 end
 
-function NeuralStrategy(
-  model::NeuralNetwork;
+function NeuralReduction(
+  model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
   space_step=1,
@@ -229,7 +229,7 @@ function NeuralStrategy(
   sampler = MultiSampler(;space_step,param_step,time_step)
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
-  NeuralStrategy(
+  NeuralReduction(
     model,
     epochs,
     batch_size,
@@ -239,22 +239,14 @@ function NeuralStrategy(
   )
 end
 
-get_sampler(s::NeuralStrategy) = s.sampler
-get_optimiser(s::NeuralStrategy) = s.optimiser.opt
-get_scheduler(s::NeuralStrategy) = s.optimiser.lr_scheduler
-get_logger(s::NeuralStrategy) = s.trainlog
+get_sampler(s::NeuralReduction) = s.sampler
+get_optimiser(s::NeuralReduction) = s.optimiser.opt
+get_scheduler(s::NeuralReduction) = s.optimiser.lr_scheduler
+get_logger(s::NeuralReduction) = s.trainlog
 
-function build_model(s::NeuralStrategy)
+function build_model(s::NeuralReduction)
   build_model(s.model)
 end
-
-struct NeuralReduction{A<:NeuralNetwork} <: Reduction{NoReductionStyle,EuclideanNorm}
-  s::NeuralStrategy{A}
-end
-
-RBSteady.ReductionStyle(r::NeuralReduction) = NoReductionStyle()
-RBSteady.NormStyle(r::NeuralReduction) = EuclideanNorm()
-get_strategy(r::NeuralReduction) = r.s
 
 """
     const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction{M}
@@ -267,17 +259,17 @@ const KernelOperatorReduction{M<:AbstractKernelNeuralOperator} = NeuralReduction
 """
     const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
 
-A reduction wrapper for the Deep Operator Network (DeepONet) s.
+A reduction wrapper for the Deep Operator Model (DeepONet) s.
 It instructs the ROM solvers to use the DeepONet pipeline during the offline and online phases.
 
 # Constructors
-- `DeepONetReduction(s::NeuralStrategy)`: Wraps an explicitly defined s.
-- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
+- `DeepONetReduction(s::NeuralReduction)`: Wraps an explicitly defined s.
+- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
 
 # Examples
 ```julia
 # Using an explicit s
-s = NeuralStrategy(DeepONet(2,3;width=64,depth=3),epochs=1000)
+s = NeuralReduction(DeepONet(2,3;width=64,depth=3),epochs=1000)
 reduction = DeepONetReduction(s)
 
 # Using kwargs directly
@@ -293,13 +285,13 @@ A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator 
 It instructs the ROM solvers to use the NOMAD pipeline during the offline and online phases.
 
 # Constructors
-- `NOMADReduction(s::NeuralStrategy)`: Wraps an explicitly defined s.
-- `NOMADReduction(;model::NOMAD,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralStrategy`](@ref).
+- `NOMADReduction(s::NeuralReduction)`: Wraps an explicitly defined s.
+- `NOMADReduction(;model::NOMAD,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
 
 # Examples
 ```julia
 # Using an explicit s
-s = NeuralStrategy(NOMAD(2,3;width=32,depth=2),epochs=1000)
+s = NeuralReduction(NOMAD(2,3;width=32,depth=2),epochs=1000)
 reduction = NOMADReduction(s)
 
 # Using kwargs directly
@@ -320,7 +312,7 @@ Reduction wrappers for the reconstruction-based architectures, analogous to
 involved), producing a [`NeuralOperator`](@ref) with `metadata === identity`.
 
 # Constructors
-Same pattern as `DeepONetReduction`/`NOMADReduction`: wrap an explicit `NeuralStrategy`,
+Same pattern as `DeepONetReduction`/`NOMADReduction`: wrap an explicit `NeuralReduction`,
 or build one from `model=...`/kwargs directly, e.g.
 `AutoEncoderReduction(model=AutoEncoder(width=32,depth=2),epochs=1000)`.
 """
@@ -337,11 +329,8 @@ for (f,m) in (
   (:KernelOperatorReduction,:AbstractKernelNeuralOperator)
 )
   @eval begin
-    $f(s::NeuralStrategy{<:$m}) = NeuralReduction(s)
-
     function $f(;model::$m,kwargs...)
-      s = NeuralStrategy(model;kwargs...)
-      NeuralReduction(s)
+      NeuralReduction(model;kwargs...)
     end
   end
 end

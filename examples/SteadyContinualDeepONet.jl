@@ -56,7 +56,7 @@ end
 # Explicit DeepONet initialization with matched sensor dimensionality (50 inputs)
 model_arch = DeepONet(branch_layers=(50,128,128,64),trunk_layers=(2,128,128,64),activation=Lux.gelu)
 
-strategy_base = NeuralStrategy(
+red_base = NeuralReduction(
     model_arch,
     epochs = 4000,
     batch_size = 25, # Mini-batching over n_samples (150/25 = 6 batches per epoch)
@@ -66,7 +66,7 @@ strategy_base = NeuralStrategy(
     print_every = 500
 )
 
-solver_base = NeuralSolver(fesolver,DeepONetReduction(strategy_base))
+solver_base = NeuralSolver(fesolver,red_base)
 
 println("\nTraining Base Model...")
 pretrained_op = reduced_operator(solver_base,feop_base,s_base)
@@ -89,7 +89,7 @@ feop_ext = LinearParamOperator(res,a,pspace_ext,trial,test,FEDomains((Ω,),(Ω,)
 n_ext = 60
 s_ext,_ = solution_snapshots(fesolver,feop_ext,realisation(pspace_ext;nparams=n_ext,sampling=:halton))
 
-strategy_ft = NeuralStrategy(
+red_ft = NeuralReduction(
     model_arch,
     epochs = 2000,
     batch_size = 15, # Mini-batching over 60 samples
@@ -98,7 +98,7 @@ strategy_ft = NeuralStrategy(
     lr_scheduler = CosineAnnealing(2000,lr_max=1f-4,lr_min=1f-6),
     print_every = 500
 )
-solver_ft = NeuralSolver(fesolver,DeepONetReduction(strategy_ft))
+solver_ft = NeuralSolver(fesolver,red_ft)
 
 # update_stats=false enforces physical consistency: the model inherits the normalization Z-scores (μ, σ) of the pre-trained domain
 finetuned_op = reduced_operator(solver_ft,feop_ext,s_ext,pretrained_op;update_stats=false)

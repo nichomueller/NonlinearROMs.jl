@@ -1,7 +1,7 @@
 ## Neural Operators
 
 In addition to classical linear ROMs, GridapROMs supports non-linear surrogate modeling via Neural Operators (DeepONet and NOMAD).
-The integration relies on `NeuralStrategy` and `NeuralSolver` to manage the offline training phase using XLA-accelerated backends (Lux.jl and Reactant.jl), and provides support for Continual and Transfer Learning via model fine-tuning.
+The integration relies on `NeuralReduction` and `NeuralSolver` to manage the offline training phase using XLA-accelerated backends (Lux.jl and Reactant.jl), and provides support for Continual and Transfer Learning via model fine-tuning.
 
 ## Transient Neural Operators
 

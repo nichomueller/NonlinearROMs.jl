@@ -2,7 +2,7 @@ const CDEV = Lux.cpu_device()
 const XDEV = Lux.reactant_device(;force=true)
 
 """
-    struct TrainedNeuralModel{A,B,C} <: NeuralNetwork
+    struct TrainedNeuralModel{A,B,C} <: NeuralModel
       chain::A
       parameters::B
       states::C
@@ -13,7 +13,7 @@ as `(a::TrainedNeuralModel)(x::AbstractMatrix) -> AbstractMatrix` via the standa
 `Arrays.evaluate!`/`return_cache` interface. Returned by [`train_neural_coefficient`](@ref)
 for [`MultiLayerPerceptron`](@ref) strategies.
 """
-struct TrainedNeuralModel{A,B,C} <: NeuralNetwork
+struct TrainedNeuralModel{A,B,C} <: NeuralModel
   chain::A
   parameters::B
   states::C
@@ -72,19 +72,19 @@ end
 get_latent_codes(a::TrainedAutoDecoder) = a.parameters.layer_1.codes
 
 """
-    infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,strategy::NeuralStrategy) -> AbstractVector
+    infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,r::NeuralReduction) -> AbstractVector
 
 Fit a latent code `z` for an unseen snapshot `x_target` by minimising the mean
-squared reconstruction error with the decoder weights fixed, using `strategy.optimiser.opt`
-and `strategy.epochs`.
+squared reconstruction error with the decoder weights fixed, using `r.optimiser.opt`
+and `r.epochs`.
 """
-function infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,strategy::NeuralStrategy)
+function infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,r::NeuralReduction)
   latent_dim = size(get_latent_codes(a),1)
   T = Float32
   z = randn(T,latent_dim) .* T(0.01)
   X_t = reshape(T.(x_target),:,1)
-  opt_state = Optimisers.setup(strategy.optimiser.opt,z)
-  for _ in 1:strategy.epochs
+  opt_state = Optimisers.setup(r.optimiser.opt,z)
+  for _ in 1:r.epochs
     grad = ForwardDiff.gradient(z) do z_
       X̂ = first(a.chain.layers.layer_2(reshape(z_,:,1),a.parameters.layer_2,a.states.layer_2))
       sum(abs2,X̂ .- X_t)/length(X_t)
@@ -95,7 +95,7 @@ function infer_latent(a::TrainedAutoDecoder,x_target::AbstractVector,strategy::N
 end
 
 """
-    struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralNetwork
+    struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
       encoder::E
       decoder::D
       ps_enc::PE
@@ -109,7 +109,7 @@ A trained [`VariationalAutoEncoder`](@ref). `evaluate!(cache,a,z)` applies the
 **decoder** (latent → high-dim); use [`encode`](@ref) for the encoder direction,
 which returns `(μ,log_var,z)` with a freshly sampled `z`.
 """
-struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralNetwork
+struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
   encoder::E
   decoder::D
   ps_enc::PE

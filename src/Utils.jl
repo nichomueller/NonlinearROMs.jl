@@ -219,6 +219,25 @@ end
 get_dof_to_nodes(b) = @abstractmethod
 get_dof_to_nodes(b::LagrangianDofBasis) = b.nodes[b.dof_to_node]
 
+# utils
+
+dimension(μ::Realisation) = length(first(μ))
+dimension(μ::TransientRealisation) = dimension(get_params(μ))
+
+function matrix_of_params(r::AbstractRealisation)
+  params = zeros(dimension(r),num_params(r))
+  matrix_of_params!(params,r)
+end
+
+function matrix_of_params!(params,r::AbstractRealisation)
+  @check size(params,2) == num_params(r)
+  μ = get_params(r)
+  @inbounds @views for i in axes(params,2)
+    params[:,i] = μ.params[i]
+  end
+  params
+end
+
 function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
   coords_mat = zeros(T,D,length(coords))
   for (i,coord) in enumerate(coords)
@@ -263,3 +282,8 @@ function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) w
   end
   return tensor
 end
+
+_get_data(a) = get_all_data(a)
+_get_data(a::AbstractParamMatrix) = reshape(get_all_data(a),innerlength(a),:)
+_get_data(a::AbstractMatrix) = a
+_get_data(a::AbstractArray{T,3}) where T = reshape(a,:,size(a,3))

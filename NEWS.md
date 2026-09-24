@@ -22,10 +22,10 @@ I changed several file names and introduced new files, so that the overall struc
 
   | File | Now holds |
   |---|---|
-  | `NeuralNetworks.jl` | the `NeuralNetwork` abstract type only |
+  | `NeuralModels.jl` | the `NeuralModel` abstract type only |
   | `NeuralModels.jl` | DeepONet/NOMAD/MLP/AutoEncoder/VAE/AutoDecoder architectures |
   | `NeuralModelsTraining.jl` | `TrainedNeuralModel`, `train_model!`, generic trained-network wrappers |
-  | `NeuralReductions.jl` | `NeuralStrategy`/`NeuralReduction`/`DeepONetReduction`/`NOMADReduction` |
+  | `NeuralReductions.jl` | `NeuralReduction`/`DeepONetReduction`/`NOMADReduction` |
   | `NeuralSolvers.jl` / `TransientNeuralSolver.jl` | `NeuralOperator`, `reduced_operator`, `Algebra.solve` |
   | `NeuralTraining.jl` / `TransientNeuralTraining.jl` | the DeepONet/NOMAD `train(...)` pipelines |
   | `Samplers.jl` | `Sampler`/`MultiSampler` |
@@ -34,9 +34,9 @@ I changed several file names and introduced new files, so that the overall struc
 
 This is purely organizational: no behavior changed, other than the load-order constraints Julia imposes when a type moves to a file that now `include`s too late for another file's function signature to reference it (hit and fixed a few times over the course of this review).
 
-**2. One `NeuralStrategy` for every neural-network use case, not two.**
+**2. One `NeuralReduction` for every neural-network use case, not two.**
 Before, DeepONet/NOMAD had their own training configuration, while the MLP-based hyper-reduction regressors (`NNOperatorReduction`, `NNHyperReduction`) had a completely separate `NNStrategy` (`type=MLPType()`, `layers`, `lr`, `optimiser`, `loss`, `epochs`, `weight_decay`, `batch_size`, `lr_schedule`, `patience`, `val_fraction`). Now a single
-`NeuralStrategy{A<:NeuralNetwork}` (model + epochs + batch_size + sampler + optimiser + training log) configures all of them. Also, I removed the `AutoDeepONet`/`AutoNOMAD` structs, as these can easily be merged with the non-`Auto` versions. Consequently, `resolve_model` was also removed.
+`NeuralReduction{A<:NeuralModel}` (model + epochs + batch_size + sampler + optimiser + training log) configures all of them. Also, I removed the `AutoDeepONet`/`AutoNOMAD` structs, as these can easily be merged with the non-`Auto` versions. Consequently, `resolve_model` was also removed.
 
 **3. One subsampling abstraction (`Sampler`/`MultiSampler`) instead of separate steady/transient code.**
 Selecting a subset of spatial DoFs, parameters, and (for transient problems) time steps before training used to be separate, independently-written logic for the steady and transient cases. It's now one `sample(...)` multiple-dispatch entry point, driven by a
