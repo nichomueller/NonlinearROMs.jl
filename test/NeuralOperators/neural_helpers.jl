@@ -22,7 +22,7 @@ end
 
 @testset "Z-Score stats computation" begin
   data = Float32[1 2 3;4 5 6] # 2 features,3 samples
-  stats = ZscoreStats(data)
+  stats = ZScore(data)
 
   @test size(stats.μ) == (2,)
   @test size(stats.σ) == (2,)
@@ -30,7 +30,7 @@ end
 
   # Array of ones => dev = 0 converted to 1
   data_const = ones(Float32,2,10)
-  stats_const = ZscoreStats(data_const)
+  stats_const = ZScore(data_const)
   @test all(stats_const.μ .≈ 1.0f0)
   @test all(stats_const.σ .== 1.0f0) # Forced to 1.0
 end

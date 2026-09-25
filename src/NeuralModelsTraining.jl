@@ -24,20 +24,10 @@ function TrainedNeuralModel(chain,parameters,states)
   TrainedNeuralModel(chain,parameters,states,identity)
 end
 
-function TrainedNeuralModel(chain,parameters,states,args...)
-  parameters = train_state.parameters |> CDEV
-  states = Lux.testmode(train_state.states) |> CDEV
-  TrainedNeuralModel(train_state.model,parameters,states,args...)
-end
-
 function TrainedNeuralModel(train_state::Lux.Training.TrainState,args...)
   parameters = train_state.parameters |> CDEV
   states = Lux.testmode(train_state.states) |> CDEV
   TrainedNeuralModel(train_state.model,parameters,states,args...)
-end
-
-function Arrays.evaluate!(cache,a::TrainedNeuralModel,x::AbstractMatrix)
-  first(a.chain(Float32.(x),a.parameters,a.states))
 end
 
 """
@@ -143,7 +133,7 @@ function decode(a::TrainedVAE,Z::AbstractMatrix)
 end
 
 """
-    train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger::TrainingLog)
+    train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
 
 Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
 `to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
@@ -153,7 +143,7 @@ and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`.
 defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
 function for anything else (e.g. a VAE's reconstruction+KL loss).
 """
-function train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger::TrainingLog)
+function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
   init!(logger)
 
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
@@ -181,5 +171,5 @@ function train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=L
   end
 
   finalize!(logger)
-  return TrainedNeuralModel(train_state)
+  return TrainedNeuralModel(train_state,stats)
 end

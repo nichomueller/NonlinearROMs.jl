@@ -1,6 +1,6 @@
-function train_kernel_operator!(train_state,dataloader,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:KernelReduction},train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   function to_device_batch((x_batch,y_batch))
     n_dofs,n_samples = size(y_batch)
     # Dynamically compute the number of physical variables
@@ -8,40 +8,41 @@ function train_kernel_operator!(train_state,dataloader,red)
     y_reshaped = reshape(y_batch,out_channels,n_nodes,n_samples)
     return (x_batch |> XDEV,y_reshaped |> XDEV)
   end
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train_deeponet!(train_state,dataloader,x_data_dev,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:DeepONetReduction},train_state,dataloader,stats,x_data_dev)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   to_device_batch((f_batch,u_batch)) = ((f_batch |> XDEV,x_data_dev),u_batch |> XDEV)
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train_nomad!(train_state,dataloader,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:NOMADReduction},train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   to_device_batch(((u_batch,y_batch),v_batch)) = ((u_batch |> XDEV,y_batch |> XDEV),v_batch |> XDEV)
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train_autoencoder!(train_state,dataloader,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:DeepONetReduction},train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train_autodecoder!(train_state,dataloader,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:AutoEncoderReduction},train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train_vae!(train_state,dataloader,red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver{<:VAEReduction},train_state,dataloader,stats)
+  red = get_reduction(solver)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
   β = red.model.β
   function vae_loss(model::VAELayer,ps,st,x)
     n_h = size(x,1)
@@ -54,7 +55,29 @@ function train_vae!(train_state,dataloader,red)
     return recon + β*kl,st,(;)
   end
   to_device_batch(xb) = xb |> XDEV
-  train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=vae_loss,logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=vae_loss,logger)
+end
+
+function get_train_state(solver::NeuralSolver;rng=Random.default_rng(),seed=1234)
+  Random.seed!(rng,seed)
+  model = build_model(solver)
+  opt = get_optimiser(solver)
+  ps,st = Lux.setup(rng,model) |> XDEV
+  Lux.Training.TrainState(model,ps,st,opt)
+end
+
+function train(solver::NeuralSolver,feop::ParamOperator,data...)
+  # Data and normalisation extraction
+  inputs,stats = get_inputs_and_stats(solver,feop,data...)
+
+  # Model Building
+  train_state = get_train_state(solver)
+
+  # DataLoader
+  bs = resolve_batch_size(solver,inputs)
+  dataloader = MLUtils.DataLoader(inputs;batchsize=bs,shuffle=true,partial=false)
+
+  train_model!(solver,train_state,dataloader,stats)
 end
 
 # Generic Dispatch (Steady)
@@ -71,7 +94,7 @@ function train(
   data,params,coords = get_formatted_data(Float32,target)
 
   # Normalisation applied strictly before building the tensor
-  stats = NormStats(data,params,coords;normalise=true)
+  stats = Normalisation(data,params,coords;normalise=true)
 
   # Build 3D Tensor for Kernel Operators
   input_tensor = tensor_of_coords(coords,params)
@@ -95,7 +118,7 @@ function train(
     partial=false
   )
 
-  train_kernel_operator!(train_state,dataloader,red)
+  train_kernel_model!(train_state,dataloader,red)
 end
 
 function train(
@@ -114,7 +137,7 @@ function train(
 
   # Normalisation
   if update_stats
-    stats = NormStats(data,params,coords;normalise=true)
+    stats = Normalisation(data,params,coords;normalise=true)
   else
     stats = pretrained_op.metadata
     expected_param_in = length(stats.pscore.μ)
@@ -142,7 +165,7 @@ function train(
     partial=false
   )
 
-  train_kernel_operator!(train_state,dataloader,red)
+  train_kernel_model!(train_state,dataloader,red)
 end
 
 function train(
@@ -157,7 +180,7 @@ function train(
   data,params,coords = get_formatted_data(Float32,target)
 
   # Normalisation
-  stats = NormStats(data,params,coords;normalise=true)
+  stats = Normalisation(data,params,coords;normalise=true)
 
   # Building the DeepONet
   rng = Random.default_rng()
@@ -197,7 +220,7 @@ function train(
 
   # Normalisation
   if update_stats
-    stats = NormStats(data,params,coords;normalise=true)
+    stats = Normalisation(data,params,coords;normalise=true)
   else
     stats = pretrained_op.metadata
     expected_branch_in = length(stats.pscore.μ)
@@ -242,7 +265,7 @@ function train(
   N_tot = size(dout,2)
 
   # Normalisation
-  stats = NormStats(dout,pin,xin;normalise=true)
+  stats = Normalisation(dout,pin,xin;normalise=true)
 
   # Building the NOMAD model
   rng = Random.default_rng()
@@ -283,7 +306,7 @@ function train(
 
   # Normalisation
   if update_stats
-    stats = NormStats(dout,pin,xin;normalise=true)
+    stats = Normalisation(dout,pin,xin;normalise=true)
   else
     stats = pretrained_op.metadata
     expected_sensors = length(stats.pscore.μ)
@@ -514,7 +537,7 @@ function train(
   data,params,coords = get_formatted_data(Float32,target)
 
   # Normalisation
-  stats = NormStats(data,params,coords;normalise=true)
+  stats = Normalisation(data,params,coords;normalise=true)
 
   # Building the DeepONet
   rng = Random.default_rng()
@@ -554,7 +577,7 @@ function train(
 
   # Normalisation
   if update_stats
-    stats = NormStats(data,params,coords;normalise=true)
+    stats = Normalisation(data,params,coords;normalise=true)
   else
     stats = pretrained_op.metadata
     normalise!((data,params,coords),stats)
@@ -595,7 +618,7 @@ function train(
   N_tot = size(dout,2)
 
   # Normalisation
-  stats = NormStats(dout,pin,xin;normalise=true)
+  stats = Normalisation(dout,pin,xin;normalise=true)
 
   # Building the NOMAD model
   rng = Random.default_rng()
@@ -636,7 +659,7 @@ function train(
 
   # Normalisation
   if update_stats
-    stats = NormStats(dout,pin,xin;normalise=true)
+    stats = Normalisation(dout,pin,xin;normalise=true)
   else
     stats = pretrained_op.metadata
     normalise!((dout,pin,xin),stats)
@@ -663,14 +686,6 @@ function train(
 end
 
 # utils
-
-function resolve_batch_size(batch_config::Int,total_samples::Int)
-  return batch_config <= 0 ? total_samples : min(batch_config,total_samples)
-end
-
-function resolve_batch_size(red::NeuralReduction,total_samples::Int)
-  resolve_batch_size(red.batch_size,total_samples)
-end
 
 function _flatten(
   data::AbstractArray{T},

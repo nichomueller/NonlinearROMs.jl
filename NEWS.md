@@ -30,7 +30,7 @@ I changed several file names and introduced new files, so that the overall struc
   | `NeuralTraining.jl` / `TransientNeuralTraining.jl` | the DeepONet/NOMAD `train(...)` pipelines |
   | `Samplers.jl` | `Sampler`/`MultiSampler` |
   | `NeuralLayers.jl` | `LatentCodeLayer`/`VAELayer` |
-  | `Utils.jl` | absorbed `TrainingLogs.jl`, plus `ZscoreStats`/`NormStats`/`normalise!`/`CoordinateSnapshots`/`get_formatted_data` |
+  | `Utils.jl` | absorbed `TrainingLogs.jl`, plus `ZScore`/`Normalisation`/`normalise!`/`CoordinateSnapshots`/`get_formatted_data` |
 
 This is purely organizational: no behavior changed, other than the load-order constraints Julia imposes when a type moves to a file that now `include`s too late for another file's function signature to reference it (hit and fixed a few times over the course of this review).
 
@@ -49,8 +49,8 @@ fields of a `mutable struct`. The cosine/plateau math itself is unchanged.
 **5. `NeuralOperator`: weights and states now live inside the trained model.**
 Before, `NeuralOperator` carried `model` (a bare Lux chain), `model_weights`, `model_states`, `norm_stats` and `max_u` as separate fields. I see these fields as two macro-structures: 
 - Chain + parameters + states: these make up a single `TrainedAbstractNeuralModel`.
-- The rest can be seen as a structure collecting information on the normalisation factors of the data. By default, this structure is a `NormStats` which basically contains the old `norm_stats` and `max_u`; however, this could also be of type `Nothing`, if no normalisation is applied.
-In essence, now a `NeuralOperator` contains only two fields: a `model <: TrainedAbstractNeuralModel`, and `metadata <: Union{NormStats, Nothing}`.
+- The rest can be seen as a structure collecting information on the normalisation factors of the data. By default, this structure is a `Normalisation` which basically contains the old `norm_stats` and `max_u`; however, this could also be of type `Nothing`, if no normalisation is applied.
+In essence, now a `NeuralOperator` contains only two fields: a `model <: TrainedAbstractNeuralModel`, and `metadata <: Union{Normalisation, Nothing}`.
 
 **6. Now using my proposed coordinates builder.**
 

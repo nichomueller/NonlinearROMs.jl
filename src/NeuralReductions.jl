@@ -102,6 +102,10 @@ function build_model(s::NeuralReduction)
   build_model(s.model)
 end
 
+resolve_batch_size(s::NeuralReduction,args...) = resolve_batch_size(s.batch_size,args...)
+resolve_batch_size(bs::Int,params::AbstractMatrix) = resolve_batch_size(bs,size(params,2))
+resolve_batch_size(bs::Int,ns::Int) = bs > 0 ? min(bs,ns) : ns 
+
 # interface for RB subspace + NN hyper-reduction machinery
 
 struct NNRegressionStyle <: ReductionStyle end

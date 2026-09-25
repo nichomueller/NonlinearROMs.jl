@@ -67,7 +67,7 @@ import GridapROMs.RBSteady:
 import StaticArrays: SVector
 
 export TrainingLog
-export ZscoreStats
+export ZScore
 export normalise!
 export CoordinateSnapshots
 export get_formatted_data
