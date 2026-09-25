@@ -114,7 +114,7 @@ include("NeuralLayers.jl")
 export NeuralModel
 export FiniteDimensionalModel
 export CoordinateNeuralModel
-export AbstractIntegralKernel
+export IntegralKernel
 export DeepONet
 export NOMAD
 export MultiLayerPerceptron

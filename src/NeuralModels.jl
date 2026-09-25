@@ -16,7 +16,12 @@ Abstract supertype for neural models that evaluate the solution point-by-point u
 abstract type CoordinateNeuralModel <: NeuralModel end
 
 """
-    struct KernelNeuralModel{K,F} <: NeuralModel
+    struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
+      lifting::A
+      kernel_layers::NTuple{N,B}
+      projection::C
+      activation::D
+    end
 
 Generic architecture for kernel-based neural models.
 It maps an input function to an output function through three main stages:
@@ -24,18 +29,18 @@ It maps an input function to an output function through three main stages:
 2. Iterative Kernel Integration: A sequence of `NeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralModel{K,F} <: NeuralModel
-  lifting_layers::Tuple{Vararg{Int}}
-  kernel_configs::Tuple{Vararg{Any}}
-  projection_layers::Tuple{Vararg{Int}}
-  activation::F
+struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
+  lifting::A
+  kernel_layers::NTuple{N,B}
+  projection::C
+  activation::D
 end
 
 """
-    struct DeepONet{F} <: CoordinateNeuralModel
-      branch_layers::Tuple{Vararg{Int}}
-      trunk_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct DeepONet{N,A} <: CoordinateNeuralModel
+      branch_layers::NTuple{N,Int}
+      trunk_layers::NTuple{N,Int}
+      activation::A
     end
 
 Explicit architectural configuration for a Deep Operator Model (DeepONet).
@@ -60,10 +65,10 @@ model = DeepONet(
   )
 ```
 """
-struct DeepONet{F} <: CoordinateNeuralModel
-  branch_layers::Tuple{Vararg{Int}}
-  trunk_layers::Tuple{Vararg{Int}}
-  activation::F
+struct DeepONet{N,A} <: CoordinateNeuralModel
+  branch_layers::NTuple{N,Int}
+  trunk_layers::NTuple{N,Int}
+  activation::A
 end
 
 function DeepONet(;branch_layers,trunk_layers,activation=tanh)
@@ -85,10 +90,10 @@ function DeepONet(
 end
 
 """
-    struct NOMAD{F} <: CoordinateNeuralModel
-      approximator_layers::Tuple{Vararg{Int}}
-      decoder_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct NOMAD{N,A} <: CoordinateNeuralModel
+      approximator_layers::NTuple{N,Int}
+      decoder_layers::NTuple{N,Int}
+      activation::A
     end
 
 Explicit architectural configuration for a NOMAD (Non-linear Manifold Decoder) network.
@@ -106,10 +111,10 @@ model = NOMAD(
   )
 ```
 """
-struct NOMAD{F} <: CoordinateNeuralModel
-  approximator_layers::Tuple{Vararg{Int}}
-  decoder_layers::Tuple{Vararg{Int}}
-  activation::F
+struct NOMAD{N,A} <: CoordinateNeuralModel
+  approximator_layers::NTuple{N,Int}
+  decoder_layers::NTuple{N,Int}
+  activation::A
 end
 
 function NOMAD(;approximator_layers,decoder_layers,activation=tanh)
@@ -138,9 +143,9 @@ Abstract supertype for standard neural networks mapping between finite-dimension
 abstract type FiniteDimensionalModel <: NeuralModel end
 
 """
-    struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
-      hidden_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct MultiLayerPerceptron{N,A} <: FiniteDimensionalModel
+      hidden_layers::NTuple{N,Int}
+      activation::A
     end
 
 Recipe for a dense feed-forward network used for scalar/vector regression (e.g.
@@ -150,9 +155,9 @@ inferred from the training data at [`train_neural_coefficient`](@ref) call time,
 one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralReduction`](@ref))
 to train many differently-shaped networks (one per triangulation/reduced quantity).
 """
-struct MultiLayerPerceptron{F} <: FiniteDimensionalModel
-  hidden_layers::Tuple{Vararg{Int}}
-  activation::F
+struct MultiLayerPerceptron{N,A} <: FiniteDimensionalModel
+  hidden_layers::NTuple{N,Int}
+  activation::A
 end
 
 function MultiLayerPerceptron(;
@@ -166,9 +171,9 @@ function MultiLayerPerceptron(;
 end
 
 """
-    struct AutoEncoder{F} <: FiniteDimensionalModel
-      hidden_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct AutoEncoder{N,A} <: FiniteDimensionalModel
+      hidden_layers::NTuple{N,Int}
+      activation::A
     end
 
 Recipe for an encoder-decoder pair for unsupervised dimensionality reduction.
@@ -176,9 +181,9 @@ Recipe for an encoder-decoder pair for unsupervised dimensionality reduction.
 `(h₁,…,h_{L-1})` and the decoder mirrors them symmetrically; the input dimension
 is inferred from the training data.
 """
-struct AutoEncoder{F} <: FiniteDimensionalModel
-  hidden_layers::Tuple{Vararg{Int}}
-  activation::F
+struct AutoEncoder{N,A} <: FiniteDimensionalModel
+  hidden_layers::NTuple{N,Int}
+  activation::A
 end
 
 function AutoEncoder(
@@ -192,9 +197,9 @@ function AutoEncoder(
 end
 
 """
-    struct VariationalAutoEncoder{F} <: FiniteDimensionalModel
-      hidden_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct VariationalAutoEncoder{N,A,B} <: FiniteDimensionalModel
+      hidden_layers::NTuple{N,Int}
+      activation::A
       β::Float64
     end
 
@@ -202,10 +207,10 @@ Recipe for a VAE with the reparameterisation trick. `hidden_layers = (h₁,…,h
 interpreted as for [`AutoEncoder`](@ref); `β` weighs the KL term against the
 reconstruction loss.
 """
-struct VariationalAutoEncoder{F} <: FiniteDimensionalModel
-  hidden_layers::Tuple{Vararg{Int}}
-  activation::F
-  β::Float64
+struct VariationalAutoEncoder{N,A,B} <: FiniteDimensionalModel
+  hidden_layers::NTuple{N,Int}
+  activation::A
+  β::B
 end
 
 function VariationalAutoEncoder(
@@ -220,18 +225,18 @@ function VariationalAutoEncoder(
 end
 
 """
-    struct AutoDecoder{F} <: FiniteDimensionalModel
-      hidden_layers::Tuple{Vararg{Int}}
-      activation::F
+    struct AutoDecoder{N,A} <: FiniteDimensionalModel
+      hidden_layers::NTuple{N,Int}
+      activation::A
     end
 
 Recipe for a decoder-only model (Park et al., 2019). Per-sample latent codes are
 optimised jointly with the decoder parameters. `hidden_layers = (h₁,…,latent_dim)`;
 the decoder is built from last to first, i.e. `(latent_dim,reverse(h₁,…,h_{L-1})…,n_h)`.
 """
-struct AutoDecoder{F} <: FiniteDimensionalModel
-  hidden_layers::Tuple{Vararg{Int}}
-  activation::F
+struct AutoDecoder{N,A} <: FiniteDimensionalModel
+  hidden_layers::NTuple{N,Int}
+  activation::A
 end
 
 function AutoDecoder(width::Int=64,

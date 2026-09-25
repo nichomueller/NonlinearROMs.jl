@@ -1,39 +1,50 @@
 """
-    abstract type AbstractIntegralKernel <: Lux.AbstractLuxLayer end
+    abstract type IntegralKernel end
 
 Abstract supertype for integral kernel implementations used within the iterative layers.
 """
-abstract type AbstractIntegralKernel <: Lux.AbstractLuxLayer end
+abstract type IntegralKernel end
+
+struct FourierLayer <: IntegralKernel 
+  # fields 
+end
+
+struct GraphLayer <: IntegralKernel 
+  # fields 
+end
+
+struct HAMLETLayer <: IntegralKernel 
+  # fields 
+end
 
 """
-    struct NeuralLayer{K<:AbstractIntegralKernel,L,S,F} <: Lux.AbstractLuxLayer
-      kernel::K
-      local_linear::L
-      bias_shape::S
-      activation::F
+    struct NeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
+      kernel::A
+      weights::B
+      bias::C
+      activation::D
     end
 
 A single iterative layer of a Kernel Neural Operator.
 It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(x)), where:
 - `kernel` (Kₜ) acts as the non-local integral operator.
-- `local_linear` (Wₜ) is a pointwise local linear transformation.
-- `bias_shape` represents the dimensions of the learnable pointwise bias.
+- `weights` (Wₜ) is a pointwise local linear transformation.
+- `bias` represents the dimensions of the learnable pointwise bias.
 - `activation` (σ) is a fixed pointwise non-linearity.
 """
-struct NeuralLayer{K<:AbstractIntegralKernel,L,S,F} <: Lux.AbstractLuxLayer
-  kernel::K
-  local_linear::L
-  bias_shape::S
-  activation::F
+struct NeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
+  kernel::A
+  weights::B
+  bias::C
+  activation::D
 end
 
 # Initialize trainable parameters (ps)
 function Lux.initialparameters(rng::Random.AbstractRNG,layer::NeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,layer.kernel),
-    local_linear = Lux.initialparameters(rng,layer.local_linear),
-    # Initialize bias as zeros with the specified shape
-    bias = zeros(Float32,layer.bias_shape...)
+    weights = Lux.initialparameters(rng,layer.weights),
+    bias = Lux.initialparameters(rng,layer.bias)
   )
 end
 
@@ -41,24 +52,22 @@ end
 function Lux.initialstates(rng::Random.AbstractRNG,layer::NeuralLayer)
   return (
     kernel = Lux.initialstates(rng,layer.kernel),
-    local_linear = Lux.initialstates(rng,layer.local_linear)
+    weights = Lux.initialstates(rng,layer.weights)
   )
 end
 
 # Pre-calculate the total number of trainable parameters in this layer
 function Lux.parameterlength(layer::NeuralLayer)
   kernel_params = Lux.parameterlength(layer.kernel)
-  linear_params = Lux.parameterlength(layer.local_linear)
-  bias_params = prod(layer.bias_shape) # Number of elements in the bias tensor
-
+  linear_params = Lux.parameterlength(layer.weights)
+  bias_params = Lux.parameterlength(layer.bias)
   return kernel_params + linear_params + bias_params
 end
 
 # Pre-calculate the total number of states in this layer
 function Lux.statelength(layer::NeuralLayer)
   kernel_states = Lux.statelength(layer.kernel)
-  linear_states = Lux.statelength(layer.local_linear)
-
+  linear_states = Lux.statelength(layer.weights)
   return kernel_states + linear_states
 end
 
@@ -68,12 +77,12 @@ function (layer::NeuralLayer)(x,ps,st)
   k_out,st_k = layer.kernel(x,ps.kernel,st.kernel)
 
   # Local linear transformation
-  w_out,st_w = layer.local_linear(x,ps.local_linear,st.local_linear)
+  w_out,st_w = layer.weights(x,ps.weights,st.weights)
 
   # Summation, bias addition, and activation
   out = layer.activation.(k_out .+ w_out .+ ps.bias)
 
-  return out,(kernel=st_k,local_linear=st_w)
+  return out,(kernel=st_k,weights=st_w)
 end
 
 """
