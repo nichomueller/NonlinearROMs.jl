@@ -179,8 +179,3 @@ end
 
 get_dof_to_nodes(b) = @abstractmethod
 get_dof_to_nodes(b::LagrangianDofBasis) = b.nodes[b.dof_to_node]
-
-_get_data(a) = get_all_data(a)
-_get_data(a::AbstractParamMatrix) = reshape(get_all_data(a),innerlength(a),:)
-_get_data(a::AbstractMatrix) = a
-_get_data(a::AbstractArray{T,3}) where T = reshape(a,:,size(a,3))

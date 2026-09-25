@@ -105,3 +105,14 @@ function (m::VAELayer)(x,ps,st)
   out = vcat(x̂,μ,log_var)
   return out,(encoder=st_enc,decoder=st_dec)
 end
+
+function vae_loss(model::VAELayer,ps,st,x;β=1.0)
+  n = size(x,1)
+  out,st = model(x,ps,st)
+  x̂ = view(out,1:n,:)
+  μ = view(out,n+1:n+model.latent_dim,:)
+  log_var = view(out,n+model.latent_dim+1:size(out,1),:)
+  recon = sum(abs2,x̂ .- x)/length(x)
+  kl = -sum(1 .+ log_var .- μ.^2 .- exp.(log_var))/(2*size(x,2))
+  return recon + β*kl,st,(;)
+end

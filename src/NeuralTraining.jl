@@ -44,692 +44,122 @@ function train!(solver::NeuralSolver{<:VAEReduction},train_state,dataloader,stat
   lr_scheduler = get_scheduler(solver)
   logger = get_logger(solver)
   β = red.model.β
-  function vae_loss(model::VAELayer,ps,st,x)
-    n_h = size(x,1)
-    out,st = model(x,ps,st)
-    x̂ = view(out,1:n_h,:)
-    μ = view(out,n_h+1:n_h+model.latent_dim,:)
-    log_var = view(out,n_h+model.latent_dim+1:size(out,1),:)
-    recon = sum(abs2,x̂ .- x)/length(x)
-    kl = -sum(1 .+ log_var .- μ.^2 .- exp.(log_var))/(2*size(x,2))
-    return recon + β*kl,st,(;)
-  end
+  loss(model,ps,st,x) = vae_loss(model,ps,st,x;β)
   to_device_batch(xb) = xb |> XDEV
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=vae_loss,logger)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss,logger)
 end
 
-function get_train_state(solver::NeuralSolver;rng=Random.default_rng(),seed=1234)
+function train!(solver::NeuralSolver{<:MultiLayerPerceptron},train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  logger = get_logger(solver)
+  to_device_batch((x,y)) = (x |> XDEV,y |> XDEV)
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+end
+
+function get_train_state(solver::NeuralSolver,inputs;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(solver)
+  model = build_model(solver,inputs)
   opt = get_optimiser(solver)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function train(solver::NeuralSolver,feop::ParamOperator,data...)
-  # Data and normalisation extraction
-  inputs,stats = get_inputs_and_stats(solver,feop,data...)
-
-  # Model Building
-  train_state = get_train_state(solver)
-
-  # DataLoader
-  bs = resolve_batch_size(solver,inputs)
-  dataloader = MLUtils.DataLoader(inputs;batchsize=bs,shuffle=true,partial=false)
-
-  train_model!(solver,train_state,dataloader,stats)
+function get_data_loader(solver::NeuralSolver,inputs;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(solver,inputs)
+  data = prepare_data(solver,inputs)
+  MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-# Generic Dispatch (Steady)
-
-function train(
-  red::KernelReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-
-  # Normalisation applied strictly before building the tensor
-  stats = Normalisation(data,params,coords;normalise=true)
-
-  # Build 3D Tensor for Kernel Operators
-  input_tensor = tensor_of_coords(coords,params)
-  n_samples = size(data,2)
-
-  # Model Building
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red)
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # DataLoader
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader(
-    (input_tensor,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  train_kernel_model!(train_state,dataloader,red)
-end
-
-function train(
-  red::KernelReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-  n_samples = size(data,2)
-
-  # Normalisation
-  if update_stats
-    stats = Normalisation(data,params,coords;normalise=true)
-  else
-    stats = pretrained_op.metadata
-    expected_param_in = length(stats.pscore.μ)
-    expected_coord_in = length(stats.xscore.μ)
-    @assert size(params,1) == expected_param_in "Parameter dimension mismatch: expected $expected_param_in, got $(size(params,1))."
-    @assert size(coords,1) == expected_coord_in "Coordinate dimension mismatch: expected $expected_coord_in, got $(size(coords,1))."
-    normalise!((data,params,coords),stats)
-  end
-
-  # Build 3D Tensor for Kernel Operators
-  input_tensor = tensor_of_coords(coords,params)
-
-  # Pretrained model setup
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader(
-    (input_tensor,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  train_kernel_model!(train_state,dataloader,red)
-end
-
-function train(
-  red::DeepONetReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-
-  # Normalisation
-  stats = Normalisation(data,params,coords;normalise=true)
-
-  # Building the DeepONet
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red)
-  opt = get_optimiser(red)
+function get_data_loader(solver::NeuralSolver{<:DeepONetReduction},inputs;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(solver,inputs)
+  data = prepare_data(solver,inputs)
+  dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
   coords_dev = coords |> XDEV
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
+  (dataloader,coords_dev)
+end
 
-  # Dataloader and setup
-  bs = resolve_batch_size(red,num_params(s))
-  dataloader = MLUtils.DataLoader(
-    (params,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
+function train(solver::NeuralSolver,inputs,stats;kwargs...)
+  train_state = get_train_state(solver,inputs;kwargs...)
+  dataloader,args... = get_data_loader(solver,inputs;shuffle=true,partial=false)
+  train!(solver,train_state,dataloader,stats,args...)
+end
 
-  # Executing the pipeline
-  train_deeponet!(train_state,dataloader,coords_dev,red)
+function train(solver::NeuralSolver{<:AutoDecoderReduction},inputs,stats;kwargs...)
+  train_state = get_train_state(solver,inputs;kwargs...)
+  dataloader,args... = get_data_loader(solver,inputs;shuffle=false,partial=false)
+  train!(solver,train_state,dataloader,stats,args...)
 end
 
 function train(
-  red::DeepONetReduction,
+  solver::NeuralSolver,
   feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
+  data...;
+  normalise=true,
+  kwargs...
   )
 
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
+  inputs,stats = get_inputs_and_stats(solver,feop,data...;normalise)
+  train(solver,inputs,stats;kwargs...)
+end
 
-  # Normalisation
-  if update_stats
-    stats = Normalisation(data,params,coords;normalise=true)
+function train(
+  solver::NeuralSolver,
+  op::NeuralOperator,
+  data...;
+  update_stats=false,
+  normalise=true,
+  kwargs...
+  )
+
+  inputs,stats = if update_stats
+    get_inputs_and_stats(solver,op,data...;normalise)
   else
-    stats = pretrained_op.metadata
-    expected_branch_in = length(stats.pscore.μ)
-    expected_trunk_in = length(stats.xscore.μ)
-    @assert size(params,1) == expected_branch_in "Branch dimension mismatch: expected $expected_branch_in, got $(size(params,1)). Check the parameter sampler."
-    @assert size(coords,1) == expected_trunk_in "Trunk dimension mismatch: expected $expected_trunk_in, got $(size(coords,1))."
-    normalise!((data,params,coords),stats)
+    inputs = get_inputs(solver,op,data...)
+    stats = get_stats(op)
+    normalise && normalise!(inputs,stats)
+    inputs,stats
   end
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  coords_dev = coords |> XDEV
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # Dataloader and setup
-  bs = resolve_batch_size(red,num_params(s))
-  dataloader = MLUtils.DataLoader(
-    (params,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Executing the pipeline
-  train_deeponet!(train_state,dataloader,coords_dev,red)
-end
-
-function train(
-  red::NOMADReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-  dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
-  N_tot = size(dout,2)
-
-  # Normalisation
-  stats = Normalisation(dout,pin,xin;normalise=true)
-
-  # Building the NOMAD model
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red)
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # DataLoader and Lux setup
-  bs = resolve_batch_size(red,N_tot)
-  dataloader = MLUtils.DataLoader(
-    ((pin,xin),dout);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Running the pipeline
-  train_nomad!(train_state,dataloader,red)
-end
-
-function train(
-  red::NOMADReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-  dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
-  N_tot = size(dout,2)
-
-  # Normalisation
-  if update_stats
-    stats = Normalisation(dout,pin,xin;normalise=true)
-  else
-    stats = pretrained_op.metadata
-    expected_sensors = length(stats.pscore.μ)
-    expected_coords = length(stats.xscore.μ)
-    @assert size(pin,1) == expected_sensors "Sensors input dimension mismatch: expected $expected_sensors, got $(size(pin,1))."
-    @assert size(xin,1) == expected_coords "Coords input dimension mismatch: expected $expected_coords, got $(size(xin,1))."
-    normalise!((dout,pin,xin),stats)
-  end
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # DataLoader and Lux setup
-  bs = resolve_batch_size(red,N_tot)
-  dataloader = MLUtils.DataLoader(
-    ((pin,xin),dout);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Running the pipeline
-  train_nomad!(train_state,dataloader,red)
-end
-
-function train(
-  red::AutoEncoderReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  n_samples = size(data,2)
-
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red.model,size(data,1))
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader((data,data);batchsize=bs,shuffle=true,partial=false)
-
-  train_autoencoder!(train_state,dataloader,red)
-end
-
-function train(
-  red::AutoEncoderReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  n_samples = size(data,2)
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader((data,data);batchsize=bs,shuffle=true,partial=false)
-
-  train_autoencoder!(train_state,dataloader,red)
-end
-
-function train(
-  red::AutoDecoderReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  nin,n_train = size(data,1),size(data,2)
-
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red.model,nin,n_train)
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # Joint decoder + latent-code optimisation is inherently full-batch: every
-  # column of the latent-code parameter must be updated on every step.
-  dataloader = MLUtils.DataLoader((data,data);batchsize=n_train,shuffle=false,partial=false)
-
-  train_autodecoder!(train_state,dataloader,red)
-end
-
-function train(
-  red::AutoDecoderReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  n_train = size(data,2)
-
-  # Latent codes are optimised per training sample, so they can't be inherited across a
-  # different sample set: fine-tuning keeps the pretrained decoder weights but fits fresh
-  # latent codes for the new snapshots.
-  decoder = pretrained_op.model.chain.layers.layer_2
-  latent_dim = size(pretrained_op.model.parameters.layer_1.codes,1)
-
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-  Z0 = randn(Float32,latent_dim,n_train) .* 0.01f0
-  model = Lux.Chain(LatentCodeLayer(Z0),decoder)
-
-  ps,st = Lux.setup(rng,model)
-  ps = (layer_1=ps.layer_1,layer_2=pretrained_op.model.parameters.layer_2) |> XDEV
-  st = (layer_1=st.layer_1,layer_2=pretrained_op.model.states.layer_2) |> XDEV
-  opt = get_optimiser(red)
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  dataloader = MLUtils.DataLoader((data,data);batchsize=n_train,shuffle=false,partial=false)
-
-  train_autodecoder!(train_state,dataloader,red)
-end
-
-function train(
-  red::VAEReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  n_samples = size(data,2)
-
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red.model,size(data,1))
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader(data;batchsize=bs,shuffle=true,partial=false)
-
-  train_vae!(train_state,dataloader,red)
-end
-
-function train(
-  red::VAEReduction,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  data,= get_formatted_data(Float32,s)
-  n_samples = size(data,2)
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  bs = resolve_batch_size(red,n_samples)
-  dataloader = MLUtils.DataLoader(data;batchsize=bs,shuffle=true,partial=false)
-
-  train_vae!(train_state,dataloader,red)
-end
-
-"""
-    train_neural_coefficient(red::NeuralReduction,r::AbstractRealisation,coeff) -> NeuralModel
-
-Builds and trains a [`NeuralModel`](@ref) from `red.model`'s recipe and
-`(r,coeff)` data, through the same Lux/Reactant/Enzyme pipeline used for DeepONet/NOMAD.
-For a [`MultiLayerPerceptron`](@ref), the input/output dimensions are inferred from
-`r`/`coeff` and appended to `red.model.hidden_layers`; for an [`AutoEncoder`](@ref),
-`r` is ignored and the network is trained to reconstruct `coeff`.
-"""
-function train_neural_coefficient(red::NeuralReduction{<:MultiLayerPerceptron},r::AbstractRealisation,coeff)
-  x = Float32.(matrix_of_params(r))
-  y = Float32.(_get_data(coeff))
-  nin,nout = size(x,1),size(y,1)
-  n_samples = size(x,2)
-
-  chain = build_lux_chain((nin,red.model.hidden_layers...,nout),red.model.activation)
-
-  bs = resolve_batch_size(red.batch_size,n_samples)
-  dataloader = MLUtils.DataLoader((x,y);batchsize=bs,shuffle=true,partial=false)
-
-  Random.seed!(42)
-  ps,st = Lux.setup(Random.default_rng(),chain) |> XDEV
-  train_state = Lux.Training.TrainState(chain,ps,st,red.optimiser.opt)
-
-  to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(
-    train_state,dataloader,red.optimiser.lr_scheduler,to_device_batch;logger=red.trainlog
-  )
-end
-
-# transient 
-
-function train(
-  red::DeepONetReduction,
-  feop::ODEParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-
-  # Normalisation
-  stats = Normalisation(data,params,coords;normalise=true)
-
-  # Building the DeepONet
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red)
-  opt = get_optimiser(red)
-  coords_dev = coords |> XDEV
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # Dataloader and setup
-  bs = resolve_batch_size(red,num_params(s))
-  dataloader = MLUtils.DataLoader(
-    (params,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Executing the pipeline
-  train_deeponet!(train_state,dataloader,coords_dev,red)
-end
-
-function train(
-  red::DeepONetReduction,
-  feop::ODEParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-
-  # Normalisation
-  if update_stats
-    stats = Normalisation(data,params,coords;normalise=true)
-  else
-    stats = pretrained_op.metadata
-    normalise!((data,params,coords),stats)
-  end
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  coords_dev = coords |> XDEV
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # Dataloader and setup
-  bs = resolve_batch_size(red,num_params(s))
-  dataloader = MLUtils.DataLoader(
-    (params,data);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Executing the pipeline
-  train_deeponet!(train_state,dataloader,coords_dev,red)
-end
-
-function train(
-  red::NOMADReduction,
-  feop::ODEParamOperator,
-  s::AbstractSnapshots
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-  dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
-  N_tot = size(dout,2)
-
-  # Normalisation
-  stats = Normalisation(dout,pin,xin;normalise=true)
-
-  # Building the NOMAD model
-  rng = Random.default_rng()
-  Random.seed!(rng,42)
-
-  model = build_model(red)
-  opt = get_optimiser(red)
-  ps,st = Lux.setup(rng,model) |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # DataLoader and Lux setup
-  bs = resolve_batch_size(red,N_tot)
-  dataloader = MLUtils.DataLoader(
-    ((pin,xin),dout);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Running the pipeline
-  train_nomad!(train_state,dataloader,red)
-end
-
-function train(
-  red::NOMADReduction,
-  feop::ODEParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  # Data extraction
-  sx = CoordinateSnapshots(s,get_test(feop))
-  target = sample(red,sx)
-  data,params,coords = get_formatted_data(Float32,target)
-  dout,pin,xin = _flatten(data,params,coords) # Flattening for NOMAD
-  N_tot = size(dout,2)
-
-  # Normalisation
-  if update_stats
-    stats = Normalisation(dout,pin,xin;normalise=true)
-  else
-    stats = pretrained_op.metadata
-    normalise!((dout,pin,xin),stats)
-  end
-
-  # Pretrained model
-  model = pretrained_op.model.chain
-  opt = get_optimiser(red)
-  ps = pretrained_op.model.parameters |> XDEV
-  st = pretrained_op.model.states |> XDEV
-  train_state = Lux.Training.TrainState(model,ps,st,opt)
-
-  # DataLoader and Lux setup
-  bs = resolve_batch_size(red,N_tot)
-  dataloader = MLUtils.DataLoader(
-    ((pin,xin),dout);
-    batchsize=bs,
-    shuffle=true,
-    partial=false
-  )
-
-  # Running the pipeline
-  train_nomad!(train_state,dataloader,red)
+  train(solver,inputs,stats;kwargs...)
 end
 
 # utils
 
-function _flatten(
-  data::AbstractArray{T},
-  params::AbstractArray{T},
-  coords::AbstractArray{T}
-  ) where T 
-
-  ntot = size(coords,2)*size(params,2)
-  pin = zeros(T,size(params,1),ntot)
-  xin = zeros(T,size(coords,1),ntot)
-  dout = zeros(T,1,ntot)
-
-  col_idx = 1
-  @views for i in axes(params,2)
-    p = params[:,i]
-    for j in axes(coords,2)
-      pin[:,col_idx] = p
-      xin[:,col_idx] = coords[:,j]
-      dout[1,col_idx] = data[j,i]
-      col_idx += 1
-    end
-  end
-
-  return dout,pin,xin
+function prepare_data(::NeuralSolver{<:KernelReduction},(values,coords,params))
+  (values,tensor_of_coords(coords,params))
 end
 
-function _flatten(
-  params::AbstractArray{T},
-  coords::AbstractArray{T}
-  ) where T
+function prepare_data(::NeuralSolver{<:DeepONetReduction},(values,coords,params))
+  (params,values)
+end
 
+function prepare_data(::NeuralSolver{<:NOMADReduction},(values,coords,params))
   ntot = size(coords,2)*size(params,2)
-  pin = zeros(T,size(params,1),ntot)
-  xin = zeros(T,size(coords,1),ntot)
+  p = zeros(eltype(params),size(params,1),ntot)
+  x = zeros(eltype(coords),size(coords,1),ntot)
+  d = zeros(eltype(values),1,ntot)
 
-  col_idx = 1
+  col = 1
   @views for i in axes(params,2)
     p = params[:,i]
     for j in axes(coords,2)
-      pin[:,col_idx] = p
-      xin[:,col_idx] = coords[:,j]
-      col_idx += 1
+      p[:,col] = p
+      x[:,col] = coords[:,j]
+      d[1,col] = data[j,i]
+      col += 1
     end
   end
 
-  return pin,xin
+  (p,x),d
+end
+
+for T in (:AutoEncoderReduction,:AutoDecoderReduction,:VAEReduction,)
+  @eval begin
+    function prepare_data(::NeuralSolver{<:$T},(values,coords,params))
+      (values,values)
+    end
+  end
+end
+
+function prepare_data(::NeuralSolver{<:MLPReduction},(values,coords,params))
+  (params,values)
 end

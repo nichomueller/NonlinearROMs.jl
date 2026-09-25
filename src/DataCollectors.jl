@@ -23,9 +23,9 @@ end
 
 # utils
 
-function get_inputs_and_stats(args...)
+function get_inputs_and_stats(args...;normalise=true)
   inputs = get_inputs(args...)
-  stats = Normalisation(inputs;normalise=true)
+  stats = Normalisation(inputs;normalise)
   return inputs,stats
 end
 
@@ -78,9 +78,9 @@ end
 dimension(μ::Realisation) = length(first(μ))
 dimension(μ::TransientRealisation) = dimension(get_params(μ))
 
-function matrix_of_values(x::AbstractParamArray)
-  get_all_data(x)
-end
+matrix_of_values(a::AbstractMatrix) = a
+matrix_of_values(a::AbstractArray) = reshape(a,size(a,1),:)
+matrix_of_values(x::AbstractParamArray) = matrix_of_values(get_all_data(x))
 
 function matrix_of_params(r::AbstractRealisation)
   params = zeros(dimension(r),num_params(r))

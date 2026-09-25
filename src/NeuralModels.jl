@@ -245,7 +245,7 @@ end
 
 # Build model
 
-build_model(::NeuralModel) = @abstractmethod
+build_model(::NeuralModel,args...) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
   lux_layers = []
@@ -279,7 +279,7 @@ function LuxDeepONet(branch_net,trunk_net)
   )
 end
 
-function build_model(model::DeepONet)
+function build_model(model::DeepONet,args...)
   branch_net = build_lux_chain(model.branch_layers,model.activation)
   trunk_net = build_lux_chain(model.trunk_layers,model.activation)
   LuxDeepONet(branch_net,trunk_net)
@@ -298,36 +298,41 @@ function LuxNOMAD(approximator_net,decoder_net)
   )
 end
 
-function build_model(model::NOMAD)
+function build_model(model::NOMAD,args...)
   approximator_net = build_lux_chain(model.approximator_layers,model.activation)
   decoder_net = build_lux_chain(model.decoder_layers,model.activation)
   LuxNOMAD(approximator_net,decoder_net)
 end
 
-# AutoEncoder/AutoDecoder/VariationalAutoEncoder only store hidden widths (their input
-# dimension depends on the snapshot data, unlike DeepONet/NOMAD's branch/trunk sizes which
-# are fixed at construction time), so their `build_model` needs `nin` from the caller.
-
-function build_model(model::AutoEncoder,nin::Int)
+function build_model(model::AutoEncoder,(values,coords,params))
+  n = size(values,1)
   hidden = model.hidden_layers[1:end-1]
   latent_dim = last(model.hidden_layers)
-  encoder = build_lux_chain((nin,hidden...,latent_dim),model.activation)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,nin),model.activation)
+  encoder = build_lux_chain((n,hidden...,latent_dim),model.activation)
+  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
   Lux.Chain(encoder,decoder)
 end
 
-function build_model(model::AutoDecoder,nin::Int,n_train::Int)
+function build_model(model::AutoDecoder,(values,coords,params))
+  n,ntrain = size(values,1),size(values,2)
   hidden = model.hidden_layers[1:end-1]
   latent_dim = last(model.hidden_layers)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,nin),model.activation)
-  Z0 = randn(Float32,latent_dim,n_train) .* 0.01f0
+  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
+  Z0 = randn(Float32,latent_dim,ntrain) .* 0.01f0
   Lux.Chain(LatentCodeLayer(Z0),decoder)
 end
 
-function build_model(model::VariationalAutoEncoder,nin::Int)
+function build_model(model::VariationalAutoEncoder,(values,coords,params))
+  n = size(values,1)
   hidden = model.hidden_layers[1:end-1]
   latent_dim = last(model.hidden_layers)
-  encoder = build_lux_chain((nin,hidden...,2*latent_dim),model.activation)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,nin),model.activation)
+  encoder = build_lux_chain((n,hidden...,2*latent_dim),model.activation)
+  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
   VAELayer(encoder,decoder,latent_dim)
+end
+
+function build_model(model::MultiLayerPerceptron,(values,coords,params))
+  m = size(params,1)
+  n = size(values,1)
+  build_lux_chain((m,model.hidden_layers...,n),model.activation)
 end

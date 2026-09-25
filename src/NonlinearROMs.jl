@@ -147,7 +147,6 @@ export train_nomad!
 export train_autoencoder!
 export train_autodecoder!
 export train_vae!
-export train_neural_coefficient
 export TrainedVAE
 export resolve_batch_size
 include("NeuralTraining.jl")

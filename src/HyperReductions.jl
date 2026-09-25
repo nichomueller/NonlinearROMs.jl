@@ -232,6 +232,16 @@ function FESpaces.interpolate!(
   return b̂
 end
 
+# NN 
+
+function train_neural_coefficient(red::NeuralReduction,data...;normalise=true,kwargs...)
+  (values,params),stats = get_inputs_and_stats(solver,feop,data...;normalise)
+  inputs = (values,nothing,params)
+  train_state = get_train_state(solver,inputs;kwargs...)
+  dataloader,args... = get_data_loader(solver,inputs;shuffle=true,partial=false)
+  train!(solver,train_state,dataloader,stats,args...)
+end
+
 # utils
 
 _axpy!(α,a,b) = @abstractmethod

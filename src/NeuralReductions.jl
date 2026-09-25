@@ -102,9 +102,11 @@ function build_model(s::NeuralReduction)
   build_model(s.model)
 end
 
-resolve_batch_size(s::NeuralReduction,args...) = resolve_batch_size(s.batch_size,args...)
-resolve_batch_size(bs::Int,params::AbstractMatrix) = resolve_batch_size(bs,size(params,2))
-resolve_batch_size(bs::Int,ns::Int) = bs > 0 ? min(bs,ns) : ns 
+function resolve_batch_size(s::NeuralReduction,(values,coords,params))
+  bs = s.batch_size
+  ns = size(params,2)
+  bs > 0 ? min(bs,ns) : ns 
+end
 
 # interface for RB subspace + NN hyper-reduction machinery
 
@@ -324,13 +326,16 @@ const AutoEncoderReduction{M<:AutoEncoder} = NeuralReduction{M}
 const AutoDecoderReduction{M<:AutoDecoder} = NeuralReduction{M}
 const VAEReduction{M<:VariationalAutoEncoder} = NeuralReduction{M}
 
+const MLPReduction{M<:MultiLayerPerceptron} = NeuralReduction{M}
+
 for (f,m) in (
+  (:KernelReduction,:KernelNeuralModel),
   (:DeepONetReduction,:DeepONet),
   (:NOMADReduction,:NOMAD),
   (:AutoEncoderReduction,:AutoEncoder),
   (:AutoDecoderReduction,:AutoDecoder),
   (:VAEReduction,:VariationalAutoEncoder),
-  (:KernelReduction,:KernelNeuralModel)
+  (:MLPReduction,:MultiLayerPerceptron),
 )
   @eval begin
     function $f(;model::$m,kwargs...)
