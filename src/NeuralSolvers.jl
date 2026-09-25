@@ -1,5 +1,8 @@
 """
-    const NeuralSolver{A,B<:NeuralReduction} = GlobalRBSolver{A,B,Nothing,Nothing}
+    struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
+      fesolver::B
+      reduction::NeuralReduction{A}
+    end
 
     NeuralSolver(fesolver::GridapType,reduction::NeuralReduction)
 
@@ -31,6 +34,9 @@ struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
   fesolver::B
   reduction::NeuralReduction{A}
 end
+
+RBSteady.get_state_reduction(solver::NeuralSolver) = solver.reduction
+RBSteady.get_reduction(solver::NeuralSolver) = solver.reduction
 
 """
     struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
@@ -74,8 +80,7 @@ function RBSteady.reduced_operator(
   s::AbstractSnapshots
   )
 
-  reduction = get_state_reduction(solver)
-  model = train(reduction,feop,s)
+  model = train(solver,feop,s)
   NeuralOperator(feop,model)
 end
 
@@ -160,11 +165,11 @@ end
 
 function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
   # Prepare input
-  input = collect_input(solver,op,r)
+  inputs = get_inputs(solver,op,r)
   
-  # Inference (denormalizes the output internally via the metadata fallback)
+  # Inference
   t = @timed begin
-    pred = op.model(input)
+    pred = op.model(inputs)
   end
 
   # Prepare output
@@ -174,141 +179,74 @@ function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealis
   return output,stats
 end
 
-# function Algebra.solve(
-#   solver::NeuralSolver{<:KernelReduction},
-#   op::NeuralOperator,
-#   r::Realisation
-#   )
-
-#   # Prepare input
-#   red = get_state_reduction(solver)
-#   coords = get_free_dof_coordinates(get_test(op.op))
-  
-#   r_sampled = sample(red,r)
-#   params,coords = get_formatted_data(Float32,r_sampled,coords)
-  
-#   # Normalize inputs using training metadata prior to concatenation
-#   normalise!((params,coords),op.metadata)
-  
-#   # Build the 3D tensor expected by the Lifting Layer
-#   input_tensor = tensor_of_coords(coords,params)
-
-#   # Inference (denormalizes the output internally via the metadata fallback)
-#   t = @timed begin
-#     pred_cpu = op.model(input_tensor,op.metadata)
-#   end
-
-#   # Reshaping the [out_channels, N_nodes, Batch] output back to Snapshots format (N_dofs, n_samples)
-#   x̂ = to_snapshots(pred_cpu,r)
-#   stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")
-
-#   return x̂,stats
-# end
-
-# function Algebra.solve(
-#   solver::NeuralSolver{<:DeepONetReduction},
-#   op::NeuralOperator,
-#   r::Realisation
-#   )
-
-#   # Prepare input
-#   red = get_state_reduction(solver)
-#   coords = get_free_dof_coordinates(get_test(op.op))
-#   r_sampled = sample(red,r)
-#   params,coords = get_formatted_data(Float32,r_sampled,coords)
-#   normalise!((params,coords),op.metadata)
-
-#   # Inference Execution (denormalizes the output internally, using op.metadata.dmax)
-#   t = @timed begin
-#     pred_cpu = op.model((params,coords),op.metadata)
-#   end
-
-#   x̂ = to_snapshots(pred_cpu,r)
-#   stats = CostTracker(t,nruns=num_params(r),name="DeepONet Inference")
-
-#   return x̂,stats
-# end
-
-# function Algebra.solve(
-#   solver::NeuralSolver{<:NOMADReduction},
-#   op::NeuralOperator,
-#   r::Realisation
-#   )
-
-#   # Prepare input
-#   red = get_state_reduction(solver)
-#   coords = get_free_dof_coordinates(get_test(op.op))
-#   r_sampled = sample(red,r)
-#   params,coords = get_formatted_data(Float32,r_sampled,coords)
-#   pin,xin = _flatten(params,coords)
-#   normalise!((pin,xin),op.metadata)
-
-#   # Inference (denormalizes the output internally, using op.metadata.dmax)
-#   t = @timed begin
-#     pred_cpu = op.model((pin,xin),op.metadata)
-#   end
-
-#   # Reshaping of the output for GridapROMs (N_dofs,n_samples)
-#   x̂ = to_snapshots(pred_cpu,r)
-#   stats = CostTracker(t,nruns=num_params(r),name="NOMAD Inference")
-
-#   return x̂,stats
-# end
-
-# # transient
-
-# function Algebra.solve(
-#   solver::NeuralSolver{<:DeepONetReduction},
-#   op::NeuralOperator,
-#   r::TransientRealisation,
-#   args...
-#   )
-
-#   # Prepare input
-#   red = get_state_reduction(solver)
-#   V = get_test(op.op)
-#   coords0 = get_free_dof_coordinates(V)
-#   r_sampled = sample(red,r)
-#   params,coords = get_formatted_data(Float32,r_sampled,coords0)
-#   normalise!((params,coords),op.metadata)
-
-#   t = @timed begin
-#     pred_cpu = op.model((params,coords),op.metadata)
-#   end
-
-#   x̂ = to_snapshots(pred_cpu,r)
-#   stats = CostTracker(t,nruns=num_params(r),name="DeepONet Transient Inference")
-
-#   return x̂,stats
-# end
-
-# function Algebra.solve(
-#   solver::NeuralSolver{<:NOMADReduction},
-#   op::NeuralOperator,
-#   r::TransientRealisation,
-#   args...
-#   )
-
-#   # Prepare input
-#   red = get_state_reduction(solver)
-#   V = get_test(op.op)
-#   coords0 = get_free_dof_coordinates(V)
-#   r_sampled = sample(red,r)
-#   params,coords = get_formatted_data(Float32,r_sampled,coords0)
-#   pin,xin = _flatten(params,coords)
-#   normalise!((pin,xin),op.metadata)
-
-#   t = @timed begin
-#     pred_cpu = op.model((pin,xin),op.metadata)
-#   end
-
-#   x̂ = to_snapshots(pred_cpu,r)
-#   stats = CostTracker(t,nruns= num_params(r),name="NOMAD Transient Inference")
-
-#   return x̂,stats
-# end
-
 # utils
+
+function get_inputs_and_stats(args...;normalise=true)
+  inputs = get_inputs(args...)
+  stats = Normalisation(inputs;normalise)
+  return inputs,stats
+end
+
+function get_inputs(solver::NeuralSolver,op::ParamOperator,s::AbstractSnapshots)
+  data = get_param_data(s)
+  r = get_realisation(s)
+  get_inputs(solver,op,data,r)
+end
+
+function get_inputs(solver::NeuralSolver,op::ParamOperator,values,r::AbstractRealisation)
+  trial = get_trial(op)
+  coords = get_free_dof_coordinates(trial)
+  get_inputs(solver,values,coords,r)
+end
+
+function get_inputs(solver::NeuralSolver,op::ParamOperator,r::AbstractRealisation)
+  trial = get_trial(op)
+  coords = get_free_dof_coordinates(trial)
+  get_inputs(solver,coords,r)
+end
+
+function get_inputs(solver::NeuralSolver,inputs...)
+  sinputs = sample(solver,inputs...)
+  get_formatted_inputs(sinputs...)
+end
+
+function get_formatted_inputs(args...)
+  get_formatted_inputs(Float32,args...)
+end
+
+function get_formatted_inputs(::Type{T},values,coords::AbstractVector{<:Point},r::Realisation) where T
+  d = T.(matrix_of_values(values))
+  x = T.(matrix_of_coords(coords))
+  p = T.(matrix_of_params(r))
+  return (d,x,p)
+end
+
+function get_formatted_inputs(::Type{T},values,r::Realisation) where T
+  d = T.(matrix_of_values(values))
+  p = T.(matrix_of_params(r))
+  return (d,p)
+end
+
+function get_formatted_inputs(::Type{T},values,coords::AbstractVector{<:Point},r::TransientRealisation) where T
+  times = get_times(r)
+  d = get_formatted_data(T,values,times)
+  x = T.(matrix_of_coords(coords,times))
+  p = T.(matrix_of_params(r))
+  return (d,x,p)
+end
+
+function get_formatted_inputs(::Type{T},values,r::TransientRealisation) where T
+  times = get_times(r)
+  d = get_formatted_data(T,values,times)
+  p = T.(matrix_of_params(r))
+  return (d,p)
+end
+
+function get_formatted_inputs(::Type{T},coords::AbstractVector{<:Point},r::AbstractRealisation) where T
+  x = T.(matrix_of_coords(coords))
+  p = T.(matrix_of_params(r))
+  return (x,p)
+end
 
 function to_snapshots(x,r::Realisation)
   np = num_params(r)

@@ -2,16 +2,17 @@ const CDEV = Lux.cpu_device()
 const XDEV = Lux.reactant_device(;force=true)
 
 """
-    struct TrainedNeuralModel{A,B,C} <: NeuralModel
+    struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
       chain::A
       parameters::B
       states::C
+      stats::D
     end
 
-A trained Lux `chain` bundled with its optimised parameters/states, evaluable
-as `(a::TrainedNeuralModel)(x::AbstractMatrix) -> AbstractMatrix` via the standard
-`Arrays.evaluate!`/`return_cache` interface. Returned by [`train_neural_coefficient`](@ref)
-for [`MultiLayerPerceptron`](@ref) strategies.
+A trained Lux `chain` bundled with its optimised parameters/states and the
+normalisation `stats` (a [`Normalisation`](@ref)/[`ZScore`](@ref), or `identity`
+if none) used to pre-normalise inputs and de-normalise outputs. Evaluable as
+`(a::TrainedNeuralModel)(x) -> AbstractMatrix`.
 """
 struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
   chain::A
@@ -32,11 +33,11 @@ end
 
 """
     (m::TrainedNeuralModel)(inputs) -> AbstractArray
-    (m::TrainedNeuralModel)(inputs,metadata) -> AbstractArray
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
-a plain matrix). `metadata` optionally denormalises the output by `metadata.dmax`; it
-is a no-op when `metadata === identity` (a `NeuralOperator` with no normalisation stats).
+a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux chain, then
+rescales the prediction back with `m.stats`. Both steps are no-ops when `m.stats === identity`
+(a model with no normalisation, e.g. an `AutoEncoder`/`AutoDecoder`/`VAE`).
 """
 function (m::TrainedNeuralModel)(inputs)
   normalise!(inputs,m.stats)
@@ -47,10 +48,6 @@ end
 
 const TrainedAutoEncoder = TrainedNeuralModel{<:AutoEncoder}
 
-function Arrays.evaluate!(cache,a::TrainedAutoEncoder,z::AbstractMatrix)
-  decode(a,z)
-end
-
 function encode(a::TrainedAutoEncoder,X::AbstractMatrix)
   first(a.chain.layers.layer_1(Float32.(X),a.parameters.layer_1,a.states.layer_1))
 end
@@ -60,10 +57,6 @@ function decode(a::TrainedAutoEncoder,Z::AbstractMatrix)
 end
 
 const TrainedAutoDecoder = TrainedNeuralModel{<:AutoDecoder}
-
-function Arrays.evaluate!(cache,a::TrainedAutoDecoder,z::AbstractMatrix)
-  first(a.chain.layers.layer_2(Float32.(z),a.parameters.layer_2,a.states.layer_2))
-end
 
 get_latent_codes(a::TrainedAutoDecoder) = a.parameters.layer_1.codes
 
@@ -101,9 +94,7 @@ end
       latent_dim::Int
     end
 
-A trained [`VariationalAutoEncoder`](@ref). `evaluate!(cache,a,z)` applies the
-**decoder** (latent → high-dim); use [`encode`](@ref) for the encoder direction,
-which returns `(μ,log_var,z)` with a freshly sampled `z`.
+A trained [`VariationalAutoEncoder`](@ref).
 """
 struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
   encoder::E
@@ -113,10 +104,6 @@ struct TrainedVAE{E,D,PE,SE,PD,SD} <: NeuralModel
   ps_dec::PD
   st_dec::SD
   latent_dim::Int
-end
-
-function Arrays.evaluate!(cache,a::TrainedVAE,z::AbstractMatrix)
-  decode(a,z)
 end
 
 function encode(a::TrainedVAE,X::AbstractMatrix)
@@ -133,7 +120,7 @@ function decode(a::TrainedVAE,Z::AbstractMatrix)
 end
 
 """
-    train_model!(train_state,dataloader,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
+    train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger) -> TrainedNeuralModel
 
 Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
 `to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
@@ -141,7 +128,8 @@ as its data argument (already moved to `XDEV`) — DeepONet pairs each batch wit
 set of trunk query points, NOMAD's coordinates are already part of the per-row batch,
 and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`. `loss`
 defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
-function for anything else (e.g. a VAE's reconstruction+KL loss).
+function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
+normalisation (or `identity`) bundled into the returned [`TrainedNeuralModel`](@ref).
 """
 function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
   init!(logger)

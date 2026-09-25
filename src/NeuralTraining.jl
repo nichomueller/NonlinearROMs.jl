@@ -1,6 +1,6 @@
-function train!(solver::NeuralSolver{<:KernelReduction},train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::KernelReduction,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   function to_device_batch((x_batch,y_batch))
     n_dofs,n_samples = size(y_batch)
     # Dynamically compute the number of physical variables
@@ -11,83 +11,87 @@ function train!(solver::NeuralSolver{<:KernelReduction},train_state,dataloader,s
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train!(solver::NeuralSolver{<:DeepONetReduction},train_state,dataloader,stats,x_data_dev)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::DeepONetReduction,train_state,dataloader,stats,x_data_dev)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   to_device_batch((f_batch,u_batch)) = ((f_batch |> XDEV,x_data_dev),u_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train!(solver::NeuralSolver{<:NOMADReduction},train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::NOMADReduction,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   to_device_batch(((u_batch,y_batch),v_batch)) = ((u_batch |> XDEV,y_batch |> XDEV),v_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train!(solver::NeuralSolver{<:DeepONetReduction},train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::DeepONetReduction,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train!(solver::NeuralSolver{<:AutoEncoderReduction},train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::AutoEncoderReduction,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function train!(solver::NeuralSolver{<:VAEReduction},train_state,dataloader,stats)
-  red = get_reduction(solver)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::VAEReduction,train_state,dataloader,stats)
+  red = get_reduction(red)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   β = red.model.β
   loss(model,ps,st,x) = vae_loss(model,ps,st,x;β)
   to_device_batch(xb) = xb |> XDEV
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss,logger)
 end
 
-function train!(solver::NeuralSolver{<:MultiLayerPerceptron},train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(solver)
-  logger = get_logger(solver)
+function train!(red::MultiLayerPerceptron,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
   to_device_batch((x,y)) = (x |> XDEV,y |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function get_train_state(solver::NeuralSolver,inputs;rng=Random.default_rng(),seed=1234)
+function get_train_state(red::NeuralReduction,inputs;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(solver,inputs)
-  opt = get_optimiser(solver)
+  model = build_model(red,inputs)
+  opt = get_optimiser(red)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(solver::NeuralSolver,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(solver,inputs)
-  data = prepare_data(solver,inputs)
+function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(red,inputs)
+  data = prepare_data(red,inputs)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function get_data_loader(solver::NeuralSolver{<:DeepONetReduction},inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(solver,inputs)
-  data = prepare_data(solver,inputs)
+function get_data_loader(red::DeepONetReduction,inputs;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(red,inputs)
+  data = prepare_data(red,inputs)
   dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
   coords_dev = coords |> XDEV
   (dataloader,coords_dev)
 end
 
-function train(solver::NeuralSolver,inputs,stats;kwargs...)
-  train_state = get_train_state(solver,inputs;kwargs...)
-  dataloader,args... = get_data_loader(solver,inputs;shuffle=true,partial=false)
-  train!(solver,train_state,dataloader,stats,args...)
+function train(red::NeuralReduction,inputs,stats;kwargs...)
+  train_state = get_train_state(red,inputs;kwargs...)
+  dataloader,args... = get_data_loader(red,inputs;shuffle=true,partial=false)
+  train!(red,train_state,dataloader,stats,args...)
 end
 
-function train(solver::NeuralSolver{<:AutoDecoderReduction},inputs,stats;kwargs...)
-  train_state = get_train_state(solver,inputs;kwargs...)
-  dataloader,args... = get_data_loader(solver,inputs;shuffle=false,partial=false)
-  train!(solver,train_state,dataloader,stats,args...)
+function train(red::AutoDecoderReduction,inputs,stats;kwargs...)
+  train_state = get_train_state(red,inputs;kwargs...)
+  dataloader,args... = get_data_loader(red,inputs;shuffle=false,partial=false)
+  train!(red,train_state,dataloader,stats,args...)
+end
+
+function train(solver::NeuralSolver,inputs,stats;kwargs...)
+  train(get_reduction(solver),inputs,stats;kwargs...)
 end
 
 function train(

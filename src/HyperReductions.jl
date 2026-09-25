@@ -10,7 +10,7 @@ function FESpaces.interpolate!(
   o = one(eltype2(b̂))
   x = matrix_of_params(r)
   i = get_interpolation(a)
-  _coeff = evaluate!(cache,i.interpolation,x)
+  _coeff = i.interpolation(i.interpolation,x)
   coeff = ConsecutiveParamArray(_coeff)
   mul!(b̂,a,coeff,o,o)
   return b̂
@@ -48,8 +48,10 @@ function FESpaces.interpolate!(
   r::AbstractRealisation
   )
 
-  b̂r = evaluate!(cache,a.model,matrix_of_params(r))
   o = one(eltype2(b̂))
+  x = matrix_of_params(r)
+  i = get_interpolation(a)
+  b̂r = i.interpolation(i.interpolation,x)
   _axpy!(o,b̂r,b̂)
   return b̂
 end
@@ -65,7 +67,8 @@ function RBSteady.HRProjection(
   b = GalerkinProjectable(s)
   y = galerkin_projection(test,b)
   ϕ = get_basis(y)
-  model = train_neural_coefficient(get_strategy(red),r,ϕ)
+  red = get_strategy(red)
+  model = train_neural_coefficient(red,r,ϕ)
   return NNRegressor(model,test)
 end
 
@@ -81,7 +84,8 @@ function RBSteady.HRProjection(
   A = GalerkinProjectable(s)
   y = galerkin_projection(test,A,trial)
   ϕ = get_basis(y)
-  model = train_neural_coefficient(get_strategy(red),r,ϕ)
+  red = get_strategy(red)
+  model = train_neural_coefficient(red,r,ϕ)
   return NNRegressor(model,trial,test)
 end
 
@@ -133,9 +137,8 @@ end
 
 function RBSteady.allocate_hypred_cache(a::NNContribution,args...)
   fecache = allocate_coefficient(a,args...)
-  coeffs = fecache
   hypred = allocate_hyper_reduction(a,args...)
-  return HRParamArray(fecache,coeffs,hypred)
+  return HRParamArray(fecache,fecache,hypred)
 end
 
 function FESpaces.interpolate!(
@@ -235,11 +238,9 @@ end
 # NN 
 
 function train_neural_coefficient(red::NeuralReduction,data...;normalise=true,kwargs...)
-  (values,params),stats = get_inputs_and_stats(solver,feop,data...;normalise)
+  (values,params),stats = get_inputs_and_stats(red,feop,data...;normalise)
   inputs = (values,nothing,params)
-  train_state = get_train_state(solver,inputs;kwargs...)
-  dataloader,args... = get_data_loader(solver,inputs;shuffle=true,partial=false)
-  train!(solver,train_state,dataloader,stats,args...)
+  train(red,inputs,stats;kwargs...)
 end
 
 # utils

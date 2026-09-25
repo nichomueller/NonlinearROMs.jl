@@ -1,16 +1,23 @@
 """
     module NonlinearROMs
 
-Neural-network-based hyper-reduction and nonlinear reduced-order modelling
-components for [`GridapROMs.jl`](https://github.com/gridap/GridapROMs.jl).
+Neural-network-based surrogate modelling and hyper-reduction components for
+[`GridapROMs.jl`](https://github.com/gridap/GridapROMs.jl).
 
 This package was extracted out of `GridapROMs.RBSteady`/`GridapROMs.RBTransient`
 into its own repository, and plugs back into them via multiple dispatch:
 
-- **Neural network models** (`NeuralModels.jl`) — `DeepONet`, `NOMAD`,
-  `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`, `AutoDecoder`;
-  all trained through the same Lux/Reactant/Enzyme pipeline (`NeuralReduction`, 
-  `train_model!`, `train_neural_coefficient`).
+- **Neural network models** (`NeuralModels.jl`/`NeuralLayers.jl`) — `DeepONet`,
+  `NOMAD`, `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`,
+  `AutoDecoder`, `KernelNeuralModel`; all trained through the same
+  Lux/Reactant/Enzyme pipeline (`NeuralReduction`, `train_model!`).
+
+- **Direct neural surrogates** — [`NeuralSolver`](@ref)/[`NeuralOperator`](@ref)
+  train a [`NeuralReduction`](@ref)'s model (through its `DeepONetReduction`/
+  `NOMADReduction`/`KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/
+  `VAEReduction`/`MLPReduction` alias) to map parameters directly to the
+  full-order solution, bypassing FE assembly entirely; `reduced_operator`
+  plugs this into the same offline/online API as `GridapROMs`' RB solvers.
 
 - **Steady hyper-reduction** — `NNRegression` (operator regression),
   `NNHyperReduction` (NN-predicted EIM coefficients), `NNRegressor`,
@@ -21,10 +28,16 @@ into its own repository, and plugs back into them via multiple dispatch:
   `TransientNNHyperReduction`, the transient counterparts extending
   `RBTransient`'s space-time hyper-reduction machinery analogously.
 
-Usage: construct a `NNHyperReduction`/`NNRegression`
-(or their `Transient*` transient counterparts) and pass it to `RBSolver` wherever
-a steady/transient `HyperReduction` is expected, exactly as you would
-`MDEIMHyperReduction` or `RBFHyperReduction`.
+- **Mesh graph utilities** (`GraphsInterface.jl`/`WeightedSimpleDiGraphs.jl`) —
+  `MeshGraph`/`DistanceGraph`/`build_graph` turn a `FESpace`'s dof adjacency (or
+  a coordinate-based nearest-neighbour graph) into a `WeightedSimpleDiGraph`,
+  for graph-based neural architectures.
+
+Usage: construct a `NNHyperReduction`/`NNRegression` (or their `Transient*`
+counterparts) and pass it to `RBSolver` wherever a steady/transient
+`HyperReduction` is expected, exactly as you would `MDEIMHyperReduction` or
+`RBFHyperReduction`; or construct a `NeuralSolver` directly and call
+`reduced_operator`/`solve` on it as you would any other ROM solver.
 """
 module NonlinearROMs
 
@@ -69,7 +82,6 @@ import StaticArrays: SVector
 export TrainingLog
 export ZScore
 export normalise!
-export CoordinateSnapshots
 export get_formatted_data
 include("Utils.jl")
 
@@ -129,6 +141,7 @@ include("NeuralReductions.jl")
 export TrainedNeuralModel
 export TrainedAutoEncoder
 export TrainedAutoDecoder
+export TrainedVAE
 export train_model!
 export infer_latent
 export encode
@@ -142,12 +155,6 @@ export NeuralOperator
 include("NeuralSolvers.jl")
 
 export train
-export train_deeponet!
-export train_nomad!
-export train_autoencoder!
-export train_autodecoder!
-export train_vae!
-export TrainedVAE
 export resolve_batch_size
 include("NeuralTraining.jl")
 

@@ -48,24 +48,6 @@ function sample(s::Sampler,x::BlockSnapshots,axis=1)
   @notimplemented "Do this!"
 end
 
-# coordinate snapshots sampling
-
-for T in (:(typeof(identity)),:Function,:Integer)
-  @eval begin
-    function sample(s::Sampler{<:$T},x::CoordinateSnapshots,axis=1)
-      data = sample(s,x.snaps,axis)
-      # ConsecutiveParamVector convention: a (dofs,params*times) matrix, params
-      # varying fastest. `data` is (dofs,params) for steady snapshots (already
-      # correct) or (dofs,params,times) for transient ones; merging the trailing
-      # axes via `reshape` produces exactly that column order either way.
-      pdata = ConsecutiveParamArray(reshape(data,size(data,1),:))
-      sx = Snapshots(pdata,get_realisation(x))
-      xx = sample(s,get_coordinates(x))
-      CoordinateSnapshots(sx,xx)
-    end
-  end
-end
-
 struct MultiSampler{A,B,C}
   space_sampler::Sampler{A}
   param_sampler::Sampler{B}
@@ -130,11 +112,6 @@ function sample(s::SteadyNeuralSampler,x::SteadySnapshots)
   sample(s.space_sampler,sp,space_axis)
 end
 
-function sample(s::SteadyNeuralSampler,x::SteadyCoordinateSnapshots)
-  sp = param_sample(s,x.snaps)
-  sample(s.space_sampler,CoordinateSnapshots(sp,x.coords))
-end
-
 const TransientNeuralSampler{A,B,C} = MultiSampler{A,B,C}
 
 function sample(s::TransientNeuralSampler,x::TransientSnapshots)
@@ -142,12 +119,6 @@ function sample(s::TransientNeuralSampler,x::TransientSnapshots)
   xpt = time_sample(s,xp)
   space_axis = 1
   sample(s.space_sampler,xpt,space_axis)
-end
-
-function sample(s::TransientNeuralSampler,x::TransientCoordinateSnapshots)
-  xp = param_sample(s,x.snaps)
-  xpt = time_sample(s,xp)
-  sample(s.space_sampler,CoordinateSnapshots(xpt,x.coords))
 end
 
 get_space_ids(s::MultiSampler,args...) = get_ids(s.space_sampler,args...)

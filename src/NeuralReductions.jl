@@ -1,26 +1,44 @@
 """
-    Base.@kwdef struct NeuralReduction{M,S}
-      model::M
-      epochs::Int = 20000
-      batch_size::Int = 0
-      space_step = 1
-      param_step = 1
-      time_step = nothing
-      lr_scheduler::S = CosineAnnealing(epochs)
-      verbose::Bool = true
-      print_every::Int = 500
+    struct NeuralReduction{A<:NeuralModel}
+      model::A
+      epochs::Int
+      batch_size::Int
+      sampler::MultiSampler
+      optimiser::Optimiser
+      trainlog::TrainingLog
     end
+
+    NeuralReduction(
+      model::NeuralModel;
+      epochs::Int=20000,
+      batch_size::Int=0,
+      space_step=1,
+      param_step=1,
+      time_step=nothing,
+      lr_scheduler=CosineAnnealing(epochs),
+      verbose::Bool=true,
+      print_every::Int=500,
+      kwargs...
+      )
 
 The central configuration struct for training neural models. It defines the
 neural architecture, the training hyperparameters, and the data subsampling
-strategies for the offline phase.
+strategies for the offline phase. The keyword constructor is the intended
+entry point: it builds the `sampler`/`optimiser`/`trainlog` fields from
+`space_step`/`param_step`/`time_step`, `lr_scheduler`(`;kwargs...`), and
+`verbose`/`print_every` respectively.
 
 # Fields
-- `model`: A [`DeepONet`](@ref) or [`NOMAD`](@ref) architecture. Build one either with
-  explicit `branch_layers`/`trunk_layers` (or `approximator_layers`/`decoder_layers`), or
-  via the convenience `DeepONet(nbranch_in,ntrunk_in;width,depth,activation)` /
+- `model`: Any [`NeuralModel`](@ref) architecture — [`DeepONet`](@ref)/[`NOMAD`](@ref)
+  (build one either with explicit `branch_layers`/`trunk_layers` (or
+  `approximator_layers`/`decoder_layers`), or via the convenience
+  `DeepONet(nbranch_in,ntrunk_in;width,depth,activation)` /
   `NOMAD(nsensors_in,ncoords_in;width,depth,activation)` constructors, which build a
-  uniform stack of `depth` hidden layers of `width` neurons from the given input dimensions.
+  uniform stack of `depth` hidden layers of `width` neurons from the given input
+  dimensions), [`MultiLayerPerceptron`](@ref), [`AutoEncoder`](@ref)/[`AutoDecoder`](@ref)/
+  [`VariationalAutoEncoder`](@ref), or a [`KernelNeuralModel`](@ref). The
+  [`DeepONetReduction`](@ref)/[`NOMADReduction`](@ref)/... aliases below pin `model`'s type
+  to select which training pipeline `train`/`reduced_operator` dispatch to.
 - `epochs::Int`: Total number of training epochs. Default: `20000`.
 - `batch_size::Int`: The batch size for training. If set to `0` or a negative value, it defaults to the total number of available samples (full-batch). Default: `0`.
 - `sampler::MultiSampler`: Built from `space_step`/`param_step`/`time_step`, controls how the
@@ -265,16 +283,16 @@ const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
 """
     const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
 
-A reduction wrapper for the Deep Operator Model (DeepONet) s.
+A reduction wrapper for the Deep Operator Network (DeepONet).
 It instructs the ROM solvers to use the DeepONet pipeline during the offline and online phases.
 
 # Constructors
-- `DeepONetReduction(s::NeuralReduction)`: Wraps an explicitly defined s.
-- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
+- `DeepONetReduction(s::NeuralReduction)`: Wraps an explicitly defined `NeuralReduction`.
+- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the `NeuralReduction`, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
 
 # Examples
 ```julia
-# Using an explicit s
+# Using an explicit reduction
 s = NeuralReduction(DeepONet(2,3;width=64,depth=3),epochs=1000)
 reduction = DeepONetReduction(s)
 
@@ -287,16 +305,16 @@ const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
 """
     const NOMADReduction{M<:NOMAD} = NeuralReduction{M}
 
-A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator s.
+A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator.
 It instructs the ROM solvers to use the NOMAD pipeline during the offline and online phases.
 
 # Constructors
-- `NOMADReduction(s::NeuralReduction)`: Wraps an explicitly defined s.
-- `NOMADReduction(;model::NOMAD,kwargs...)`: Automatically builds the s, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
+- `NOMADReduction(s::NeuralReduction)`: Wraps an explicitly defined `NeuralReduction`.
+- `NOMADReduction(;model::NOMAD,kwargs...)`: Automatically builds the `NeuralReduction`, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
 
 # Examples
 ```julia
-# Using an explicit s
+# Using an explicit reduction
 s = NeuralReduction(NOMAD(2,3;width=32,depth=2),epochs=1000)
 reduction = NOMADReduction(s)
 
@@ -338,6 +356,8 @@ for (f,m) in (
   (:MLPReduction,:MultiLayerPerceptron),
 )
   @eval begin
+    $f(s::NeuralReduction{<:$m}) = s
+
     function $f(;model::$m,kwargs...)
       NeuralReduction(model;kwargs...)
     end

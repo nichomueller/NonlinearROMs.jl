@@ -137,45 +137,82 @@ function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)
   map(get_free_dof_coordinates,V.spaces)
 end
 
-struct CoordinateSnapshots{T,N,Tc,Nc,A<:AbstractSnapshots{T,N},B<:AbstractArray{Tc,Nc}} <: AbstractSnapshots{T,N}
-  snaps::A
-  coords::B
-end
-
-function CoordinateSnapshots(snaps::AbstractSnapshots,V::FESpace)
-  coords = get_free_dof_coordinates(V)
-  CoordinateSnapshots(snaps,coords)
-end
-
-const SteadyCoordinateSnapshots{T,N,Tc,Nc} = CoordinateSnapshots{T,N,Tc,Nc,<:SteadySnapshots{T,N}}
-const TransientCoordinateSnapshots{T,N,Tc,Nc} = CoordinateSnapshots{T,N,Tc,Nc,<:TransientSnapshots{T,N}}
-
-ParamDataStructures.get_all_data(s::CoordinateSnapshots) = get_all_data(s.snaps)
-ParamDataStructures.get_param_data(s::CoordinateSnapshots) = get_param_data(s.snaps)
-ParamDataStructures.get_initial_param_data(s::CoordinateSnapshots) = get_initial_param_data(s.snaps)
-DofMaps.get_dof_map(s::CoordinateSnapshots) = get_dof_map(s.snaps)
-ParamDataStructures.get_realisation(s::CoordinateSnapshots) = get_realisation(s.snaps)
-get_coordinates(s::CoordinateSnapshots) = s.coords
-
-function ParamDataStructures.select_snapshots(s::CoordinateSnapshots,pindex) 
-  snaps = select_snapshots(s.snaps,pindex)
-  CoordinateSnapshots(snaps,s.coords)
-end
-
-function ParamDataStructures.select_times(s::CoordinateSnapshots,tindex) 
-  snaps = select_times(s.snaps,tindex)
-  CoordinateSnapshots(snaps,s.coords)
-end
-
-function Base.getindex(s::CoordinateSnapshots{T,N},i::Vararg{Integer,N}) where {T,N}
-  getindex(s.snaps,i...)
-end
-
-function Base.setindex!(s::CoordinateSnapshots{T,N},v,i::Vararg{Integer,N}) where {T,N}
-  setindex!(s.snaps,v,i...)
-end
-
-# utils 
+# utils
 
 get_dof_to_nodes(b) = @abstractmethod
 get_dof_to_nodes(b::LagrangianDofBasis) = b.nodes[b.dof_to_node]
+
+
+function get_formatted_data(::Type{T},values,times) where T
+  d = T.(matrix_of_values(values))
+  nx = size(d,1)
+  nt = length(times)
+  np = Int(size(d,2)/nt)
+  reshape(permutedims(reshape(d,nx,np,nt),(1,3,2)),:,np)
+end
+
+dimension(μ::Realisation) = length(first(μ))
+dimension(μ::TransientRealisation) = dimension(get_params(μ))
+
+matrix_of_values(a::AbstractMatrix) = a
+matrix_of_values(a::AbstractArray) = reshape(a,size(a,1),:)
+matrix_of_values(x::AbstractParamArray) = matrix_of_values(get_all_data(x))
+
+function matrix_of_params(r::AbstractRealisation)
+  params = zeros(dimension(r),num_params(r))
+  matrix_of_params!(params,r)
+end
+
+function matrix_of_params!(params,r::AbstractRealisation)
+  @check size(params,2) == num_params(r)
+  μ = get_params(r)
+  @inbounds @views for i in axes(params,2)
+    params[:,i] = μ.params[i]
+  end
+  params
+end
+
+function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
+  coords_mat = zeros(T,D,length(coords))
+  for (i,coord) in enumerate(coords)
+    for d in 1:D 
+      coords_mat[d,i] = coord.data[d]
+    end
+  end
+  return coords_mat
+end
+
+function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVector{S}) where {D,T,S}
+  TS = promote_type(T,S)
+  coords_mat = zeros(TS,D+1,length(coords)*length(times))
+  col = 0
+  for t in times,coord in coords
+    col += 1
+    for d in 1:D
+      coords_mat[d,col] = coord.data[d]
+    end
+    coords_mat[D+1,col] = t
+  end
+  return coords_mat
+end
+
+#TODO @Isaia: your old tensor_of_coords function stacked params before the coords 
+# on the rows, are you sure it's correct? I am doing the opposite here, please fix it 
+# in case it's wrong.
+function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) where {T,S}
+  TS = promote_type(T,S)
+  D,nx = size(coords)
+  P,np = size(params)
+  tensor = zeros(TS,D+P,nx,np)
+  for (i,x) in enumerate(eachcol(coords))
+    for (j,μ) in enumerate(eachcol(params))
+      for d in 1:D
+        tensor[d,i,j] = x[d]
+      end
+      for p in 1:P
+        tensor[D+p,i,j] = μ[p]
+      end
+    end
+  end
+  return tensor
+end
