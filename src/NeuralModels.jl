@@ -16,6 +16,13 @@ Abstract supertype for neural models that evaluate the solution point-by-point u
 abstract type CoordinateNeuralModel <: NeuralModel end
 
 """
+    abstract type AbstractKernelModel <: NeuralModel end
+
+Abstract supertype for all kernel-based neural operator architectures.
+"""
+abstract type AbstractKernelModel <: NeuralModel end
+
+"""
     struct KernelNeuralModel{K,F} <: NeuralModel
 
 Generic architecture for kernel-based neural models.
@@ -24,12 +31,33 @@ It maps an input function to an output function through three main stages:
 2. Iterative Kernel Integration: A sequence of `NeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralModel{K,F} <: NeuralModel
+struct KernelNeuralModel{F} <: AbstractKernelModel
   lifting_layers::Tuple{Vararg{Int}}
   kernel_configs::Tuple{Vararg{Any}}
   projection_layers::Tuple{Vararg{Int}}
   activation::F
 end
+
+function KernelNeuralModel(;
+  lifting_layers,
+  kernel_configs,
+  projection_layers,
+  activation=tanh
+)
+  KernelNeuralModel(
+    Tuple(lifting_layers),
+    Tuple(kernel_configs),
+    Tuple(projection_layers),
+    activation
+  )
+end
+
+struct GNO{K<:KernelNeuralModel,R<:Real} <: AbstractKernelModel
+    kernel_model::K
+    radius::R
+end
+
+GNO(kernel_model::KernelNeuralModel;radius=1.0) = GNO(kernel_model,radius)
 
 """
     struct DeepONet{F} <: CoordinateNeuralModel
@@ -258,6 +286,45 @@ function build_lux_chain(layers::Tuple,activation)
     end
   end
   Lux.Chain(lux_layers...)
+end
+
+function build_model(model::GNO,args...)
+  arch = model.kernel_model
+  
+  # Lifting
+  lifting_net = build_lux_chain(arch.lifting_layers,arch.activation)
+  lifting_layers = Lux.Chain(
+    Lux.WrappedFunction(g -> (get_features(g),g.edge_index,g.edge_weights)),
+    Lux.Parallel(
+        GraphData,            # Aggregation function
+        lifting_net,        # v
+        Lux.NoOpLayer(),    # edge_index
+        Lux.NoOpLayer()     # edge_weights
+        )
+  )
+  
+  # Kernel iterations
+  hidden_dim = arch.lifting_layers[end]
+  num_kernel_layers = length(arch.kernel_configs)
+  
+  kernel_layers = [
+    NeuralLayer(
+        GNOKernel(Lux.Dense(2 * hidden_dim + 1 => hidden_dim)),
+        Lux.Dense(hidden_dim => hidden_dim),
+        (hidden_dim,1,1),
+        arch.activation
+    )
+    for _ in 1:num_kernel_layers
+  ]
+  
+  # Projection
+  projection_net = build_lux_chain(arch.projection_layers,arch.activation)
+  projection_layers = Lux.Chain(
+    Lux.WrappedFunction(get_features),
+    projection_net
+  )
+  
+  Lux.Chain(lifting_layers,kernel_layers...,projection_layers)
 end
 
 # Create a DeepONet layers

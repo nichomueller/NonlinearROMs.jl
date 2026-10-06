@@ -273,12 +273,15 @@ RBTransient.get_time_combination(r::TransientNNHyperReduction) = r.combination
 # neural reductions
 
 """
-    const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
+    const AbstractKernelReduction{M<:AbstractKernelModel} = NeuralReduction{M}
 
 A reduction wrapper for kernel-based neural models.
 It instructs the ROM solvers to use the kernel neural model pipeline (tensor formatting and iterative integration) during the offline and online phases.
 """
+const AbstractKernelReduction{M<:AbstractKernelModel} = NeuralReduction{M}
+
 const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
+const GNOReduction{M<:GNO} = NeuralReduction{M}
 
 """
     const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
@@ -348,6 +351,7 @@ const MLPReduction{M<:MultiLayerPerceptron} = NeuralReduction{M}
 
 for (f,m) in (
   (:KernelReduction,:KernelNeuralModel),
+  (:GNOReduction,:GNO),
   (:DeepONetReduction,:DeepONet),
   (:NOMADReduction,:NOMAD),
   (:AutoEncoderReduction,:AutoEncoder),

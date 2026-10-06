@@ -75,7 +75,7 @@ using GridapROMs.RBTransient
 using GridapROMs.Utils
 
 import GridapROMs.RBSteady:
-  GlobalRBSolver,GlobalContext,get_reduction,get_state_reduction,get_interpolation,
+  ROMSolver,GlobalRBSolver,GlobalContext,get_reduction,get_state_reduction,get_interpolation,
   allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
 import StaticArrays: SVector
 
@@ -104,11 +104,15 @@ include("Samplers.jl")
 export MeshGraph
 export DistanceGraph
 export build_graph
+export get_edge_tensors
 include("GraphsInterface.jl")
 
 export LatentCodeLayer
 export VAELayer
 export NeuralLayer
+export GraphData
+export get_features
+export update_features
 include("NeuralLayers.jl")
 
 export NeuralModel
@@ -122,7 +126,9 @@ export AutoEncoder
 export VariationalAutoEncoder
 export AutoDecoder
 export build_model
+export AbstractKernelModel
 export KernelNeuralModel
+export GNO
 include("NeuralModels.jl")
 
 export NNRegression
@@ -136,6 +142,8 @@ export AutoEncoderReduction
 export AutoDecoderReduction
 export VAEReduction
 export KernelReduction
+export AbstractKernelReduction
+export GNOReduction
 include("NeuralReductions.jl")
 
 export TrainedNeuralModel

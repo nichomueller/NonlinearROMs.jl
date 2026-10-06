@@ -12,6 +12,7 @@ Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
 Gridap = "56d4f2e9-7ea1-5844-9cf6-b9c51ca7ce8e"
 GridapGmsh = "3025c34a-b394-11e9-2a55-3fee550c04c8"
 GridapROMs = "9ec1d169-1b02-4ed6-9618-ff21f43ad569"
+GridapSolvers = "6d3209ee-5e3c-4db7-a716-942eb12ed534"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 MLUtils = "f1d291b0-491e-4a28-83b9-f70985020b54"
@@ -24,7 +25,7 @@ StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
 [sources]
-GridapROMs = {path = "/home/nmueller/git_repos/GridapROMs.jl/"}
+GridapROMs = {url = "https://github.com/gridap/GridapROMs.jl", rev="dev"}
 
 [compat]
 Enzyme = "0.13.199"
@@ -35,6 +36,7 @@ Graphs = "1.14.0"
 Gridap = "0.20"
 GridapGmsh = "0.7.4"
 GridapROMs = "0.1, 0.2"
+GridapSolvers = "0.7.1"
 Lux = "1.31.4"
 MLUtils = "0.4.13"
 NearestNeighbors = "0.4.29"

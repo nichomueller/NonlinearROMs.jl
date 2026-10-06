@@ -11,6 +11,22 @@ function train!(red::KernelReduction,train_state,dataloader,stats)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
+function train!(red::GNOReduction,train_state,dataloader,stats,edge_index,edge_weights)
+  lr_scheduler = get_scheduler(red)
+  logger = get_logger(red)
+  edge_index_dev = edge_index |> XDEV
+  edge_weights_dev = edge_weights |> XDEV
+  function to_device_batch((x_batch,y_batch))
+    n_nodes = size(x_batch,2)
+    n_dofs,n_samples = size(y_batch)
+    # Dynamically compute the number of physical variables
+    out_channels = n_dofs ÷ n_nodes
+    y_reshaped = reshape(y_batch,out_channels,n_nodes,n_samples)
+    return (GraphData(x_batch |> XDEV,edge_index_dev,edge_weights_dev),y_reshaped |> XDEV)
+  end
+  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+end
+
 function train!(red::DeepONetReduction,train_state,dataloader,stats,x_data_dev)
   lr_scheduler = get_scheduler(red)
   logger = get_logger(red)
@@ -58,7 +74,7 @@ end
 
 function get_train_state(red::NeuralReduction,inputs;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(red,inputs)
+  model = build_model(red.model,inputs...)
   opt = get_optimiser(red)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
@@ -68,6 +84,18 @@ function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
   batchsize = resolve_batch_size(red,inputs)
   data = prepare_data(red,inputs)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
+end
+
+function get_data_loader(red::GNOReduction,inputs;shuffle=true,partial=true)
+  batchsize = resolve_batch_size(red,inputs)
+  data = prepare_data(red,inputs)
+  dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
+  
+  _,coords,_ = inputs
+  graph = build_graph(DistanceGraph(red.model.radius),coords)
+  edge_index,edge_weights = get_edge_tensors(graph)
+
+  (dataloader,edge_index,edge_weights)
 end
 
 function get_data_loader(red::DeepONetReduction,inputs;shuffle=true,partial=false)
@@ -128,8 +156,8 @@ end
 
 # utils
 
-function prepare_data(::NeuralSolver{<:KernelReduction},(values,coords,params))
-  (values,tensor_of_coords(coords,params))
+function prepare_data(::AbstractKernelReduction,(values,coords,params))
+  return (tensor_of_coords(coords,params),values)
 end
 
 function prepare_data(::NeuralSolver{<:DeepONetReduction},(values,coords,params))

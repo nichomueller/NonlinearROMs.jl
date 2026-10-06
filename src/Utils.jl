@@ -196,9 +196,6 @@ function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVect
   return coords_mat
 end
 
-#TODO @Isaia: your old tensor_of_coords function stacked params before the coords 
-# on the rows, are you sure it's correct? I am doing the opposite here, please fix it 
-# in case it's wrong.
 function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) where {T,S}
   TS = promote_type(T,S)
   D,nx = size(coords)
