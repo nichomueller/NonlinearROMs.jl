@@ -5,15 +5,82 @@ Abstract supertype for integral kernel implementations used within the iterative
 """
 abstract type IntegralKernel end
 
-struct FourierLayer <: IntegralKernel 
-  # fields 
+input_size(l::IntegralKernel) = @abstractmethod
+output_size(l::IntegralKernel) = @abstractmethod
+input_length(l::IntegralKernel) = prod(input_size(l))
+output_length(l::IntegralKernel) = prod(output_size(l))
+
+function Lux.initialstates(rng::Random.AbstractRNG,l::IntegralKernel)
+  return (
+    kernel = NamedTuple(),
+  )
 end
 
-struct GraphLayer <: IntegralKernel 
-  # fields 
+struct FourierLayer{M,N} <: IntegralKernel
+  shape::Dims{M}
+  kmax::Dims{N}
+  function FourierLayer(shape::Dims{M},kmax::Dims{N}) where {M,N}
+    @check N == M-1 "FourierLayer expects kmax to have the same number of dimensions as the input shape minus 1."
+    new{M,N}(shape,kmax)
+  end
 end
 
-struct HAMLETLayer <: IntegralKernel 
+input_size(l::FourierLayer) = l.shape
+output_size(l::FourierLayer) = (l.kmax...,nchannels(l))
+nchannels(l::FourierLayer) = last(l.shape)
+
+function FourierLayer(shape::Dims{M};kmax=12) where M
+  FourierLayer(shape,ntuple(_->kmax,M-1))
+end
+
+function FourierLayer(n::Int,nchannels::Int;kwargs...)
+  FourierLayer((n,nchannels);kwargs...)
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::FourierLayer)
+  return (
+    kernel = rand(rng,Uniform(-1,1),l.kmax...,nchannels(l),nchannels(l)),
+  )
+end
+
+function (l::FourierLayer)(x,ps,st)
+  xt = truncate(x,l.kmax)
+  x̂ = rfft(xt)
+  ŷ = fapply(ps.kernel,x̂)
+  y = irfft(ŷ)
+  return y,st
+end
+
+struct GraphLayer{A<:NeuralModel,B<:WeightedSimpleDiGraph} <: IntegralKernel
+  model::A
+  graph::B
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::GraphLayer)
+  return (
+    model = initialparameters(rng,l.model),
+  )
+end
+
+function Lux.initialstates(rng::Random.AbstractRNG,l::GraphLayer)
+  return (
+    model = initialstates(rng,l.model),
+  )
+end
+
+function (l::GraphLayer)(x,ps,st)
+  y = zeros(size(x))
+  for s in vertices(l.graph)
+    xs = x[s]
+    ws = out_weights(l.graph,s)
+    for w in ws
+      y[s] += l.model(w,ps.model,st.model)*xs
+    end
+  end
+  return y,st
+end
+
+struct HAMLETLayer <: IntegralKernel
   # fields 
 end
 
@@ -32,57 +99,41 @@ It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(
 - `bias` represents the dimensions of the learnable pointwise bias.
 - `activation` (σ) is a fixed pointwise non-linearity.
 """
-struct NeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
+struct NeuralLayer{A<:IntegralKernel,B<:Broadcasting} <: Lux.AbstractLuxLayer
   kernel::A
-  weights::B
-  bias::C
-  activation::D
+  activation::B
 end
 
-# Initialize trainable parameters (ps)
-function Lux.initialparameters(rng::Random.AbstractRNG,layer::NeuralLayer)
+function NeuralLayer(kernel::IntegralKernel,activation::Function)
+  NeuralLayer(kernel,Broadcasting(activation))
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::NeuralLayer)
   return (
-    kernel = Lux.initialparameters(rng,layer.kernel),
-    weights = Lux.initialparameters(rng,layer.weights),
-    bias = Lux.initialparameters(rng,layer.bias)
+    kernel = Lux.initialparameters(rng,l.kernel),
+    weights = rand(rng,input_length(l.kernel),output_length(l.kernel)),
+    bias = rand(rng,output_length(l.kernel))
   )
 end
 
-# Initialize states (st)
-function Lux.initialstates(rng::Random.AbstractRNG,layer::NeuralLayer)
+function Lux.initialstates(rng::Random.AbstractRNG,l::NeuralLayer)
   return (
-    kernel = Lux.initialstates(rng,layer.kernel),
-    weights = Lux.initialstates(rng,layer.weights)
+    kernel = Lux.initialstates(rng,l.kernel),
   )
 end
 
-# Pre-calculate the total number of trainable parameters in this layer
-function Lux.parameterlength(layer::NeuralLayer)
-  kernel_params = Lux.parameterlength(layer.kernel)
-  linear_params = Lux.parameterlength(layer.weights)
-  bias_params = Lux.parameterlength(layer.bias)
-  return kernel_params + linear_params + bias_params
-end
-
-# Pre-calculate the total number of states in this layer
-function Lux.statelength(layer::NeuralLayer)
-  kernel_states = Lux.statelength(layer.kernel)
-  linear_states = Lux.statelength(layer.weights)
-  return kernel_states + linear_states
-end
-
-# Foward pass
 function (layer::NeuralLayer)(x,ps,st)
   # Non-local integration via specific kernel dispatch
-  k_out,st_k = layer.kernel(x,ps.kernel,st.kernel)
+  kout,kst = layer.kernel(x,ps.kernel,st.kernel)
 
-  # Local linear transformation
-  w_out,st_w = layer.weights(x,ps.weights,st.weights)
+  # Local linear transformation, bias addition, and activation
+  wout = lapply(ps.weights,x)
+  for i in eachindex(wout)
+    wout[i] += kout[i] + ps.bias[i]
+  end
+  y = layer.activation(wout)
 
-  # Summation, bias addition, and activation
-  out = layer.activation.(k_out .+ w_out .+ ps.bias)
-
-  return out,(kernel=st_k,weights=st_w)
+  return y,(kernel=kst,)
 end
 
 """
@@ -129,4 +180,24 @@ function vae_loss(model::VAELayer,ps,st,x;β=1.0)
   recon = sum(abs2,x̂ .- x)/length(x)
   kl = -sum(1 .+ log_var .- μ.^2 .- exp.(log_var))/(2*size(x,2))
   return recon + β*kl,st,(;)
+end
+
+# utils
+
+truncate(args...) = @notimplemented "Sizes do not match"
+
+function truncate(x::AbstractArray{T,N},kmax::Dims{N}) where {T,N}
+  s = size(x)
+  s == kmax && return x
+  view(x,ntuple(i->1:kmax[i],N-1)...,:)
+end
+
+lapply(W,x) = W*reshape(x,size(W,2),:)
+
+function fapply(W::AbstractArray{T,M},x::AbstractArray{S,N}) where {T,S,M,N}
+  s = size(W)[1:M-2]
+  n = size(W,M)
+  A = reshape(permutedims(reshape(W,:,n,n),(1,3,2)),:,n)
+  b = vec(x)
+  reshape(A*b,s...,n)
 end

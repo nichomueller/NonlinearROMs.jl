@@ -5,6 +5,7 @@ authors = ["Nicholas Mueller <nicho.mueller@gmail.com>"]
 
 [deps]
 Enzyme = "7da242da-08ed-463a-9acd-ee780be4f1d9"
+FFTW = "7a1cc6ca-52ef-59f5-83cd-3a7055c09341"
 FillArrays = "1a297f60-69ca-5386-bcde-b61e274b549b"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GNNGraphs = "aed8fd31-079b-4b5a-b342-a13352159b8c"
@@ -28,6 +29,7 @@ GridapROMs = {path = "/home/nmueller/git_repos/GridapROMs.jl/"}
 
 [compat]
 Enzyme = "0.13.199"
+FFTW = "1.10.0"
 FillArrays = "1.17.0"
 ForwardDiff = "1"
 GNNGraphs = "1.5.1"
