@@ -1,20 +1,14 @@
 """
-    abstract type IntegralKernel end
+    abstract type IntegralKernel <: Lux.AbstractLuxLayer end
 
 Abstract supertype for integral kernel implementations used within the iterative layers.
 """
-abstract type IntegralKernel end
+abstract type IntegralKernel <: Lux.AbstractLuxLayer end
 
 input_size(l::IntegralKernel) = @abstractmethod
 output_size(l::IntegralKernel) = @abstractmethod
 input_length(l::IntegralKernel) = prod(input_size(l))
 output_length(l::IntegralKernel) = prod(output_size(l))
-
-function Lux.initialstates(rng::Random.AbstractRNG,l::IntegralKernel)
-  return (
-    kernel = NamedTuple(),
-  )
-end
 
 struct FourierLayer{M,N} <: IntegralKernel
   shape::Dims{M}
@@ -43,6 +37,12 @@ function Lux.initialparameters(rng::Random.AbstractRNG,l::FourierLayer)
   )
 end
 
+function Lux.initialstates(rng::Random.AbstractRNG,l::FourierLayer)
+  return (
+    kernel = NamedTuple(),
+  )
+end
+
 function (l::FourierLayer)(x,ps,st)
   xt = truncate(x,l.kmax)
   x̂ = rfft(xt)
@@ -51,10 +51,25 @@ function (l::FourierLayer)(x,ps,st)
   return y,st
 end
 
-struct GraphLayer{A<:NeuralModel,B<:WeightedSimpleDiGraph} <: IntegralKernel
-  model::A
-  graph::B
+abstract type GraphLayerStyle end
+struct FullGraph <: GraphLayerStyle end
+struct NystromGraph <: GraphLayerStyle 
+  num_subgraphs::Int
+  subgraph_size::Int
 end
+NystromGraph(;num_subgraphs=4,subgraph_size=100) = NystromGraph(num_subgraphs,subgraph_size)
+
+struct GraphLayer{A<:GraphLayerStyle,B<:NeuralModel,C<:WeightedSimpleDiGraph} <: IntegralKernel
+  style::A
+  model::B
+  graph::C
+end
+
+const FullGraphLayer{B<:NeuralModel,C<:WeightedSimpleDiGraph} = GraphLayer{FullGraph,B,C}
+const NystromGraphLayer{B<:NeuralModel,C<:WeightedSimpleDiGraph} = GraphLayer{NystromGraph,B,C}
+
+input_size(l::GraphLayer) = input_size(l.model)
+output_size(l::GraphLayer) = output_size(l.model)
 
 function Lux.initialparameters(rng::Random.AbstractRNG,l::GraphLayer)
   return (
@@ -68,7 +83,7 @@ function Lux.initialstates(rng::Random.AbstractRNG,l::GraphLayer)
   )
 end
 
-function (l::GraphLayer)(x,ps,st)
+function (l::FullGraphLayer)(x,ps,st)
   y = zeros(size(x))
   for s in vertices(l.graph)
     xs = x[s]
@@ -76,6 +91,86 @@ function (l::GraphLayer)(x,ps,st)
     for w in ws
       y[s] += l.model(w,ps.model,st.model)*xs
     end
+  end
+  return y,st
+end
+
+function (l::NystromGraphLayer)(x,ps,st)
+  y = zeros(size(x))
+  for _ in 1:l.style.num_subgraphs
+    subgraph,vmap = sample_subgraph(l.graph,l.style.subgraph_size)
+    for ss in vertices(subgraph)
+      s = vmap[ss]
+      xs = x[s]
+      ws = out_weights(subgraph,ss)
+      for w in ws
+        y[s] += l.model(w,ps.model,st.model)*xs
+      end
+    end
+  end
+  return y,st
+end
+
+abstract type AttentionModel <: IntegralKernel end
+
+function Lux.initialstates(rng::Random.AbstractRNG,l::AttentionModel)
+  return (
+    kernel = NamedTuple(),
+  )
+end
+
+struct SingleHeadAttention <: AttentionModel
+  nkeys::Int
+  nvalues::Int
+  dimension::Int
+end
+
+function SingleHeadAttention(;nkeys=10,nvalues=nkeys,dimension=100)
+  SingleHeadAttention(nkeys,nvalues,dimension)
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::SingleHeadAttention)
+  return (
+    queries = rand(rng,l.dimension,l.nkeys),
+    keys = rand(rng,l.dimension,l.nkeys),
+    values = rand(rng,l.dimension,l.nvalues),
+  )
+end
+
+function (l::SingleHeadAttention)(x,ps,st)
+  Q,K,V = attention_matrices(x,ps)
+  y = softmax(Q * K') * V / sqrt(l.nkeys)
+  return y,st
+end
+
+struct MultiHeadAttention <: AttentionModel
+  attention::SingleHeadAttention
+  nheads::Int
+end
+
+function MultiHeadAttention(;nheads=1,nkeys=10,nvalues=nkeys,dimension=nkeys*nheads)
+  @check dimension == nkeys * nheads
+  attention = SingleHeadAttention(nkeys,nvalues,dimension)
+  MultiHeadAttention(attention,nheads)
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::MultiHeadAttention)
+  return (
+    heads = (Lux.initialparameters(rng,l.attention) for _ in 1:l.nheads),
+  )
+end
+
+function Lux.initialstates(rng::Random.AbstractRNG,l::MultiHeadAttention)
+  return (
+    heads = (Lux.initialstates(rng,l.attention) for _ in 1:l.nheads),
+  )
+end
+
+function (l::MultiHeadAttention)(x,ps,st)
+  nk = l.attention.nkeys
+  y = zeros(size(x))
+  for i in 1:l.nheads
+    y[:,(i-1)*nk+1:i*nk] = l.attention(x,ps.heads[i],st.heads[i])
   end
   return y,st
 end
@@ -200,4 +295,28 @@ function fapply(W::AbstractArray{T,M},x::AbstractArray{S,N}) where {T,S,M,N}
   A = reshape(permutedims(reshape(W,:,n,n),(1,3,2)),:,n)
   b = vec(x)
   reshape(A*b,s...,n)
+end
+
+function attention_matrices(x,ps)
+  Q = x * ps.queries
+  K = x * ps.keys
+  V = x * ps.values
+  return Q,K,V
+end
+
+# self attention
+function attention_matrices(x,ps)
+  Q = x * ps.queries
+  K = x * ps.keys
+  V = x * ps.values
+  return Q,K,V
+end
+
+# cross attention
+function attention_matrices(x::NTuple{2},ps)
+  xq,xk = x
+  Q = xq * ps.queries
+  K = xk * ps.keys
+  V = xk * ps.values
+  return Q,K,V
 end

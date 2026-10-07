@@ -68,3 +68,7 @@ function build_graph!(
   end
   g
 end
+
+function sample_subgraph(g::AbstractGraph,l::Int)
+  induced_subgraph(g,rand(1:nv(g),l))
+end
