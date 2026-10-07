@@ -26,7 +26,7 @@ abstract type CoordinateNeuralModel <: NeuralModel end
 Generic architecture for kernel-based neural models.
 It maps an input function to an output function through three main stages:
 1. Lifting (P): A local operator mapping input features to a higher-dimensional hidden representation.
-2. Iterative Kernel Integration: A sequence of `NeuralLayer`s representing the non-local processing.
+2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
 struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel

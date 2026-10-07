@@ -139,7 +139,7 @@ end
 
 function (l::SingleHeadAttention)(x,ps,st)
   Q,K,V = attention_matrices(x,ps)
-  y = softmax(Q * K') * V / sqrt(l.nkeys)
+  y = softmax(Q * K' / sqrt(l.nkeys)) * V 
   return y,st
 end
 
@@ -170,7 +170,64 @@ function (l::MultiHeadAttention)(x,ps,st)
   nk = l.attention.nkeys
   y = zeros(size(x))
   for i in 1:l.nheads
-    y[:,(i-1)*nk+1:i*nk] = l.attention(x,ps.heads[i],st.heads[i])
+    @view y[:,(i-1)*nk+1:i*nk] = l.attention(x,ps.heads[i],st.heads[i])
+  end
+  return y,st
+end
+
+struct GraphAttentionLayer{A<:GraphLayer,B<:AttentionModel} <: IntegralKernel
+  graph::A
+  attention::B
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::GraphAttentionLayer)
+  return (
+    graph = Lux.initialparameters(rng,l.graph),
+    attention = Lux.initialparameters(rng,l.attention),
+  )
+end
+
+function Lux.initialstates(rng::Random.AbstractRNG,l::GraphAttentionLayer)
+  return (
+    graph = Lux.initialstates(rng,l.graph),
+    attention = Lux.initialstates(rng,l.attention),
+  )
+end
+
+function (l::GraphAttentionLayer{<:FullGraphLayer,SingleHeadAttention})(x,ps,st)
+  Q,K,V = attention_matrices(x,ps)
+  k = sqrt(l.attention.nkeys)
+  y = zeros(size(x))
+  for s in vertices(l.graph)
+    α = 0.0
+    for t in neighbors(l.graph,s)
+      @views α += softmax(Q[:,s]' * K[:,t] / k)
+    end
+    @views y[s,:] += α * V[:,t]
+  end
+  return y,st
+end
+
+# function (l::MultiHeadAttention)(x,ps,st)
+#   nk = l.attention.nkeys
+#   y = zeros(size(x))
+#   for i in 1:l.nheads
+#     @view y[:,(i-1)*nk+1:i*nk] = l.attention(x,ps.heads[i],st.heads[i])
+#   end
+#   return y,st
+# end
+
+function (l::GraphAttentionLayer{<:FullGraphLayer,MultiHeadAttention})(x,ps,st)
+  Q,K,V = attention_matrices(x,ps)
+  nk = l.attention.attention.nkeys
+  k = sqrt(nk)
+  y = zeros(size(x))
+  for s in vertices(l.graph)
+    α = 0.0
+    for t in neighbors(l.graph,s)
+      @views α += softmax(Q[:,s]' * K[:,t] / k)
+    end
+    @views y[s,:] += α * V[:,t]
   end
   return y,st
 end
@@ -180,7 +237,7 @@ struct HAMLETLayer <: IntegralKernel
 end
 
 """
-    struct NeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
+    struct KernelNeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
       kernel::A
       weights::B
       bias::C
@@ -194,16 +251,16 @@ It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(
 - `bias` represents the dimensions of the learnable pointwise bias.
 - `activation` (σ) is a fixed pointwise non-linearity.
 """
-struct NeuralLayer{A<:IntegralKernel,B<:Broadcasting} <: Lux.AbstractLuxLayer
+struct KernelNeuralLayer{A<:IntegralKernel,B<:Broadcasting} <: Lux.AbstractLuxLayer
   kernel::A
   activation::B
 end
 
-function NeuralLayer(kernel::IntegralKernel,activation::Function)
-  NeuralLayer(kernel,Broadcasting(activation))
+function KernelNeuralLayer(kernel::IntegralKernel,activation::Function)
+  KernelNeuralLayer(kernel,Broadcasting(activation))
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::NeuralLayer)
+function Lux.initialparameters(rng::Random.AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,l.kernel),
     weights = rand(rng,input_length(l.kernel),output_length(l.kernel)),
@@ -211,13 +268,13 @@ function Lux.initialparameters(rng::Random.AbstractRNG,l::NeuralLayer)
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::NeuralLayer)
+function Lux.initialstates(rng::Random.AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialstates(rng,l.kernel),
   )
 end
 
-function (layer::NeuralLayer)(x,ps,st)
+function (layer::KernelNeuralLayer)(x,ps,st)
   # Non-local integration via specific kernel dispatch
   kout,kst = layer.kernel(x,ps.kernel,st.kernel)
 
