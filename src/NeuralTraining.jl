@@ -86,7 +86,7 @@ function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function get_data_loader(red::GNOReduction,inputs;shuffle=true,partial=true)
+function get_data_loader(red::GNOReduction,inputs;shuffle=true,partial=false)
   batchsize = resolve_batch_size(red,inputs)
   data = prepare_data(red,inputs)
   dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
