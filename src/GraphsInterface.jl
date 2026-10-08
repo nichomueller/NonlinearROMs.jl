@@ -59,8 +59,7 @@ function build_graph!(
   )
 
   for (dof,coord) in enumerate(dof_to_coords)
-    coord′ = get_array(ForwardDiff.value(coord))
-    dofs = inrange(tree,coord′,s.radius)
+    dofs = inrange(tree,coord,s.radius)
     for neighbor in dofs
       w = norm(coord - dof_to_coords[neighbor])
       add_edge!(g,dof,neighbor,w)

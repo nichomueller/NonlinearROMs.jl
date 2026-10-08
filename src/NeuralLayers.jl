@@ -143,14 +143,87 @@ function (l::SingleHeadAttention)(x,ps,st)
   return y,st
 end
 
-struct MultiHeadAttention <: AttentionModel
-  attention::SingleHeadAttention
+struct GraphSingleHeadAttention{A<:GraphLayer} <: AttentionLayer
+  graph::A
+  nkeys::Int
+  nvalues::Int
+  dimension::Int
+end
+
+function SingleHeadAttention(graph::GraphLayer;nkeys=10,nvalues=nkeys,dimension=100)
+  GraphSingleHeadAttention(graph,nkeys,nvalues,dimension)
+end
+
+function Lux.initialparameters(rng::Random.AbstractRNG,l::SingleHeadAttention)
+  return (
+    queries = rand(rng,l.dimension,l.nkeys),
+    keys = rand(rng,l.dimension,l.nkeys),
+    values = rand(rng,l.dimension,l.nvalues),
+  )
+end
+
+function (l::NystromGraphLayer)(x,ps,st)
+  y = zeros(size(x))
+  for _ in 1:l.style.num_subgraphs
+    subgraph,vmap = sample_subgraph(l.graph,l.style.subgraph_size)
+    for ss in vertices(subgraph)
+      s = vmap[ss]
+      xs = x[s]
+      ws = out_weights(subgraph,ss)
+      for w in ws
+        y[s] += l.model(w,ps.model,st.model)*xs
+      end
+    end
+  end
+  return y,st
+end
+
+function (l::GraphSingleHeadAttention{<:FullGraphLayer})(x,ps,st)
+  Q,K,V = attention_matrices(x,ps)
+  y = zeros(size(x))
+  for s in vertices(l.graph)
+    α = 0.0
+    for t in neighbors(l.graph,s)
+      @views α += softmax(Q[:,s]' * K[:,t] / sqrt(l.nkeys))
+    end
+    @views y[s,:] += α * V[:,t]
+  end
+  return y,st
+end
+
+function (l::GraphSingleHeadAttention{<:NystromGraphLayer})(x,ps,st)
+  Q,K,V = attention_matrices(x,ps)
+  y = zeros(size(x))
+  for _ in 1:l.style.num_subgraphs
+    subgraph,vmap = sample_subgraph(l.graph,l.style.subgraph_size)
+    for ss in vertices(subgraph)
+      s = vmap[ss]
+      α = 0.0
+      for t in neighbors(l.graph,s)
+        @views α += softmax(Q[:,s]' * K[:,t] / sqrt(l.nkeys))
+      end
+      @views y[s,:] += α * V[:,t]
+    end
+  end
+  return y,st
+end
+
+struct MultiHeadAttention{A<:AttentionModel} <: AttentionModel
+  attention::A
   nheads::Int
 end
+
+const GraphMultiHeadAttention = MultiHeadAttention{<:GraphSingleHeadAttention}
 
 function MultiHeadAttention(;nheads=1,nkeys=10,nvalues=nkeys,dimension=nkeys*nheads)
   @check dimension == nkeys * nheads
   attention = SingleHeadAttention(nkeys,nvalues,dimension)
+  MultiHeadAttention(attention,nheads)
+end
+
+function MultiHeadAttention(graph::GraphLayer;nheads=1,nkeys=10,nvalues=nkeys,dimension=nkeys*nheads)
+  @check dimension == nkeys * nheads
+  attention = SingleHeadAttention(graph,nkeys,nvalues,dimension)
   MultiHeadAttention(attention,nheads)
 end
 
@@ -175,65 +248,8 @@ function (l::MultiHeadAttention)(x,ps,st)
   return y,st
 end
 
-struct GraphAttentionLayer{A<:GraphLayer,B<:AttentionModel} <: IntegralKernel
-  graph::A
-  attention::B
-end
-
-function Lux.initialparameters(rng::Random.AbstractRNG,l::GraphAttentionLayer)
-  return (
-    graph = Lux.initialparameters(rng,l.graph),
-    attention = Lux.initialparameters(rng,l.attention),
-  )
-end
-
-function Lux.initialstates(rng::Random.AbstractRNG,l::GraphAttentionLayer)
-  return (
-    graph = Lux.initialstates(rng,l.graph),
-    attention = Lux.initialstates(rng,l.attention),
-  )
-end
-
-function (l::GraphAttentionLayer{<:FullGraphLayer,SingleHeadAttention})(x,ps,st)
-  Q,K,V = attention_matrices(x,ps)
-  k = sqrt(l.attention.nkeys)
-  y = zeros(size(x))
-  for s in vertices(l.graph)
-    α = 0.0
-    for t in neighbors(l.graph,s)
-      @views α += softmax(Q[:,s]' * K[:,t] / k)
-    end
-    @views y[s,:] += α * V[:,t]
-  end
-  return y,st
-end
-
-# function (l::MultiHeadAttention)(x,ps,st)
-#   nk = l.attention.nkeys
-#   y = zeros(size(x))
-#   for i in 1:l.nheads
-#     @view y[:,(i-1)*nk+1:i*nk] = l.attention(x,ps.heads[i],st.heads[i])
-#   end
-#   return y,st
-# end
-
-function (l::GraphAttentionLayer{<:FullGraphLayer,MultiHeadAttention})(x,ps,st)
-  Q,K,V = attention_matrices(x,ps)
-  nk = l.attention.attention.nkeys
-  k = sqrt(nk)
-  y = zeros(size(x))
-  for s in vertices(l.graph)
-    α = 0.0
-    for t in neighbors(l.graph,s)
-      @views α += softmax(Q[:,s]' * K[:,t] / k)
-    end
-    @views y[s,:] += α * V[:,t]
-  end
-  return y,st
-end
-
-struct HAMLETLayer <: IntegralKernel
-  # fields 
+struct HAMLETLayer{A<:AttentionModel} <: IntegralKernel
+  attention::A
 end
 
 """

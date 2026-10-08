@@ -131,17 +131,34 @@ function rescale!(data::AbstractArray,stats::Normalisation)
   data
 end
 
-# Data types
+# Gridap
 
 function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)
   map(get_free_dof_coordinates,V.spaces)
 end
 
+# Data types
+
+struct FeaturesBundle{A<:Tuple}
+  bundle::A
+end
+
+FeaturesBundle(args::Function...) = FeaturesBundle(args)
+
+function get_features(f::FeaturesBundle,op::ParamOperator,r::Realisation)
+  trial = get_trial(op)(r)
+  features = zeros(num_free_dofs(trial),length(f.bundle),num_params(r))
+  @inbounds @views for (j,f) in enumerate(f.bundle)
+    fh = interpolate(f,trial)
+    fv = get_free_dof_values(fh)
+    for k in param_eachindex(fv)
+      features[:,j,k] = param_getindex(fv,k)
+    end
+  end
+  return features
+end
+
 # utils
-
-get_dof_to_nodes(b) = @abstractmethod
-get_dof_to_nodes(b::LagrangianDofBasis) = b.nodes[b.dof_to_node]
-
 
 function get_formatted_data(::Type{T},values,times) where T
   d = T.(matrix_of_values(values))
