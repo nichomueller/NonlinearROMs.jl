@@ -36,6 +36,27 @@ struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
   activation::D
 end
 
+function KernelNeuralModel(;
+  lifting_layers,
+  kernel_configs,
+  projection_layers,
+  activation=tanh
+)
+  KernelNeuralModel(
+    Tuple(lifting_layers),
+    Tuple(kernel_configs),
+    Tuple(projection_layers),
+    activation
+  )
+end
+
+struct GNO{K<:KernelNeuralModel,R<:Real} <: AbstractKernelModel
+    kernel_model::K
+    radius::R
+end
+
+GNO(kernel_model::KernelNeuralModel;radius=1.0) = GNO(kernel_model,radius)
+
 """
     struct DeepONet{N,A} <: CoordinateNeuralModel
       branch_layers::NTuple{N,Int}
@@ -258,6 +279,45 @@ function build_lux_chain(layers::Tuple,activation)
     l = (l...,Lux.Dense(layers[i-1] => layers[i],activation))
   end
   Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
+end
+
+function build_model(model::GNO,args...)
+  arch = model.kernel_model
+  
+  # Lifting
+  lifting_net = build_lux_chain(arch.lifting_layers,arch.activation)
+  lifting_layers = Lux.Chain(
+    Lux.WrappedFunction(g -> (get_features(g),g.edge_index,g.edge_weights)),
+    Lux.Parallel(
+        GraphData,            # Aggregation function
+        lifting_net,        # v
+        Lux.NoOpLayer(),    # edge_index
+        Lux.NoOpLayer()     # edge_weights
+        )
+  )
+  
+  # Kernel iterations
+  hidden_dim = arch.lifting_layers[end]
+  num_kernel_layers = length(arch.kernel_configs)
+  
+  kernel_layers = [
+    NeuralLayer(
+        GNOKernel(Lux.Dense(2 * hidden_dim + 1 => hidden_dim)),
+        Lux.Dense(hidden_dim => hidden_dim),
+        (hidden_dim,1,1),
+        arch.activation
+    )
+    for _ in 1:num_kernel_layers
+  ]
+  
+  # Projection
+  projection_net = build_lux_chain(arch.projection_layers,arch.activation)
+  projection_layers = Lux.Chain(
+    Lux.WrappedFunction(get_features),
+    projection_net
+  )
+  
+  Lux.Chain(lifting_layers,kernel_layers...,projection_layers)
 end
 
 # Create a DeepONet layers

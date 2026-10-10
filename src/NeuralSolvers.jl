@@ -37,6 +37,7 @@ end
 
 RBSteady.get_state_reduction(solver::NeuralSolver) = solver.reduction
 RBSteady.get_reduction(solver::NeuralSolver) = solver.reduction
+get_sampler(solver::NeuralSolver) = get_sampler(get_reduction(solver))
 
 """
     struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
@@ -165,49 +166,69 @@ end
 
 function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
   # Prepare input
-  inputs = get_inputs(solver,op,r)
+  inputs = get_inputs(solver,op.op,r)
+  normalise!(inputs,op.model.stats)
+  formatted_inputs = prepare_inference_input(get_reduction(solver),inputs)
   
   # Inference
   t = @timed begin
-    pred = op.model(inputs)
+    pred = first(op.model.chain(formatted_inputs,op.model.parameters,op.model.states))
+    rescale!(pred,op.model.stats)
   end
 
   # Prepare output
   output = to_snapshots(pred,r)
-  stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")
+  stats = CostTracker(t,nruns=num_params(r),name="Neural Operator Inference")
 
   return output,stats
 end
 
 # utils
 
+prepare_inference_input(::NeuralReduction,inputs) = inputs
+
+prepare_inference_input(::DeepONetReduction,(x,p)) = (p,x)
+prepare_inference_input(::NOMADReduction,(x,p)) = (p,x)
+
+prepare_inference_input(::AbstractKernelReduction,(x,p)) = tensor_of_coords(x,p)
+function prepare_inference_input(red::GNOReduction,(x,p))
+    # Get unified tensor
+    tensor = tensor_of_coords(x,p)
+    
+    # Topology reconstruction
+    graph = build_graph(DistanceGraph(red.model.radius),x)
+    edge_index,edge_weights = get_edge_tensors(graph)
+    
+    return GraphData(tensor,edge_index,edge_weights)
+end
+
 function get_inputs_and_stats(args...;normalise=true)
   inputs = get_inputs(args...)
-  stats = Normalisation(inputs;normalise)
+  stats = Normalisation(inputs...;normalise)
   return inputs,stats
 end
 
 function get_inputs(solver::NeuralSolver,op::ParamOperator,s::AbstractSnapshots)
-  data = get_param_data(s)
-  r = get_realisation(s)
-  get_inputs(solver,op,data,r)
-end
-
-function get_inputs(solver::NeuralSolver,op::ParamOperator,values,r::AbstractRealisation)
+  sampler = get_sampler(solver)
+  sp = param_sample(sampler,s)
+  data = get_param_data(sp)
+  r = get_realisation(sp)
   trial = get_trial(op)
   coords = get_free_dof_coordinates(trial)
-  get_inputs(solver,values,coords,r)
+  d_mat,x_mat,p_mat = get_formatted_inputs(data,coords,r)
+  sd_mat = sample(sampler.space_sampler,d_mat,1)
+  sx_mat = sample(sampler.space_sampler,x_mat,1)
+  return (sd_mat,sx_mat,p_mat)
 end
 
 function get_inputs(solver::NeuralSolver,op::ParamOperator,r::AbstractRealisation)
+  sampler = get_sampler(solver)
+  sr = sample(sampler,r)
   trial = get_trial(op)
   coords = get_free_dof_coordinates(trial)
-  get_inputs(solver,coords,r)
-end
-
-function get_inputs(solver::NeuralSolver,inputs...)
-  sinputs = sample(solver,inputs...)
-  get_formatted_inputs(sinputs...)
+  x_mat,p_mat = get_formatted_inputs(coords,sr)
+  sx_mat = sample(sampler.space_sampler,x_mat,1)
+  return (sx_mat,p_mat)
 end
 
 function get_formatted_inputs(args...)
@@ -243,6 +264,18 @@ function get_formatted_inputs(::Type{T},values,r::TransientRealisation) where T
 end
 
 function get_formatted_inputs(::Type{T},coords::AbstractVector{<:Point},r::AbstractRealisation) where T
+  x = T.(matrix_of_coords(coords))
+  p = T.(matrix_of_params(r))
+  return (x,p)
+end
+
+function get_formatted_inputs(::Type{T},coords::AbstractVector{<:Point},r::TransientRealisation) where T
+  x = T.(matrix_of_coords(coords,get_times(r)))
+  p = T.(matrix_of_params(r))
+  return (x,p)
+end
+
+function get_formatted_inputs(::Type{T},coords::AbstractVector{<:Point},r::Realisation) where T
   x = T.(matrix_of_coords(coords))
   p = T.(matrix_of_params(r))
   return (x,p)
