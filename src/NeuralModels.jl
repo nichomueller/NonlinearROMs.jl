@@ -16,13 +16,6 @@ Abstract supertype for neural models that evaluate the solution point-by-point u
 abstract type CoordinateNeuralModel <: NeuralModel end
 
 """
-    abstract type AbstractKernelModel <: NeuralModel end
-
-Abstract supertype for all kernel-based neural operator architectures.
-"""
-abstract type AbstractKernelModel <: NeuralModel end
-
-"""
     struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
       lifting::A
       kernel_layers::NTuple{N,B}
@@ -33,7 +26,7 @@ abstract type AbstractKernelModel <: NeuralModel end
 Generic architecture for kernel-based neural models.
 It maps an input function to an output function through three main stages:
 1. Lifting (P): A local operator mapping input features to a higher-dimensional hidden representation.
-2. Iterative Kernel Integration: A sequence of `NeuralLayer`s representing the non-local processing.
+2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
 struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
@@ -281,16 +274,11 @@ end
 build_model(::NeuralModel,args...) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
-  lux_layers = []
-  for i in 1:(length(layers)-1)
-    if i < length(layers)-1
-      push!(lux_layers,Lux.Dense(layers[i] => layers[i+1],activation))
-    else
-      # last layer (no activation)
-      push!(lux_layers,Lux.Dense(layers[i] => layers[i+1]))
-    end
+  l = ()
+  for i in 2:(length(layers)-1)
+    l = (l...,Lux.Dense(layers[i-1] => layers[i],activation))
   end
-  Lux.Chain(lux_layers...)
+  Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
 end
 
 function build_model(model::GNO,args...)
@@ -335,7 +323,7 @@ end
 # Create a DeepONet layers
 function LuxDeepONet(branch_net,trunk_net)
   Lux.Chain(
-    # Process inputs (u,y) independently,then matrix-multiply them
+    # Process inputs (u,y) independently, then matrix-multiply them
     Lux.Parallel(
       *;
       # Branch: process 'u' -> shape (Features,Batch)
@@ -359,7 +347,7 @@ end
 
 function LuxNOMAD(approximator_net,decoder_net)
   Lux.Chain(
-    # Apply approximator to 'u',pass 'y' untouched,and concatenate them (vcat)
+    # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
     Lux.Parallel(
       vcat;
       approximator = approximator_net,
@@ -378,18 +366,15 @@ end
 
 function build_model(model::AutoEncoder,(values,coords,params))
   n = size(values,1)
-  hidden = model.hidden_layers[1:end-1]
-  latent_dim = last(model.hidden_layers)
-  encoder = build_lux_chain((n,hidden...,latent_dim),model.activation)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
+  encoder = build_lux_chain((n,model.hidden_layers...),model.activation)
+  decoder = build_lux_chain((reverse(model.hidden_layers)...,n),model.activation)
   Lux.Chain(encoder,decoder)
 end
 
 function build_model(model::AutoDecoder,(values,coords,params))
   n,ntrain = size(values,1),size(values,2)
-  hidden = model.hidden_layers[1:end-1]
   latent_dim = last(model.hidden_layers)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
+  decoder = build_lux_chain((reverse(model.hidden_layers)...,n),model.activation)
   Z0 = randn(Float32,latent_dim,ntrain) .* 0.01f0
   Lux.Chain(LatentCodeLayer(Z0),decoder)
 end

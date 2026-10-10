@@ -109,10 +109,7 @@ include("GraphsInterface.jl")
 
 export LatentCodeLayer
 export VAELayer
-export NeuralLayer
-export GraphData
-export get_features
-export update_features
+export KernelNeuralLayer
 include("NeuralLayers.jl")
 
 export NeuralModel

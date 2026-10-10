@@ -71,8 +71,7 @@ function build_graph!(
   )
 
   for (dof,coord) in enumerate(dof_to_coords)
-    coord′ = get_array(ForwardDiff.value(coord))
-    dofs = inrange(tree,coord′,s.radius)
+    dofs = inrange(tree,coord,s.radius)
     for neighbor in dofs
       w = norm(coord - dof_to_coords[neighbor])
       add_edge!(g,dof,neighbor,w)
@@ -97,4 +96,6 @@ function get_edge_tensors(graph)
   end
   
   return edge_index,edge_weights
+function sample_subgraph(g::AbstractGraph,l::Int)
+  induced_subgraph(g,rand(1:nv(g),l))
 end
