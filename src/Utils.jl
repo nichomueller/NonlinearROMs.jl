@@ -139,6 +139,12 @@ end
 
 # Data types
 
+struct CloudOfPoints{A<:AbstractArray,B<:AbstractArray,C<:AbstractRealisation}
+  values::A
+  coords::B
+  params::C
+end
+
 struct FeaturesBundle{A<:Tuple}
   bundle::A
 end
