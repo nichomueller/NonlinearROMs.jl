@@ -28,15 +28,33 @@ abstract type GraphStrategy end
 
 struct NoGraph <: GraphStrategy end
 
-struct DistanceGraph{A<:Real}
+struct DistanceGraph{A<:Real} <: GraphStrategy
   radius::A
 end
 
 DistanceGraph(;radius=1.0) = DistanceGraph(radius)
 
-function build_graph(cs::CoordStrategy,gs::DistanceGraph,f::FunctionSpace)
+function build_graph(gs::DistanceGraph,cs::CoordStrategy,f::FunctionSpace)
   x = get_coords(cs,f)
   build_graph(x;radius=gs.radius)
+end
+
+function build_graph(gs::DistanceGraph,f::FunctionSpace)
+  x = get_coords(f)
+  build_graph(x;radius=gs.radius)
+end
+
+struct NystromSubgraphs{A<:GraphStrategy} <: GraphStrategy
+  strategy::A
+  nsub::Int
+  dsub::Int
+end
+
+NystromSubgraphs(gs::GraphStrategy,nsub::Int) = NystromSubgraphs(gs,nsub,5)
+
+function build_graph(gs::NystromSubgraphs,args...)
+  g = build_graph(gs.strategy,args...)
+  NystromSubgraphIterator(g,gs.nsub,gs.dsub)
 end
 
 struct DataFormatter{A<:CoordStrategy,B<:GraphStrategy}
@@ -74,13 +92,13 @@ end
 function fetch_data(cs::CoordStrategy,gs::DistanceGraph,f::FunctionSpace,a::FeaturesBundle)
   x = get_coords(cs,gs,f)
   features = get_features(cs,a,f)
-  graph = build_graph(cs,gs,f)
+  graph = build_graph(gs,cs,f)
   (x,features,graph)
 end
 
 function fetch_data(cs::NoCoord,gs::DistanceGraph,f::FunctionSpace,a::FeaturesBundle)
   features = get_features(cs,a,f)
-  graph = build_graph(cs,gs,f)
+  graph = build_graph(gs,cs,f)
   (features,graph)
 end
 
@@ -122,45 +140,17 @@ function _features_size(uf,f,a)
 end
 
 function _features_size(uf::FESpace,f,a)
-  nx = length(get_coords(f))
+  nx = num_coords(f)
   nb = length(a.bundle)
   (nx,nb)
 end
 
 function _features_size(uf::SingleFieldParamFESpace,f,a)
-  nx = length(get_coords(f))
+  nx = num_coords(f)
   nb = length(a.bundle)
   np = param_length(uf)
   (nx,nb,np)
 end
-
-# function init_features(f,a::FeaturesBundle)
-#   field = testitem(get_data(first(a.bundle)))
-#   T = eltype2(get_vector_type(f))
-#   s = _features_size(field,f,a)
-#   zeros(T,s...)
-# end
-
-# function _init_features(::Field,f,a)
-#   nx = length(get_coords(f))
-#   nb = length(a.bundle)
-#   (nx,nb)
-# end
-
-# function _init_features(item::GenericField{<:ParamFunction},f,a)
-#   nx = length(get_coords(f))
-#   nb = length(a.bundle)
-#   np = num_params(item.object)
-#   (nx,nb,np)
-# end
-
-# function _init_features(item::GenericField{<:TransientParamFunction},f,a)
-#   nx = length(get_coords(f))
-#   nt = num_times(item.object)
-#   nb = length(a.bundle)
-#   np = num_params(item.object)
-#   (nx,nt,nb,np)
-# end
 
 function set_features!(cache,interp,j)
   @view cache[:,j] .= get_interp_values(interp)

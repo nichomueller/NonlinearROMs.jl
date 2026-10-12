@@ -60,37 +60,37 @@ A dynamic learning rate scheduler that reduces the learning rate by a multiplica
 - `min_lr::Float32`: The absolute minimum learning rate boundary. The scheduler will not decay below this value (default: `1e-6f0`).
 - `start_lr::Float32`: The initial learning rate at the beginning of the training (default: `0.001f0`).
 """
-struct ReduceLROnPlateau <: LRScheduler
-  patience::Int
-  factor::Float32
-  min_lr::Float32
-  wait::Base.Ref{Int}
-  best_loss::Base.Ref{Float32}
-  current_lr::Base.Ref{Float32}
+mutable struct ReduceLROnPlateau <: LRScheduler
+  const patience::Int
+  const factor::Float32
+  const min_lr::Float32
+  wait::Int
+  best_loss::Float32
+  current_lr::Float32
 end
 
 function ReduceLROnPlateau(;patience=100,factor=0.5f0,min_lr=1f-6,start_lr=0.001f0)
-  ReduceLROnPlateau(patience,factor,min_lr,Base.Ref(0),Base.Ref(Inf32),Base.Ref(start_lr))
+  ReduceLROnPlateau(patience,factor,min_lr,0,Inf32,start_lr)
 end
 
-get_lr(s::ReduceLROnPlateau) = s.current_lr[]
+get_lr(s::ReduceLROnPlateau) = s.current_lr
 
 function step_scheduler!(s::ReduceLROnPlateau,opt_state,epoch,current_loss;verbose::Bool=false)
-  if current_loss < s.best_loss[]
-    s.best_loss[] = current_loss
-    s.wait[] = 0
+  if current_loss < s.best_loss
+    s.best_loss = current_loss
+    s.wait = 0
   else
-    s.wait[] += 1
+    s.wait += 1
   end
 
-  if s.wait[] >= s.patience
-    new_lr = max(s.current_lr[] * s.factor,s.min_lr)
-    if new_lr < s.current_lr[]
-      verbose && @info "Plateau reached: LR decreased from $(s.current_lr[]) to $new_lr"
-      s.current_lr[] = new_lr
+  if s.wait >= s.patience
+    new_lr = max(s.current_lr * s.factor,s.min_lr)
+    if new_lr < s.current_lr
+      verbose && @info "Plateau reached: LR decreased from $(s.current_lr) to $new_lr"
+      s.current_lr = new_lr
       Optimisers.adjust!(opt_state,new_lr)
     end
-    s.wait[] = 0
+    s.wait = 0
   end
 end
 
