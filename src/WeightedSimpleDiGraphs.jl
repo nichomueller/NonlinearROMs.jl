@@ -238,3 +238,27 @@ function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   end
   return sparse(I,J,V,n,n)
 end
+
+# utils
+
+function build_graph(coords::AbstractVector;kwargs...)
+  data = map(x -> SVector(Tuple(x)),coords)
+  tree = BallTree(data)
+  g = WeightedSimpleDiGraph(length(coords))
+  build_graph!(g,tree,coords;kwargs...)
+end
+
+function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
+  for (i,coord) in enumerate(coords)
+    neighbors = inrange(tree,coord,radius)
+    for neighbor in neighbors
+      w = norm(coord - coords[neighbor])
+      add_edge!(g,i,neighbor,w)
+    end
+  end
+  g
+end
+
+function sample_subgraph(g::AbstractGraph,l::Int)
+  induced_subgraph(g,rand(1:nv(g),l))
+end
