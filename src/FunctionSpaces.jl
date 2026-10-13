@@ -4,24 +4,17 @@
 # case 3: multiple spaces, each with a different mesh
 # -> several cell fields, several measures
 
-abstract type FunctionSpace end
+abstract type DiscreteSpace end
 
-get_measure(f::FunctionSpace;kwargs...) = @abstractmethod
-get_coords(f::FunctionSpace) = @abstractmethod
-num_coords(f::FunctionSpace) = length(get_coords(f))
-assemble_integral(a,f::FunctionSpace) = @abstractmethod
+get_coords(f::DiscreteSpace) = @abstractmethod
+num_coords(f::DiscreteSpace) = length(get_coords(f))
 
-function CellData.integrate(a,f::FunctionSpace)
-  dc = integrate(a,get_measure(f))
-  assemble_integral(dc,f)
-end
+abstract type FunctionSpace <: DiscreteSpace end
+
+abstract type GraphInducedSpace <: DiscreteSpace end
 
 function interpolation_values(f::FunctionSpace,a::CellField)
   a(get_coords(f))
-end
-
-function build_graph(f::FunctionSpace,args...;kwargs...)
-  build_graph(get_coords(f),args...;kwargs...)
 end
 
 struct SimpleSpace{A} <: FunctionSpace
@@ -63,11 +56,6 @@ function interpolation_values(f::FunctionSpace,a::FEFunction)
   end
 end
 
-function assemble_integral(a,f::SimpleFESpace)
-  vecdata = collect_cell_vector(a,f.space)
-  assemble_vector(f.space,vecdata)
-end
-
 abstract type SpaceStyle end
 struct CommonDomain <: SpaceStyle end
 struct MultiDomain <: SpaceStyle end
@@ -91,10 +79,6 @@ function MultiSpace(spaces::AbstractVector)
 end
 
 get_coords(f::MultiSpace) = f.coords
-
-function CellData.integrate(a,f::MultiSpace{MultiDomain})
-  sum(map(f -> integrate(a,f),f.spaces))
-end
 
 # utils
 

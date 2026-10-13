@@ -4,66 +4,32 @@ end
 
 CoordsSampler() = CoordsSampler(:)
 
-function get_coords(s::CoordsSampler,f::FunctionSpace)
+function sample_coords(s::CoordsSampler,f::DiscreteSpace)
   x = get_coords(f)
   view(x,s.strategy)
 end
 
-struct CoordStrategy{A,B}
+struct DataFormatter{A,B}
   pass_coords::Val{A}
   sampler::CoordsSampler{B}
 end
 
-const NoCoord{B} = CoordStrategy{False,B}
-
-function CoordStrategy(;pass_coords=Val{true}(),sampler=CoordsSampler())
-  CoordStrategy(pass_coords,sampler)
+function DataFormatter(;pass_coords=Val{true}(),sampler=CoordsSampler())
+  DataFormatter(pass_coords,sampler)
 end
 
-function get_coords(cs::CoordStrategy,f::FunctionSpace)
-  get_coords(cs.sampler,f)
+function fetch_data(d::DataFormatter,f::DiscreteSpace,args...)
+  _fetch_data(d,f,args...)
 end
 
-abstract type GraphStrategy end
-
-struct NoGraph <: GraphStrategy end
-
-struct DistanceGraph{A<:Real} <: GraphStrategy
-  radius::A
+function fetch_data(d::DataFormatter,f::GraphInducedSpace,args...)
+  mat = _fetch_data(d,f,args...)
+  
 end
 
-DistanceGraph(;radius=1.0) = DistanceGraph(radius)
-
-function build_graph(gs::DistanceGraph,cs::CoordStrategy,f::FunctionSpace)
-  x = get_coords(cs,f)
-  build_graph(x;radius=gs.radius)
-end
-
-function build_graph(gs::DistanceGraph,f::FunctionSpace)
-  x = get_coords(f)
-  build_graph(x;radius=gs.radius)
-end
-
-struct NystromSubgraphs{A<:GraphStrategy} <: GraphStrategy
-  strategy::A
-  nsub::Int
-  dsub::Int
-end
-
-NystromSubgraphs(gs::GraphStrategy,nsub::Int) = NystromSubgraphs(gs,nsub,5)
-
-function build_graph(gs::NystromSubgraphs,args...)
-  g = build_graph(gs.strategy,args...)
-  NystromSubgraphIterator(g,gs.nsub,gs.dsub)
-end
-
-struct DataFormatter{A<:CoordStrategy,B<:GraphStrategy}
-  coord_strategy::A
-  graph_strategy::B
-end
-
-function DataFormatter(;coord_strategy=CoordStrategy(),graph_strategy=NoGraph())
-  DataFormatter(coord_strategy,graph_strategy)
+function _fetch_data(d::DataFormatter,f::InducedMeasure,args...)
+  x = sample_coords(d.sampler,f)
+  matrix_of_coords(x)
 end
 
 # bundles
@@ -74,7 +40,7 @@ end
 
 const FeaturesBundle{A<:Tuple{Vararg{CellField}}} = Bundle{A}
 
-function get_features(a::FeaturesBundle,f::FunctionSpace)
+function get_features(a::FeaturesBundle,f::DiscreteSpace)
   features = init_features(f,a)
   @inbounds for (j,a) in enumerate(a.bundle)
     af = interpolation_values(a,f)
@@ -83,46 +49,86 @@ function get_features(a::FeaturesBundle,f::FunctionSpace)
   return features
 end
 
-function get_features(cs::CoordStrategy,args...)
+function sample_features(cs::CoordStrategy,args...)
   features = get_features(args...)
   c = ntuple(i->Colon(),Val{ndims(features)-1}())
   view(features,cs.sampler,c...)
 end
 
-function fetch_data(cs::CoordStrategy,gs::DistanceGraph,f::FunctionSpace,a::FeaturesBundle)
-  x = get_coords(cs,gs,f)
+function fetch_data(cs::CoordStrategy,f::DiscreteSpace,a::FeaturesBundle)
+  x = get_coords(cs,f)
   features = get_features(cs,a,f)
-  graph = build_graph(gs,cs,f)
   (x,features,graph)
 end
 
-function fetch_data(cs::NoCoord,gs::DistanceGraph,f::FunctionSpace,a::FeaturesBundle)
-  features = get_features(cs,a,f)
-  graph = build_graph(gs,cs,f)
-  (features,graph)
+function fetch_data(cs::DataFormatter{true},f::DiscreteSpace,a::FeaturesBundle)
+  get_features(cs,a,f)
 end
 
-function fetch_data(cs::CoordStrategy,gs::NoGraph,f::FunctionSpace,a::FeaturesBundle)
-  x = get_coords(cs,gs,f)
-  features = get_features(cs,a,f)
-  (x,features)
-end
-
-function fetch_data(cs::NoCoord,gs::NoGraph,f::FunctionSpace,a::FeaturesBundle)
-  features = get_features(cs,a,f)
-  (features,)
-end
-
-function fetch_data(d::DataFormatter,f::FunctionSpace,a::FeaturesBundle)
+function fetch_data(d::DataFormatter,f::DiscreteSpace,a::FeaturesBundle)
   fetch_data(d.coord_strategy,d.graph_strategy,f,a)
 end
 
 # for the training, we also pass the snapshots values
-function fetch_data(d::DataFormatter,f::FunctionSpace,a::FeaturesBundle,sols::Bundle)
+function fetch_data(d::DataFormatter,f::DiscreteSpace,a::FeaturesBundle,sols::Bundle)
   input = fetch_data(d,f,a)
   target = get_features(d.coord_strategy,sols,f)
   (input,target)
 end
+
+struct LayerData{A,B,C}
+  formatter::DataFormatter{A,B}
+  metadata::C
+end
+
+LayerData(formatter::DataFormatter) = LayerData(formatter,nothing)
+
+function fetch_data(d::LayerData,f::DiscreteSpace)
+  fetch_data(d.coord_strategy,d.graph_strategy,f,a)
+end
+
+const BundleLayerData{A,B} = LayerData{A,B,<:Bundle}
+
+# """
+#     gather_edge_features(v,g::AbstractGraph;extra=nothing) -> (...,ne(g)) array
+
+# Assembles the per-edge kernel input `[v(sender);v(receiver)]` (optionally with a
+# static per-vertex feature array `extra`, e.g. a PDE coefficient `a`, concatenated
+# in as `[v(sender);v(receiver);extra(sender);extra(receiver)]`), in `edges(g)` order
+# -- i.e. it builds the `x` that makes `κ(x,y,v(x),v(y))` (or, with `extra`,
+# `κ(x,y,a(x),a(y),v(x),v(y))`) a genuine per-edge, both-endpoints-dependent
+# evaluation, which `scatter`/`_integration` then aggregate back down to
+# one value per vertex. `v`/`extra` are `(channels,n_vertices)`, matching the
+# Lux/`NeuralModel` `(channels,batch)` convention.
+# """
+# function gather_edge_features(v::AbstractMatrix,g::AbstractGraph;extra=nothing)
+#   feats = isnothing(extra) ? v : vcat(v,extra)
+#   din = size(feats,1)
+#   out = zeros(eltype(feats),2*din,ne(g))
+#   for (k,e) in enumerate(edges(g))
+#     @views out[1:din,k] .= feats[:,src(e)]
+#     @views out[din+1:end,k] .= feats[:,dst(e)]
+#   end
+#   return out
+# end
+
+# """
+#     prepare_kernel_input(v,space) -> whatever the kernel network expects
+
+# Converts the raw hidden state `v` (`(channels,n_points)`, values at *every* point
+# of the function/graph `v` lives on) into whatever `num_coords(space)`-indexed input
+# a `KernelLayer` needs to be evaluated on, dispatching on `space`:
+# - FE-quadrature (`FunctionSpace`): identity -- `v` already is the nodal values at
+#   that space's own coordinates, so no assembly is needed.
+# - Graph: `gather_edge_features(v,space)` -- `κ(x,y,...)` depending on both
+#   endpoints needs the per-edge `[v(sender);v(receiver)]` pair, not `v` itself.
+
+# This is what lets `KernelNeuralLayer` call every `AbstractIntegralKernel` uniformly
+# with the same raw `v`, regardless of which non-local discretization it uses.
+# """
+# prepare_kernel_input(v,f::FunctionSpace) = v
+# prepare_kernel_input(v,g::AbstractGraph) = gather_edge_features(v,g)
+# prepare_kernel_input(v,meas::InducedMeasure) = prepare_kernel_input(v,get_space(meas))
 
 # utils
 

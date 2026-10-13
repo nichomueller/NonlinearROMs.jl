@@ -217,32 +217,34 @@ function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   return sparse(I,J,V,n,n)
 end
 
-# Graph with coordinates at vertices
+# Graph-induced spaces
 
 """
-    struct CoordinateGraph{D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}} <: Graphs.AbstractGraph{Ti}
+    struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
       graph::A
       coords::B
     end
 """
-struct CoordinateGraph{D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}} <: Graphs.AbstractGraph{Ti}
+struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
   graph::A
   coords::B
-  function CoordinateGraph{D,Ti,Tc,A,B}(graph::A,coords::B) where {D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}}
+  function CoordinateGraph(graph::A,coords::B) where {A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}}
     @check nv(graph) == length(coords) "CoordinateGraph needs exactly one coordinate per vertex"
-    new{D,Ti,Tc,A,B}(graph,coords)
+    new{A,B}(graph,coords)
   end
 end
 
-function CoordinateGraph(graph::Graphs.AbstractGraph{Ti},coords::AbstractVector{<:Point{D,Tc}}) where {D,Ti<:Integer,Tc<:Real}
-  CoordinateGraph{D,Ti,Tc,typeof(graph),typeof(coords)}(graph,coords)
+function GraphInducedSpace(space::DiscreteSpace;kwargs...)
+  coords = get_coords(space)
+  g = build_graph(coords;kwargs...)
+  CoordinateGraph(g,coords)
 end
 
 get_coords(g::CoordinateGraph) = g.coords
 get_coords(g::CoordinateGraph,v::Integer) = g.coords[v]
 
 Graphs.edgetype(g::CoordinateGraph) = Graphs.edgetype(g.graph)
-Graphs.is_directed(::Type{<:CoordinateGraph{D,Ti,Tc,A}}) where {D,Ti,Tc,A} = Graphs.is_directed(A)
+Graphs.is_directed(::Type{<:CoordinateGraph{A}}) where A = Graphs.is_directed(A)
 
 Graphs.nv(g::CoordinateGraph) = nv(g.graph)
 Graphs.ne(g::CoordinateGraph) = ne(g.graph)
