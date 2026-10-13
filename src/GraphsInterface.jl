@@ -284,3 +284,60 @@ function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radiu
   end
   g
 end
+
+# message-passing on graphs
+
+"""
+    scatter(vals,g::AbstractGraph) -> per-vertex array
+
+Sums `vals` (one column per edge, in `edges(g)` order; leading axes = channels) into
+its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building block
+behind both the uniform-mean aggregation used by `_integrate_over(a,::AbstractGraph)`
+(plain GNO) and the softmax-weighted aggregation in `softmax_weights`/`AttentionKernel`
+(HAMLET): the only difference between the two is what's summed -- `vals` itself for a
+fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
+"""
+function scatter(vals::AbstractVector,g::AbstractGraph)
+  out = zeros(eltype(vals),nv(g))
+  for (k,e) in enumerate(edges(g))
+    out[dst(e)] += vals[k]
+  end
+  return out
+end
+
+function scatter(vals::AbstractMatrix,g::AbstractGraph)
+  out = zeros(eltype(vals),size(vals,1),nv(g))
+  for (k,e) in enumerate(edges(g))
+    @views out[:,dst(e)] .+= vals[:,k]
+  end
+  return out
+end
+
+"""
+    softmax_weights(scores::AbstractVector,g::AbstractGraph) -> per-edge weights
+
+Normalizes `scores` (one per edge) into attention weights
+"""
+function softmax_weights(scores::AbstractVector{T},g::AbstractGraph) where T
+  dsts = zeros(Int,length(edges(g)))
+  for (k,e) in enumerate(edges(g))
+    dsts[k] = dst(e)
+  end
+
+  maxs = fill(T(-Inf),nv(g))
+  for (k,d) in enumerate(dsts)
+    maxs[d] = max(maxs[d],scores[k])
+  end
+
+  α = similar(scores)
+  sums = zeros(T,nv(g))
+  for (k,d) in enumerate(dsts)
+    α[k] = exp(scores[k]-maxs[d])
+    sums[d] += α[k]
+  end
+  for (k,d) in enumerate(dsts)
+    α[k] /= sums[d]
+  end
+
+  return α
+end

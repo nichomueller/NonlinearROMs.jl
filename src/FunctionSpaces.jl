@@ -9,10 +9,11 @@ abstract type FunctionSpace end
 get_measure(f::FunctionSpace;kwargs...) = @abstractmethod
 get_coords(f::FunctionSpace) = @abstractmethod
 num_coords(f::FunctionSpace) = length(get_coords(f))
+assemble_integral(a,f::FunctionSpace) = @abstractmethod
 
 function CellData.integrate(a,f::FunctionSpace)
   dc = integrate(a,get_measure(f))
-  sum(dc)
+  assemble_integral(dc,f)
 end
 
 function interpolation_values(f::FunctionSpace,a::CellField)
@@ -58,95 +59,86 @@ function interpolation_values(f::FunctionSpace,a::FEFunction)
   end
 end
 
+function assemble_integral(a,f::SimpleFESpace)
+  vecdata = collect_cell_vector(a,f.space)
+  assemble_vector(f.space,vecdata)
+end
+
 abstract type SpaceStyle end
 struct CommonDomain <: SpaceStyle end
 struct MultiDomain <: SpaceStyle end
 
-function same_domain(a,b)
-  @notimplemented "Do this"
-end
-
-function same_domain(a::FESpace,b::FESpace)
-  trian_a = get_triangulation(a)
-  trian_b = get_triangulation(b)
-  CellData.is_change_possible(trian_a,trian_b)
-end
-
-function same_domain(a::SimpleSpace,b::SimpleSpace)
-  same_domain(a.space,b.space)
-end
-
-function same_domain(a,b...)
-  c,d... = b
-  if same_domain(a,c)
-    same_domain(c,d...)
-  else
-    return false
-  end
-end
-
-function build_coords(::CommonDomain,spaces::AbstractVector{<:FESpace})
-  f = first(spaces)
-  get_free_dof_coordinates(f)
-end
-
-function build_coords(::MultiDomain,spaces::AbstractVector{<:FESpace})
-  coords = map(f -> Set(get_free_dof_coordinates(f)),spaces)
-  ∪(coords...)
-end
-
-function build_coord_to_lcoords(::CommonDomain,spaces::AbstractVector{<:FESpace},coords)
-  f = first(spaces)
-  v = IdentityVector(num_coords(f))
-  Fill(v,length(spaces))
-end
-
-function build_coord_to_lcoords(::MultiDomain,spaces::AbstractVector{<:FESpace},coords)
-  vv = Vector{Vector{Int}}(undef,length(spaces))
-  for (i,f) in enumerate(spaces)
-    lcoords = get_free_dof_coordinates(f)
-    vv[i] = build_coord_to_lcoords(coords,lcoords)
-  end
-  vv
-end
-
-function build_coord_to_lcoords(coords,lcoords)
-  v = zeros(Int,length(lcoords))
-  for (i,lc) in enumerate(lcoords)
-    v[i] = findfirst(x -> x == lc,coords)
-  end
-  v
-end
-
-# TODO I cannot have CommonDomain, otherwise I'd be counting 2+ times the same 
-# integral. Either the spaces are disjoint, or I must instantiate a SimpleSpace
-struct MultiSpace{A<:SpaceStyle,B<:AbstractVector{<:SimpleSpace},C<:AbstractVector{<:Point},D<:AbstractVector{<:AbstractVector{<:Integer}}} <: FunctionSpace
+struct MultiSpace{A<:SpaceStyle,B<:AbstractVector{<:SimpleSpace},C<:AbstractVector,D<:Table,E<:AbstractVector} <: FunctionSpace
   style::A
   spaces::B
   coords::C
+  lcoord_to_coords::D
   coord_to_lcoords::D
-end
-
-function MultiSpace(style::SpaceStyle,spaces::AbstractVector{<:SimpleSpace})
-  coords = build_coords(style,spaces)
-  MultiSpace(style,spaces,coords)
+  multiplicity::E
 end
 
 function MultiSpace(spaces::AbstractVector{<:SimpleSpace})
-  style = same_domain(spaces...) ? CommonDomain() : MultiDomain()
-  MultiSpace(style,spaces)
+  style,coords,lcoord_to_coords,coord_to_lcoords,multiplicity = _coords_info(spaces)
+  MultiSpace(style,spaces,coords,lcoord_to_coords,coord_to_lcoords,multiplicity)
 end
 
-function MultiSpace(spaces::AbstractVector{<:FESpace})
+function MultiSpace(spaces::AbstractVector)
   MultiSpace(map(SimpleSpace,spaces))
-end
-
-function get_measure(f::MultiSpace{CommonDomain};kwargs...)
-  get_measure(first(f.spaces);kwargs...)
 end
 
 get_coords(f::MultiSpace) = f.coords
 
 function CellData.integrate(a,f::MultiSpace{MultiDomain})
   sum(map(f -> integrate(a,f),f.spaces))
+end
+
+# utils
+
+function _a_to_b(a,b)
+  a2b = zeros(Int,length(b))
+  for (i,bi) in enumerate(b)
+    a2b[i] = findfirst(x -> x == bi,a)
+  end
+  a2b
+end
+
+function build_lcoord_to_coords(lcoords,coords)
+  data = zeros(Int,length(lcoords)*length(coords))
+  ptrs = ones(Int32,length(lcoords)+1)
+  for (i,lc) in enumerate(lcoords)
+    ptrs[i+1] = ptrs[i] + length(lc)
+    @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(lc,coords)
+  end
+  Table(data,ptrs)
+end
+
+function build_coord_to_lcoords(coords,lcoords)
+  data = zeros(Int,sum(map(length,lcoords)))
+  ptrs = ones(Int32,length(lcoords)+1)
+  for (i,lc) in enumerate(lcoords)
+    ptrs[i+1] = ptrs[i] + length(lc)
+    @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(coords,lc)
+  end
+  Table(data,ptrs)
+end
+
+function build_multiplicity(coord_to_lcoords,ncoords)
+  mult = zeros(Int,ncoords)
+  for lc in coord_to_lcoords
+    for g in lc
+      mult[g] += 1
+    end
+  end
+  mult
+end
+
+function _coords_info(spaces)
+  _coords = map(get_coords,spaces)
+  sets = map(Set,_coords)
+  coords = ∪(sets...)
+  style = isempty(∩(sets...)) ? MultiDomain() : CommonDomain()
+  lcoord_to_coords = build_lcoord_to_coords(_coords,coords)
+  coord_to_lcoords = build_coord_to_lcoords(coords,_coords)
+  multiplicity = build_multiplicity(coord_to_lcoords,length(coords))
+  style,coords,lcoord_to_coords,coord_to_lcoords,multiplicity
 end
