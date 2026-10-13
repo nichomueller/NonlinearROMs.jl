@@ -74,9 +74,11 @@ using GridapROMs.RBSteady
 using GridapROMs.RBTransient
 using GridapROMs.Utils
 
+import Lux: AbstractLuxLayer
 import GridapROMs.RBSteady:
   GlobalRBSolver,GlobalContext,get_reduction,get_state_reduction,get_interpolation,
   allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
+import Random: AbstractRNG
 import StaticArrays: SVector
 
 export TrainingLog

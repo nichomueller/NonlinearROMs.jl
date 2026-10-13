@@ -1,49 +1,25 @@
-abstract type KernelLayer <: Lux.AbstractLuxLayer end
-
-function Lux.initialstates(rng::Random.AbstractRNG,l::KernelLayer)
-  return (
-    kernel = NamedTuple(),
-  )
-end
-
-struct NeuralKernel{A<:NeuralModel} <: KernelLayer
-  model::A
-end
-
-function Lux.initialparameters(rng::Random.AbstractRNG,l::NeuralKernel)
-  return Lux.initialparameters(rng,l.model)
-end
-
-function (l::NeuralKernel)(x,ps,st)
-  l.model(x,ps,st)
-end
-
-abstract type AbstractIntegralKernel <: Lux.AbstractLuxLayer end
+abstract type AbstractIntegralKernel <: AbstractLuxLayer end
 
 # we potentially want to replace the space with a new one during the online phase
 # thus we make this struct mutable
-mutable struct IntegralKernel{A<:KernelLayer,B<:InducedMeasure} <: AbstractIntegralKernel
+mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure} <: AbstractIntegralKernel
   const kernel::A
   measure::B
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::IntegralKernel)
+function Lux.initialparameters(rng::AbstractRNG,l::IntegralKernel)
   Lux.initialparameters(rng,l.kernel)
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::IntegralKernel)
+function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
   Lux.initialstates(rng,l.kernel)
 end
 
+# `v` is the raw hidden state (channels x n_points)
 function (l::IntegralKernel)(v,ps,st)
-  # `v` is the raw hidden state (channels x n_points); prepare_kernel_input turns it
-  # into whatever num_coords(l.measure)-indexed input l.kernel actually needs (the
-  # identity for FE-quadrature, the per-edge [v(sender);v(receiver)] pair for a
-  # graph). vals is dout x Nh (channels x batch, the Lux/NeuralModel convention):
-  # Nh is the last axis, and it's what gets integrated over (next line).
   x = prepare_kernel_input(v,l.measure)
   vals,st = l.kernel(x,ps,st)
-  y = integrate_over(vals,l.measure)
+  y = integration(vals,l.measure)
   return y,st
 end
 
@@ -53,9 +29,15 @@ struct FourierKernel <: AbstractIntegralKernel
   truncation::Int
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::FourierKernel)
+function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
   return (
     kernel = rand(rng,Uniform(-1,1),l.truncation,l.out_channels,l.in_channels),
+  )
+end
+
+function Lux.initialstates(rng::AbstractRNG,l::FourierKernel)
+  return (
+    kernel = NamedTuple(),
   )
 end
 
@@ -67,7 +49,7 @@ function (l::FourierKernel)(x,ps,st)
 end
 
 """
-    struct AttentionKernel{A<:KernelLayer,B<:KernelLayer,C<:AbstractGraph} <: AbstractIntegralKernel
+    struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:AbstractGraph} <: AbstractIntegralKernel
       score::A
       value::B
       graph::C
@@ -82,20 +64,20 @@ produces the per-edge message to be aggregated. Every vertex's incoming edges ar
 softmax-normalized (`softmax_weights`) before the weighted sum, replacing the
 fixed `1/degree` averaging a plain `IntegralKernel`+graph `InducedMeasure` uses.
 """
-struct AttentionKernel{A<:KernelLayer,B<:KernelLayer,C<:AbstractGraph} <: AbstractIntegralKernel
+struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:AbstractGraph} <: AbstractIntegralKernel
   score::A
   value::B
   graph::C
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::AttentionKernel)
+function Lux.initialparameters(rng::AbstractRNG,l::AttentionKernel)
   return (
     score = Lux.initialparameters(rng,l.score),
     value = Lux.initialparameters(rng,l.value),
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::AttentionKernel)
+function Lux.initialstates(rng::AbstractRNG,l::AttentionKernel)
   return (
     score = Lux.initialstates(rng,l.score),
     value = Lux.initialstates(rng,l.value),
@@ -107,12 +89,12 @@ function (l::AttentionKernel)(v,ps,st)
   s,st_score = l.score(x,ps.score,st.score)
   val,st_value = l.value(x,ps.value,st.value)
   α = softmax_weights(vec(s),l.graph)
-  y = scatter_by_dst(α' .* val,l.graph)
+  y = scatter(α' .* val,l.graph)
   return y,(score=st_score,value=st_value)
 end
 
 """
-    struct KernelNeuralLayer{A<:AbstractIntegralKernel,B} <: Lux.AbstractLuxLayer
+    struct KernelNeuralLayer{A<:AbstractIntegralKernel,B} <: AbstractLuxLayer
       kernel::A
       din::Int
       dout::Int
@@ -128,18 +110,8 @@ v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 `AttentionKernel`, ...). The pointwise local linear term `W`, bias `b`, and
 nonlinearity `σ` are owned by this layer, not by `kernel`, since they're the same
 shape/role regardless of which non-local discretization `kernel` uses.
-
-Only genuinely composes as a per-`x` layer today for graph-based kernels (one
-output per vertex, via `_integrate_over(a,::AbstractGraph)`) and `FourierKernel`.
-`IntegralKernel` wrapping an FE-quadrature `InducedMeasure` collapses to a single
-scalar per channel (`_integrate_over(a,::SimpleFESpace)` integrates the whole
-domain down to one number) rather than one value per query point, so it only
-makes sense here for a kernel with no real `x`-dependence or as a global
-pooling/projection term -- not as a general per-`x` kernel layer. Giving FE
-quadrature a proper per-point output (dense pairwise quadrature, not just a
-single aggregate) hasn't been done yet.
 """
-struct KernelNeuralLayer{A<:AbstractIntegralKernel,B} <: Lux.AbstractLuxLayer
+struct KernelNeuralLayer{A<:AbstractIntegralKernel,B} <: AbstractLuxLayer
   kernel::A
   din::Int
   dout::Int
@@ -150,7 +122,7 @@ function KernelNeuralLayer(kernel::AbstractIntegralKernel,din::Int,dout::Int;act
   KernelNeuralLayer(kernel,din,dout,activation)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::KernelNeuralLayer)
+function Lux.initialparameters(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,l.kernel),
     weights = Lux.glorot_uniform(rng,l.dout,l.din),
@@ -158,7 +130,7 @@ function Lux.initialparameters(rng::Random.AbstractRNG,l::KernelNeuralLayer)
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::KernelNeuralLayer)
+function Lux.initialstates(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialstates(rng,l.kernel),
   )

@@ -20,6 +20,10 @@ function interpolation_values(f::FunctionSpace,a::CellField)
   a(get_coords(f))
 end
 
+function build_graph(f::FunctionSpace,args...;kwargs...)
+  build_graph(get_coords(f),args...;kwargs...)
+end
+
 struct SimpleSpace{A} <: FunctionSpace
   space::A
 end

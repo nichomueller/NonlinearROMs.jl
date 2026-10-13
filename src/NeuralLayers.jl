@@ -1,9 +1,9 @@
 """
-    abstract type IntegralKernel <: Lux.AbstractLuxLayer end
+    abstract type IntegralKernel <: AbstractLuxLayer end
 
 Abstract supertype for integral kernel implementations used within the iterative layers.
 """
-abstract type IntegralKernel <: Lux.AbstractLuxLayer end
+abstract type IntegralKernel <: AbstractLuxLayer end
 
 input_size(l::IntegralKernel) = @abstractmethod
 output_size(l::IntegralKernel) = @abstractmethod
@@ -31,13 +31,13 @@ function FourierLayer(n::Int,nchannels::Int;kwargs...)
   FourierLayer((n,nchannels);kwargs...)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::FourierLayer)
+function Lux.initialparameters(rng::AbstractRNG,l::FourierLayer)
   return (
     kernel = rand(rng,Uniform(-1,1),l.kmax...,nchannels(l),nchannels(l)),
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::FourierLayer)
+function Lux.initialstates(rng::AbstractRNG,l::FourierLayer)
   return (
     kernel = NamedTuple(),
   )
@@ -71,13 +71,13 @@ const NystromGraphLayer{B<:NeuralModel,C<:WeightedSimpleDiGraph} = GraphLayer{Ny
 input_size(l::GraphLayer) = input_size(l.model)
 output_size(l::GraphLayer) = output_size(l.model)
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::GraphLayer)
+function Lux.initialparameters(rng::AbstractRNG,l::GraphLayer)
   return (
     model = initialparameters(rng,l.model),
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::GraphLayer)
+function Lux.initialstates(rng::AbstractRNG,l::GraphLayer)
   return (
     model = initialstates(rng,l.model),
   )
@@ -113,7 +113,7 @@ end
 
 abstract type AttentionModel <: IntegralKernel end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::AttentionModel)
+function Lux.initialstates(rng::AbstractRNG,l::AttentionModel)
   return (
     kernel = NamedTuple(),
   )
@@ -129,7 +129,7 @@ function SingleHeadAttention(;nkeys=10,nvalues=nkeys,dimension=100)
   SingleHeadAttention(nkeys,nvalues,dimension)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::SingleHeadAttention)
+function Lux.initialparameters(rng::AbstractRNG,l::SingleHeadAttention)
   return (
     queries = rand(rng,l.dimension,l.nkeys),
     keys = rand(rng,l.dimension,l.nkeys),
@@ -154,7 +154,7 @@ function SingleHeadAttention(graph::GraphLayer;nkeys=10,nvalues=nkeys,dimension=
   GraphSingleHeadAttention(graph,nkeys,nvalues,dimension)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::SingleHeadAttention)
+function Lux.initialparameters(rng::AbstractRNG,l::SingleHeadAttention)
   return (
     queries = rand(rng,l.dimension,l.nkeys),
     keys = rand(rng,l.dimension,l.nkeys),
@@ -227,13 +227,13 @@ function MultiHeadAttention(graph::GraphLayer;nheads=1,nkeys=10,nvalues=nkeys,di
   MultiHeadAttention(attention,nheads)
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::MultiHeadAttention)
+function Lux.initialparameters(rng::AbstractRNG,l::MultiHeadAttention)
   return (
     heads = (Lux.initialparameters(rng,l.attention) for _ in 1:l.nheads),
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::MultiHeadAttention)
+function Lux.initialstates(rng::AbstractRNG,l::MultiHeadAttention)
   return (
     heads = (Lux.initialstates(rng,l.attention) for _ in 1:l.nheads),
   )
@@ -253,7 +253,7 @@ struct HAMLETLayer{A<:AttentionModel} <: IntegralKernel
 end
 
 """
-    struct KernelNeuralLayer{A<:IntegralKernel,B,C,D} <: Lux.AbstractLuxLayer
+    struct KernelNeuralLayer{A<:IntegralKernel,B,C,D} <: AbstractLuxLayer
       kernel::A
       weights::B
       bias::C
@@ -267,7 +267,7 @@ It computes the update: vₜ₊₁(x) = σ(Wₜ vₜ(x) + (Kₜ vₜ)(x) + bₜ(
 - `bias` represents the dimensions of the learnable pointwise bias.
 - `activation` (σ) is a fixed pointwise non-linearity.
 """
-struct KernelNeuralLayer{A<:IntegralKernel,B<:Broadcasting} <: Lux.AbstractLuxLayer
+struct KernelNeuralLayer{A<:IntegralKernel,B<:Broadcasting} <: AbstractLuxLayer
   kernel::A
   activation::B
 end
@@ -276,7 +276,7 @@ function KernelNeuralLayer(kernel::IntegralKernel,activation::Function)
   KernelNeuralLayer(kernel,Broadcasting(activation))
 end
 
-function Lux.initialparameters(rng::Random.AbstractRNG,l::KernelNeuralLayer)
+function Lux.initialparameters(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,l.kernel),
     weights = rand(rng,input_length(l.kernel),output_length(l.kernel)),
@@ -284,7 +284,7 @@ function Lux.initialparameters(rng::Random.AbstractRNG,l::KernelNeuralLayer)
   )
 end
 
-function Lux.initialstates(rng::Random.AbstractRNG,l::KernelNeuralLayer)
+function Lux.initialstates(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialstates(rng,l.kernel),
   )
@@ -305,7 +305,7 @@ function (layer::KernelNeuralLayer)(x,ps,st)
 end
 
 """
-    struct LatentCodeLayer{A<:AbstractMatrix} <: Lux.AbstractLuxLayer
+    struct LatentCodeLayer{A<:AbstractMatrix} <: AbstractLuxLayer
       init_codes::A
     end
 
@@ -313,12 +313,12 @@ A Lux layer with no real input: it ignores whatever it is called with and return
 `(latent_dim,n_train)` parameter matrix unchanged, so the per-sample latent codes of an
 [`AutoDecoder`](@ref) are optimised as ordinary Lux parameters jointly with the decoder.
 """
-struct LatentCodeLayer{A<:AbstractMatrix} <: Lux.AbstractLuxLayer
+struct LatentCodeLayer{A<:AbstractMatrix} <: AbstractLuxLayer
   init_codes::A
 end
 
-Lux.initialparameters(rng::Random.AbstractRNG,l::LatentCodeLayer) = (codes=copy(l.init_codes),)
-Lux.initialstates(rng::Random.AbstractRNG,l::LatentCodeLayer) = NamedTuple()
+Lux.initialparameters(rng::AbstractRNG,l::LatentCodeLayer) = (codes=copy(l.init_codes),)
+Lux.initialstates(rng::AbstractRNG,l::LatentCodeLayer) = NamedTuple()
 
 (l::LatentCodeLayer)(x,ps,st) = ps.codes,st
 
@@ -430,11 +430,11 @@ end
 #   kernel_net::K
 # end
 
-# function Lux.initialparameters(rng::Random.AbstractRNG,layer::GNOKernel)
+# function Lux.initialparameters(rng::AbstractRNG,layer::GNOKernel)
 #   return (kernel_net = Lux.initialparameters(rng,layer.kernel_net),)
 # end
 
-# function Lux.initialstates(rng::Random.AbstractRNG,layer::GNOKernel)
+# function Lux.initialstates(rng::AbstractRNG,layer::GNOKernel)
 #   return (kernel_net = Lux.initialstates(rng,layer.kernel_net),)
 # end
 

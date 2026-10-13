@@ -56,12 +56,6 @@ end
 WeightedSimpleDiGraph(n::Ti) where {Ti<:Integer} = WeightedSimpleDiGraph{Ti,Float64}(n)
 WeightedSimpleDiGraph() = WeightedSimpleDiGraph{Int,Float64}()
 
-"""
-    WeightedSimpleDiGraph(g::SimpleDiGraph,fw::Real=one(Float64),bw::Real=fw)
-
-Build a `WeightedSimpleDiGraph` from an existing `SimpleDiGraph`, assigning the
-constant weights `fw`/`bw` to every edge.
-"""
 function WeightedSimpleDiGraph(g::SimpleDiGraph{Ti},fw::Tv=1.0,bw::Tv=fw) where {Ti<:Integer,Tv<:Real}
   mg = WeightedSimpleDiGraph{Ti,Tv}(nv(g))
   for e in edges(g)
@@ -114,15 +108,6 @@ end
 
 # weighted edge insertion/removal
 
-"""
-    add_edge!(g::WeightedSimpleDiGraph,e,fw,bw=fw)
-    add_edge!(g::WeightedSimpleDiGraph,s,d,fw,bw=fw)
-
-Insert the directed edge `s -> d` with forward weight `fw` (cached on the
-`s`-side, next to `fadjlist[s]`) and backward weight `bw` (cached on the
-`d`-side, next to `badjlist[d]`). Returns `false` (and does not overwrite
-existing weights) if the edge is already present.
-"""
 function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},e::Edge{Ti},fw::Tv,bw::Tv=fw) where {Ti,Tv}
   s,d = Ti.(Tuple(e))
   verts = vertices(g)
@@ -217,13 +202,6 @@ Backward weights of the incoming edges of `v`, in the same order as
 """
 in_weights(g::WeightedSimpleDiGraph,v::Integer) = g.bweights[v]
 
-"""
-    Graphs.weights(g::WeightedSimpleDiGraph) -> SparseMatrixCSC
-
-The forward-weight adjacency matrix `W`, with `W[s,d]` equal to the forward
-weight of edge `s -> d` (zero where no edge exists), suitable for use as a
-`distmx` argument to Graphs.jl's shortest-path algorithms.
-"""
 function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   n = nv(g)
   I = Ti[]
@@ -239,31 +217,63 @@ function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   return sparse(I,J,V,n,n)
 end
 
-# Nystrom subgraphs
+# Graph with coordinates at vertices
 
-function sample_subgraph(g::AbstractGraph,l::Int)
-  induced_subgraph(g,rand(1:nv(g),l))
-end
-
-struct NystromSubgraphIterator{A<:AbstractGraph}
+"""
+    struct CoordinateGraph{D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}} <: Graphs.AbstractGraph{Ti}
+      graph::A
+      coords::B
+    end
+"""
+struct CoordinateGraph{D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}} <: Graphs.AbstractGraph{Ti}
   graph::A
-  nsub::Int
-  dsub::Int
-end
-
-function NystromSubgraphIterator(g::AbstractGraph,nsub::Int)
-  NystromSubgraphIterator(g,nsub,nv(g)÷nsub)
-end
-
-Base.length(g::NystromSubgraphIterator) = g.nsub
-
-function Base.iterate(g::NystromSubgraphIterator,state=1)
-  if state > g.nsub
-    return nothing
-  else
-    return (sample_subgraph(g.graph,g.dsub),state+1)
+  coords::B
+  function CoordinateGraph{D,Ti,Tc,A,B}(graph::A,coords::B) where {D,Ti<:Integer,Tc<:Real,A<:Graphs.AbstractGraph{Ti},B<:AbstractVector{<:Point{D,Tc}}}
+    @check nv(graph) == length(coords) "CoordinateGraph needs exactly one coordinate per vertex"
+    new{D,Ti,Tc,A,B}(graph,coords)
   end
 end
+
+function CoordinateGraph(graph::Graphs.AbstractGraph{Ti},coords::AbstractVector{<:Point{D,Tc}}) where {D,Ti<:Integer,Tc<:Real}
+  CoordinateGraph{D,Ti,Tc,typeof(graph),typeof(coords)}(graph,coords)
+end
+
+get_coords(g::CoordinateGraph) = g.coords
+get_coords(g::CoordinateGraph,v::Integer) = g.coords[v]
+
+Graphs.edgetype(g::CoordinateGraph) = Graphs.edgetype(g.graph)
+Graphs.is_directed(::Type{<:CoordinateGraph{D,Ti,Tc,A}}) where {D,Ti,Tc,A} = Graphs.is_directed(A)
+
+Graphs.nv(g::CoordinateGraph) = nv(g.graph)
+Graphs.ne(g::CoordinateGraph) = ne(g.graph)
+Graphs.vertices(g::CoordinateGraph) = vertices(g.graph)
+Graphs.edges(g::CoordinateGraph) = edges(g.graph)
+Graphs.has_vertex(g::CoordinateGraph,v::Integer) = has_vertex(g.graph,v)
+Graphs.has_edge(g::CoordinateGraph,s,d) = has_edge(g.graph,s,d)
+Graphs.has_edge(g::CoordinateGraph,e::Edge) = has_edge(g.graph,e)
+Graphs.outneighbors(g::CoordinateGraph,v::Integer) = outneighbors(g.graph,v)
+Graphs.inneighbors(g::CoordinateGraph,v::Integer) = inneighbors(g.graph,v)
+
+function Graphs.add_edge!(g::CoordinateGraph,args...)
+  add_edge!(g.graph,args...)
+end
+
+function Graphs.rem_edge!(g::CoordinateGraph,args...)
+  rem_edge!(g.graph,args...)
+end
+
+function Graphs.add_vertex!(g::CoordinateGraph,coord::Point)
+  ok = add_vertex!(g.graph)
+  ok && push!(g.coords,coord)
+  return ok
+end
+
+Base.copy(g::CoordinateGraph) = CoordinateGraph(copy(g.graph),copy(g.coords))
+Base.:(==)(g::CoordinateGraph,h::CoordinateGraph) = g.graph == h.graph && g.coords == h.coords
+
+get_weight(g::CoordinateGraph,args...) = get_weight(g.graph,args...)
+out_weights(g::CoordinateGraph,v::Integer) = out_weights(g.graph,v)
+in_weights(g::CoordinateGraph,v::Integer) = in_weights(g.graph,v)
 
 # utils
 
@@ -272,11 +282,13 @@ function build_graph(coords::AbstractVector;kwargs...)
   tree = BallTree(data)
   g = WeightedSimpleDiGraph(length(coords))
   build_graph!(g,tree,coords;kwargs...)
+  return CoordinateGraph(g,coords)
 end
 
 function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
   for (i,coord) in enumerate(coords)
-    neighbors = inrange(tree,coord,radius)
+    q = SVector(Tuple(coord))
+    neighbors = inrange(tree,q,radius)
     for neighbor in neighbors
       w = norm(coord - coords[neighbor])
       add_edge!(g,i,neighbor,w)
@@ -292,7 +304,7 @@ end
 
 Sums `vals` (one column per edge, in `edges(g)` order; leading axes = channels) into
 its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building block
-behind both the uniform-mean aggregation used by `_integrate_over(a,::AbstractGraph)`
+behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph)`
 (plain GNO) and the softmax-weighted aggregation in `softmax_weights`/`AttentionKernel`
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
