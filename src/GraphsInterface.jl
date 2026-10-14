@@ -301,13 +301,23 @@ end
 
 # message-passing on graphs
 
+function gather(vals::AbstractMatrix,g::AbstractGraph)
+  dim = size(vals,1)
+  out = zeros(eltype(feats),2*size(vals,1),ne(g))
+  for (k,e) in enumerate(edges(g))
+    @views out[1:dim,k] .+= vals[:,src(e)]
+    @views out[dim+1:end,k] .+= vals[:,dst(e)]
+  end
+  return out
+end
+
 """
     scatter(vals,g::AbstractGraph) -> per-vertex array
 
 Sums `vals` (one column per edge, in `edges(g)` order; leading axes = channels) into
 its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building block
 behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph)`
-(plain GNO) and the softmax-weighted aggregation in `softmax_weights`/`AttentionKernel`
+(plain GNO) and the softmax-weighted aggregation in `attention`/`AttentionKernel`
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 """
@@ -328,11 +338,11 @@ function scatter(vals::AbstractMatrix,g::AbstractGraph)
 end
 
 """
-    softmax_weights(scores::AbstractVector,g::AbstractGraph) -> per-edge weights
+    attention(scores::AbstractVector,g::AbstractGraph) -> per-edge weights
 
 Normalizes `scores` (one per edge) into attention weights
 """
-function softmax_weights(scores::AbstractVector{T},g::AbstractGraph) where T
+function attention(scores::AbstractVector{T},g::AbstractGraph) where T
   dsts = zeros(Int,length(edges(g)))
   for (k,e) in enumerate(edges(g))
     dsts[k] = dst(e)

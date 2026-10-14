@@ -13,8 +13,9 @@ abstract type FunctionSpace <: DiscreteSpace end
 
 abstract type GraphInducedSpace <: DiscreteSpace end
 
-function interpolation_values(f::FunctionSpace,a::CellField)
-  a(get_coords(f))
+function interpolation_values(f::FunctionSpace,a)
+  x = get_coords(f)
+  evaluate(a,x)
 end
 
 struct SimpleSpace{A} <: FunctionSpace
@@ -30,31 +31,6 @@ function get_measure(f::SimpleFESpace;factor=2)
 end
 
 get_coords(f::SimpleFESpace) = get_free_dof_coordinates(f.space)
-
-function interpolation_values(f::SimpleFESpace,a::CellField)
-  trian_a = get_triangulation(a)
-  trian_f = get_triangulation(f.space)
-  if CellData.is_change_possible(trian_a,trian_f)
-    fv = zero_free_values(f.space)
-    cv = FESpaces._cell_vals(f.space,a)
-    gather_free_values!(fv,f.space,cv)
-  else
-    a(get_coords(f))
-  end
-end
-
-function interpolation_values(f::FunctionSpace,a::FEFunction)
-  f.space === get_fe_space(a) && return get_free_dof_values(a)
-  trian_a = get_triangulation(a)
-  trian_f = get_triangulation(f.space)
-  if CellData.is_change_possible(trian_a,trian_f)
-    fv = zero_free_values(f.space)
-    cv = FESpaces._cell_vals(f.space,a)
-    gather_free_values!(fv,f.space,cv)
-  else
-    a(get_coords(f))
-  end
-end
 
 abstract type SpaceStyle end
 struct CommonDomain <: SpaceStyle end
