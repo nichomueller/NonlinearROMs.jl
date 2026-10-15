@@ -76,12 +76,12 @@ function _integration(a::AbstractMatrix,meas::FSpaceMeasure{<:MultiSpace})
   return int
 end
 
-struct GraphMeasure{A<:AbstractGraph,B<:AbstractVector} <: InducedMeasure
+struct GraphMeasure{A<:GraphInducedSpace,B<:AbstractVector} <: InducedMeasure
   graph::A
   weights::B
 end
 
-function InducedMeasure(graph::AbstractGraph)
+function InducedMeasure(graph::GraphInducedSpace)
   w = zeros(Int,nv(graph))
   for e in edges(graph)
     w[dst(e)] += 1

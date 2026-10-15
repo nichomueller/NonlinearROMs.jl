@@ -1,3 +1,32 @@
+struct RoPELayer{A<:AbstractLuxLayer,T} <: AbstractLuxLayer
+  layer::A
+  rotation::Matrix{T}
+end
+
+function RoPELayer(in_dims::Int,out_dims::Int;kwargs...)
+  layer = Dense(in_dims=>out_dims;kwargs...)
+  rotation = _rotations_matrix(Float32,out_dims)
+  return RoPELayer(layer,rotation)
+end
+
+function Lux.initialparameters(rng::AbstractRNG,l::RoPELayer)
+  return (
+    layer = Lux.initialparameters(rng,l.layer),
+  )
+end
+
+function Lux.initialstates(rng::AbstractRNG,l::RoPELayer)
+  return (
+    layer = Lux.initialstates(rng,l.layer),
+  )
+end
+
+function (l::RoPELayer)(x,ps,st)
+  y,st_layer = l.layer(x,ps.layer,st.layer)
+  z = rotation * y
+  return z,(layer=st_layer,)
+end
+
 abstract type AbstractIntegralKernel <: AbstractLuxLayer end
 
 get_measure(l::AbstractIntegralKernel) = @abstractmethod
@@ -49,26 +78,10 @@ function (l::FourierKernel)(x,ps,st)
   return y,st
 end
 
-"""
-    struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:AbstractGraph} <: AbstractIntegralKernel
-      score::A
-      value::B
-      graph::C
-    end
-
-Data-dependent (learned) aggregation kernel: Kovachki et al.'s nonlinear case
-`κ(x,y,v(x),v(y))`, but with the measure itself learned rather than fixed -- the
-builin_dimsg block for attention/transformer-style neural operators (HAMLET = GNO +
-attention). `x` (typically `gather_edge_features(v,graph)`) is evaluated by both
-sub-kernels: `score` produces one scalar compatibility score per edge, `value`
-produces the per-edge message to be aggregated. Every vertex's incoming edges are
-softmax-normalized (`attention`) before the weighted sum, replacing the
-fixed `1/degree` averaging a plain `IntegralKernel`+graph `InducedMeasure` uses.
-"""
-struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:AbstractGraph} <: AbstractIntegralKernel
-  score::A
-  value::B
-  graph::C
+mutable struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure} <: AbstractIntegralKernel
+  const score::A
+  const value::B
+  measure::C
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::AttentionKernel)
@@ -88,10 +101,49 @@ end
 function (l::AttentionKernel)(x,ps,st)
   s,st_score = l.score(x,ps.score,st.score)
   val,st_value = l.value(x,ps.value,st.value)
-  α = attention(vec(s),l.graph)
-  y = scatter(α' .* val,l.graph)
+  y = attention_integral(s,val,l.measure)
   return y,(score=st_score,value=st_value)
 end
+
+struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure} <: AbstractIntegralKernel
+  const scores::A
+  const values::B
+  const aggregation::C
+  measure::D
+end
+
+function Lux.initialparameters(rng::AbstractRNG,l::MultipleAttentionKernel{N}) where N
+  return (
+    score = ntuple(i -> Lux.initialparameters(rng,l.scores[i]),Val(N)),
+    value = ntuple(i -> Lux.initialparameters(rng,l.values[i]),Val(N)),
+    aggregation = Lux.initialparameters(rng,l.aggregation),
+  )
+end
+
+function Lux.initialstates(rng::AbstractRNG,l::MultipleAttentionKernel{N}) where N
+  return (
+    score = ntuple(i -> Lux.initialstates(rng,l.scores[i]),Val(N)),
+    value = ntuple(i -> Lux.initialstates(rng,l.values[i]),Val(N)),
+    aggregation = Lux.initialstates(rng,l.aggregation),
+  )
+end
+
+function (l::MultipleAttentionKernel{N})(x,ps,st) where N
+  st_score = ()
+  st_value = ()
+  y = ()
+  for i in 1:N
+    si,st_scorei = l.scores[i](x,ps.score[i],st.score[i])
+    vali,st_valuei = l.values[i](x,ps.value[i],st.value[i])
+    st_score = (st_score...,st_scorei)
+    st_value = (st_value...,st_valuei)
+    y = (y...,attention_integral(si,vali,l.measure))
+  end
+  z,st_aggregation = l.aggregation(hcat(y...),ps.aggregation,st.aggregation)
+  return z,(score=st_score,value=st_value,aggregation=st_aggregation)
+end
+
+# implement the attention layer + RoPE
 
 """
     struct KernelNeuralLayer{A<:AbstractIntegralKernel,B} <: AbstractLuxLayer
@@ -160,11 +212,46 @@ end
 
 # utils
 
+function _fill_block!(b,θ)
+  @check size(b) == (2,2) "Rotation block must be 2x2"
+  b[1,1] = cos(θ)
+  b[1,2] = -sin(θ)
+  b[2,1] = sin(θ)
+  b[2,2] = cos(θ)
+  b
+end
+
+function _fill_rotations!(mat,Θ)
+  @inbounds @views for k in eachindex(Θ)
+    b = mat[(k-1)*2+1:k*2,(k-1)*2+1:k*2]
+    _fill_block!(b,Θ[k])
+  end
+  mat
+end
+
+function _rotations_matrix(::Type{T},d) where T
+  Θ = zeros(T,div(d,2))
+  for k in eachindex(Θ)
+    Θ[k] = T(10000)^(-2*(k-1)/d)
+  end
+  mat = zeros(T,d,d)
+  _fill_rotations!(mat,Θ)
+end
+
 function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
   k,in_dims,out_dims = size(W)
   A = reshape(permutedims(W,(2,1,3)),k*out_dims,in_dims)
   b = vec(x)
   reshape(A*b,k,out_dims)
+end
+
+function attention_integral(scores,values,meas::InducedMeasure)
+  @notimplemented "Provided a measure of type $(typeof(meas)); consider passing a `GraphInducedMeasure` instead."
+end
+
+function attention_integral(scores,values,meas::GraphInducedMeasure)
+  α = attention(scores,meas.graph)
+  scatter(α'.*values,meas.graph)
 end
 
 function get_layer_data(l::KernelNeuralLayer,x)
