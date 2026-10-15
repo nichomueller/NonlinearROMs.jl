@@ -1,12 +1,22 @@
-struct RoPELayer{A<:AbstractLuxLayer,T} <: AbstractLuxLayer
+"""
+    RoPELayer(in_dims, out_dims; kwargs...)
+
+Dense projection followed by rotary positional encoding. The input is a
+`(features, coordinates)` tuple, where features have shape
+`(in_dims × npoints)` and coordinates have shape `(ndims × npoints)` (a vector
+is accepted for one-dimensional coordinates). Each adjacent feature pair is
+rotated by a phase derived from the corresponding point's physical coordinates;
+an odd final feature is left unchanged.
+"""
+struct RoPELayer{A<:AbstractLuxLayer,T<:AbstractVector} <: AbstractLuxLayer
   layer::A
-  rotation::Matrix{T}
+  inverse_frequencies::T
 end
 
 function RoPELayer(in_dims::Int,out_dims::Int;kwargs...)
   layer = Dense(in_dims=>out_dims;kwargs...)
-  rotation = _rotations_matrix(Float32,out_dims)
-  return RoPELayer(layer,rotation)
+  inverse_frequencies = Float32[10000^(-2*(k-1)/out_dims) for k in 1:div(out_dims,2)]
+  return RoPELayer(layer,inverse_frequencies)
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::RoPELayer)
@@ -21,10 +31,37 @@ function Lux.initialstates(rng::AbstractRNG,l::RoPELayer)
   )
 end
 
-function (l::RoPELayer)(x,ps,st)
-  y,st_layer = l.layer(x,ps.layer,st.layer)
-  z = rotation * y
+function (l::RoPELayer)(x::Tuple,ps,st)
+  @check length(x) == 2 "RoPELayer input must be a (features, coordinates) tuple"
+  features,coordinates = x
+  y,st_layer = l.layer(features,ps.layer,st.layer)
+  z = _apply_rope(y,coordinates,l.inverse_frequencies)
   return z,(layer=st_layer,)
+end
+
+function _apply_rope(y::AbstractMatrix,coordinates::AbstractVector,inverse_frequencies)
+  _apply_rope(y,reshape(coordinates,1,:),inverse_frequencies)
+end
+
+function _apply_rope(y::AbstractMatrix,coordinates::AbstractMatrix,inverse_frequencies)
+  npoints = size(y,2)
+  @check size(coordinates,2) == npoints "Coordinates must have one column per point"
+  @check size(coordinates,1) > 0 "At least one coordinate dimension is required"
+  @check div(size(y,1),2) == length(inverse_frequencies) "There must be one rotary frequency per feature pair"
+  z = similar(y)
+  @inbounds for k in eachindex(inverse_frequencies)
+    i = 2*k-1
+    axis = mod1(k,size(coordinates,1))
+    θ = coordinates[axis,:] .* inverse_frequencies[k]
+    c = cos.(θ)
+    s = sin.(θ)
+    @views z[i,:] .= c .* y[i,:] .- s .* y[i+1,:]
+    @views z[i+1,:] .= s .* y[i,:] .+ c .* y[i+1,:]
+  end
+  if isodd(size(y,1))
+    @views z[end,:] .= y[end,:]
+  end
+  return z
 end
 
 abstract type AbstractIntegralKernel <: AbstractLuxLayer end
@@ -212,32 +249,6 @@ end
 
 # utils
 
-function _fill_block!(b,θ)
-  @check size(b) == (2,2) "Rotation block must be 2x2"
-  b[1,1] = cos(θ)
-  b[1,2] = -sin(θ)
-  b[2,1] = sin(θ)
-  b[2,2] = cos(θ)
-  b
-end
-
-function _fill_rotations!(mat,Θ)
-  @inbounds @views for k in eachindex(Θ)
-    b = mat[(k-1)*2+1:k*2,(k-1)*2+1:k*2]
-    _fill_block!(b,Θ[k])
-  end
-  mat
-end
-
-function _rotations_matrix(::Type{T},d) where T
-  Θ = zeros(T,div(d,2))
-  for k in eachindex(Θ)
-    Θ[k] = T(10000)^(-2*(k-1)/d)
-  end
-  mat = zeros(T,d,d)
-  _fill_rotations!(mat,Θ)
-end
-
 function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
   k,in_dims,out_dims = size(W)
   A = reshape(permutedims(W,(2,1,3)),k*out_dims,in_dims)
@@ -246,12 +257,17 @@ function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
 end
 
 function attention_integral(scores,values,meas::InducedMeasure)
-  @notimplemented "Provided a measure of type $(typeof(meas)); consider passing a `GraphInducedMeasure` instead."
+  @notimplemented "Attention integration is not implemented for measure type $(typeof(meas))."
 end
 
-function attention_integral(scores,values,meas::GraphInducedMeasure)
-  α = attention(scores,meas.graph)
-  scatter(α'.*values,meas.graph)
+function attention_integral(scores,values,meas::GraphMeasure{<:NystromGraphSpace})
+  @notimplemented "Attention integration is not implemented for Nyström graph spaces."
+end
+
+function attention_integral(scores,values,meas::GraphMeasure)
+  graph = get_space(meas)
+  α = attention(vec(scores),graph)
+  scatter(α'.*values,graph)
 end
 
 function get_layer_data(l::KernelNeuralLayer,x)

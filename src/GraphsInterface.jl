@@ -219,13 +219,15 @@ end
 
 # Graph-induced spaces
 
+get_graph(space::GraphInducedSpace) = @abstractmethod
+
 """
     struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
       graph::A
       coords::B
     end
 """
-struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
+struct CoordinateGraph{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
   graph::A
   coords::B
   function CoordinateGraph(graph::A,coords::B) where {A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}}
@@ -234,48 +236,35 @@ struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: Gr
   end
 end
 
+function GraphInducedSpace(g::AbstractGraph,coords::AbstractVector)
+  CoordinateGraph(g,coords)
+end
+
 function GraphInducedSpace(space::DiscreteSpace;kwargs...)
   coords = get_coords(space)
   g = build_graph(coords;kwargs...)
   CoordinateGraph(g,coords)
 end
 
-get_coords(g::CoordinateGraph) = g.coords
-get_coords(g::CoordinateGraph,v::Integer) = g.coords[v]
+get_graph(space::CoordinateGraph) = space.graph
+get_coords(space::CoordinateGraph) = space.coords
 
-Graphs.edgetype(g::CoordinateGraph) = Graphs.edgetype(g.graph)
-Graphs.is_directed(::Type{<:CoordinateGraph{A}}) where A = Graphs.is_directed(A)
-
-Graphs.nv(g::CoordinateGraph) = nv(g.graph)
-Graphs.ne(g::CoordinateGraph) = ne(g.graph)
-Graphs.vertices(g::CoordinateGraph) = vertices(g.graph)
-Graphs.edges(g::CoordinateGraph) = edges(g.graph)
-Graphs.has_vertex(g::CoordinateGraph,v::Integer) = has_vertex(g.graph,v)
-Graphs.has_edge(g::CoordinateGraph,s,d) = has_edge(g.graph,s,d)
-Graphs.has_edge(g::CoordinateGraph,e::Edge) = has_edge(g.graph,e)
-Graphs.outneighbors(g::CoordinateGraph,v::Integer) = outneighbors(g.graph,v)
-Graphs.inneighbors(g::CoordinateGraph,v::Integer) = inneighbors(g.graph,v)
-
-function Graphs.add_edge!(g::CoordinateGraph,args...)
-  add_edge!(g.graph,args...)
+struct NystromSubspace{A<:AbstractGraph,B<:AbstractVector{<:Integer},C<:AbstractVector{<:Point}} <: GraphInducedSpace
+  graph::A
+  vertex_map::B
+  coords::C
 end
 
-function Graphs.rem_edge!(g::CoordinateGraph,args...)
-  rem_edge!(g.graph,args...)
+function NystromSubspace(rng::AbstractRNG,space::GraphInducedSpace;subgraph_size=100)
+  indices = randperm(rng,1:nv(get_graph(space)),subgraph_size)
+  g,vmap = induced_subgraph(get_graph(space),indices)
+  coords = view(get_coords(space),indices)
+  NystromSubspace(g,vmap,coords)
 end
 
-function Graphs.add_vertex!(g::CoordinateGraph,coord::Point)
-  ok = add_vertex!(g.graph)
-  ok && push!(g.coords,coord)
-  return ok
+function NystromSubspace(space::GraphInducedSpace;kwargs...)
+  NystromSubspace(Random.default_rng(),space;kwargs...)
 end
-
-Base.copy(g::CoordinateGraph) = CoordinateGraph(copy(g.graph),copy(g.coords))
-Base.:(==)(g::CoordinateGraph,h::CoordinateGraph) = g.graph == h.graph && g.coords == h.coords
-
-get_weight(g::CoordinateGraph,args...) = get_weight(g.graph,args...)
-out_weights(g::CoordinateGraph,v::Integer) = out_weights(g.graph,v)
-in_weights(g::CoordinateGraph,v::Integer) = in_weights(g.graph,v)
 
 # utils
 
@@ -299,14 +288,16 @@ function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radiu
   g
 end
 
-# message-passing on graphs
+# message-passing on graph and graph-induced spaces
 
 function gather(vals::AbstractMatrix,g::AbstractGraph)
-  dim = size(vals,1)
-  out = zeros(eltype(feats),2*size(vals,1),ne(g))
+  d,n = size(vals)
+  @check d == ne(g) "The first dimension must match the number of graph edges"
+  @check n == nv(g) "The final dimension must match the number of graph vertices"
+  out = zeros(eltype(vals),2*d,ne(g))
   for (k,e) in enumerate(edges(g))
-    @views out[1:dim,k] .+= vals[:,src(e)]
-    @views out[dim+1:end,k] .+= vals[:,dst(e)]
+    @views out[1:d,k] .+= vals[:,src(e)]
+    @views out[d+1:end,k] .+= vals[:,dst(e)]
   end
   return out
 end
@@ -322,6 +313,7 @@ behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 """
 function scatter(vals::AbstractVector,g::AbstractGraph)
+  @check length(vals) == ne(g) "The number of values must match the number of graph edges"
   out = zeros(eltype(vals),nv(g))
   for (k,e) in enumerate(edges(g))
     out[dst(e)] += vals[k]
@@ -330,6 +322,7 @@ function scatter(vals::AbstractVector,g::AbstractGraph)
 end
 
 function scatter(vals::AbstractMatrix,g::AbstractGraph)
+  @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
   out = zeros(eltype(vals),size(vals,1),nv(g))
   for (k,e) in enumerate(edges(g))
     @views out[:,dst(e)] .+= vals[:,k]
@@ -343,6 +336,7 @@ end
 Normalizes `scores` (one per edge) into attention weights
 """
 function attention(scores::AbstractVector{T},g::AbstractGraph) where T
+  @check length(scores) == ne(g) "The number of scores must match the number of graph edges"
   dsts = zeros(Int,length(edges(g)))
   for (k,e) in enumerate(edges(g))
     dsts[k] = dst(e)

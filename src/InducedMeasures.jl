@@ -89,6 +89,11 @@ function InducedMeasure(graph::GraphInducedSpace)
   return GraphMeasure(graph,w)
 end
 
+function InducedMeasure(graph::NystromGraphSpace)
+  weights = nystrom_apply(graph,ones(num_coords(graph)))
+  return GraphMeasure(graph,weights)
+end
+
 get_space(meas::GraphMeasure) = meas.graph
 
 function _integration(a::AbstractArray,meas::GraphMeasure)
@@ -98,18 +103,24 @@ function _integration(a::AbstractArray,meas::GraphMeasure)
   return out
 end
 
+function _integration(a::AbstractVecOrMat,meas::GraphMeasure{<:NystromGraphSpace})
+  out = nystrom_apply(get_space(meas),a)
+  _normalise!(out,meas.weights)
+  return out
+end
+
 # utils 
 
 function _normalise!(a::AbstractVector,weights::AbstractVector)
   for i in eachindex(a)
-    weights[i] > 0 && (a[i] /= weights[i])
+    !iszero(weights[i]) && (a[i] /= weights[i])
   end
   a
 end
 
 function _normalise!(a::AbstractMatrix,weights::AbstractVector)
   @views for i in eachindex(a)
-    weights[i] > 0 && (a[:,i] ./= weights[i])
+    !iszero(weights[i]) && (a[:,i] ./= weights[i])
   end
   a
 end
