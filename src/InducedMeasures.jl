@@ -77,34 +77,25 @@ function _integration(a::AbstractMatrix,meas::FSpaceMeasure{<:MultiSpace})
 end
 
 struct GraphMeasure{A<:GraphInducedSpace,B<:AbstractVector} <: InducedMeasure
-  graph::A
+  space::A
   weights::B
 end
 
-function InducedMeasure(graph::GraphInducedSpace)
+function InducedMeasure(space::GraphInducedSpace)
+  graph = get_graph(space)
   w = zeros(Int,nv(graph))
   for e in edges(graph)
     w[dst(e)] += 1
   end
-  return GraphMeasure(graph,w)
+  return GraphMeasure(space,w)
 end
 
-function InducedMeasure(graph::NystromGraphSpace)
-  weights = nystrom_apply(graph,ones(num_coords(graph)))
-  return GraphMeasure(graph,weights)
-end
-
-get_space(meas::GraphMeasure) = meas.graph
+get_space(meas::GraphMeasure) = meas.space
+get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
 function _integration(a::AbstractArray,meas::GraphMeasure)
-  graph = get_space(meas)
-  out = scatter(a,graph)
-  _normalise!(out,meas.weights)
-  return out
-end
-
-function _integration(a::AbstractVecOrMat,meas::GraphMeasure{<:NystromGraphSpace})
-  out = nystrom_apply(get_space(meas),a)
+  space = get_space(meas)
+  out = scatter(a,space)
   _normalise!(out,meas.weights)
   return out
 end

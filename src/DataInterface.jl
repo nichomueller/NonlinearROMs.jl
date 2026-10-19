@@ -61,7 +61,7 @@ function fetch_data(d::BundleDataFormatter{true},f::DiscreteSpace)
   x = sample_coords(d.sampler,f)
   mat = matrix_of_coords(x)
   features = sample_features(d.sampler,d.metadata,f)
-  vcat(mat,features)' # TODO this will surely break
+  stack((mat,features),dims=1)
 end
 
 function gather_data(d::DataFormatter,f::DiscreteSpace)
@@ -72,6 +72,18 @@ function gather_data(d::DataFormatter,f::GraphInducedSpace)
   data = fetch_data(d,f)
   gather(data,get_space(f))
 end
+
+struct LayerData{A,B}
+  pass_features::Val{A}
+  fixed_data::B
+end
+
+function LayerData(fixed_data;pass_features=Val{true}())
+  LayerData(pass_features,fixed_data)
+end
+
+gather_data(d::LayerData{false},x) = d.fixed_data
+gather_data(d::LayerData{true},x) = stack((d.fixed_data,x),dims=1)
 
 # utils
 
@@ -110,3 +122,10 @@ function set_features!(cache,interp::ConsecutiveParamVector,j)
 end
 
 #TODO missing interface for transient param functions
+
+# data formatter:
+# 1) x
+# 2) x, (a(x),...,f(x))
+# 3) x, vₜ(x)
+# 4) x, (a(x),...,f(x)), vₜ(x)
+# 5) DeepONet, NOMAD: branch: μ, trunk: x

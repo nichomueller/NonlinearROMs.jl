@@ -266,6 +266,9 @@ function NystromSubspace(space::GraphInducedSpace;kwargs...)
   NystromSubspace(Random.default_rng(),space;kwargs...)
 end
 
+get_graph(space::NystromSubspace) = space.graph
+get_coords(space::NystromSubspace) = space.coords
+
 # utils
 
 function build_graph(coords::AbstractVector;kwargs...)
@@ -358,4 +361,24 @@ function attention(scores::AbstractVector{T},g::AbstractGraph) where T
   end
 
   return α
+end
+
+# compatibility
+
+for f in (:gather,:scatter,:attention)
+  @eval $f(vals::AbstractArray,space::GraphInducedSpace) = $f(data_on_space(vals,space),get_graph(space))
+end
+
+data_on_space(valsa::AbstractArray,space::GraphInducedSpace) = vals
+
+function subvals(a::AbstractArray,space::NystromSubspace)
+  @notimplemented
+end
+
+function subvals(a::AbstractMatrix,space::NystromSubspace)
+  view(a,space.vertex_map,:)
+end
+
+function subvals(a::AbstractArray{T,3} where T,space::NystromSubspace)
+  view(a,:,space.vertex_map,:)
 end

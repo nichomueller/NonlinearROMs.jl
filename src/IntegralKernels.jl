@@ -66,14 +66,12 @@ end
 
 abstract type AbstractIntegralKernel <: AbstractLuxLayer end
 
-get_measure(l::AbstractIntegralKernel) = @abstractmethod
-get_space(l::AbstractIntegralKernel) = get_space(get_measure(l))
-
 # we potentially want to replace the space with a new one during the online phase
 # thus we make this struct mutable
-mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure} <: AbstractIntegralKernel
+mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:LayerData} <: AbstractIntegralKernel
   const kernel::A
   measure::B
+  formatter::C
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::IntegralKernel)
@@ -85,7 +83,8 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)(x,ps,st)
-  vals,st = l.kernel(x,ps,st)
+  v = gather_data(l.formatter,x)
+  vals,st = l.kernel(v,ps,st)
   y = integration(vals,l.measure)
   return y,st
 end
@@ -200,12 +199,11 @@ v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 nonlinearity `σ` are owned by this layer, not by `kernel`, since they're the same
 shape/role regardless of which non-local discretization `kernel` uses.
 """
-struct KernelNeuralLayer{A<:AbstractIntegralKernel,B<:Function,C<:DataFormatter} <: AbstractLuxLayer
+struct KernelNeuralLayer{A<:AbstractIntegralKernel,B<:Function} <: AbstractLuxLayer
   kernel::A
   in_dims::Int
   out_dims::Int
   activation::B
-  formatter::C
 end
 
 function KernelNeuralLayer(
@@ -216,8 +214,7 @@ function KernelNeuralLayer(
   kwargs...
   )
 
-  formatter = DataFormatter(;kwargs...)
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation,formatter)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
 function KernelNeuralLayer(kernel::AbstractIntegralKernel,dims::Pair,args...;kwargs...)
@@ -240,9 +237,8 @@ function Lux.initialstates(rng::AbstractRNG,l::KernelNeuralLayer)
 end
 
 function (l::KernelNeuralLayer)(x,ps,st)
-  v = get_layer_data(l,x)
-  kout,kst = l.kernel(v,ps.kernel,st.kernel)
-  wout = ps.weights*v
+  kout,kst = l.kernel(x,ps.kernel,st.kernel)
+  wout = ps.weights*x
   y = l.activation.(wout .+ kout .+ ps.bias)
   return y,(kernel=kst,)
 end
@@ -260,16 +256,8 @@ function attention_integral(scores,values,meas::InducedMeasure)
   @notimplemented "Attention integration is not implemented for measure type $(typeof(meas))."
 end
 
-function attention_integral(scores,values,meas::GraphMeasure{<:NystromGraphSpace})
-  @notimplemented "Attention integration is not implemented for Nyström graph spaces."
-end
-
 function attention_integral(scores,values,meas::GraphMeasure)
   graph = get_space(meas)
   α = attention(vec(scores),graph)
   scatter(α'.*values,graph)
-end
-
-function get_layer_data(l::KernelNeuralLayer,x)
-  gather_data(l.formatter,get_space(l.kernel),x)
 end
