@@ -123,76 +123,31 @@ function normalise!(inout::NTuple{3,AbstractArray},stats::Normalisation)
   normalise!(c,stats.xscore)
 end
 
-rescale!(args...) = @abstractmethod
-rescale!(data,::typeof(identity)) = data
+denormalise!(args...) = @abstractmethod
+denormalise!(data,::typeof(identity)) = data
 
-function rescale!(data::AbstractArray,stats::Normalisation)
+function denormalise!(data::AbstractArray,stats::Normalisation)
   data .*= stats.dmax
   data
 end
 
-# Gridap
-
-function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)
-  map(get_free_dof_coordinates,V.spaces)
-end
-
-# Data types
-
-struct CloudOfPoints{A<:AbstractArray,B<:AbstractArray,C<:AbstractRealisation}
-  values::A
-  coords::B
-  params::C
-end
-
-struct FeaturesBundle{A<:Tuple}
-  bundle::A
-end
-
-FeaturesBundle(args::Function...) = FeaturesBundle(args)
-
-function get_features(f::FeaturesBundle,op::ParamOperator,r::Realisation)
-  trial = get_trial(op)(r)
-  features = zeros(num_free_dofs(trial),length(f.bundle),num_params(r))
-  @inbounds @views for (j,f) in enumerate(f.bundle)
-    fh = interpolate(f,trial)
-    fv = get_free_dof_values(fh)
-    for k in param_eachindex(fv)
-      features[:,j,k] = param_getindex(fv,k)
-    end
-  end
-  return features
-end
-
 # utils
-
-function get_formatted_data(::Type{T},values,times) where T
-  d = T.(matrix_of_values(values))
-  nx = size(d,1)
-  nt = length(times)
-  np = Int(size(d,2)/nt)
-  reshape(permutedims(reshape(d,nx,np,nt),(1,3,2)),:,np)
-end
 
 dimension(μ::Realisation) = length(first(μ))
 dimension(μ::TransientRealisation) = dimension(get_params(μ))
 
-matrix_of_values(a::AbstractMatrix) = a
-matrix_of_values(a::AbstractArray) = reshape(a,size(a,1),:)
-matrix_of_values(x::AbstractParamArray) = matrix_of_values(get_all_data(x))
-
-function matrix_of_params(r::AbstractRealisation)
-  params = zeros(dimension(r),num_params(r))
-  matrix_of_params!(params,r)
+function fetch_data(uh::ParamFEFunction)
+  V = get_fe_space(uh)
+  v = get_free_dof_values(uh)
+  s = get_data_shape(V)
+  reshape(get_all_data(v),s)
 end
 
-function matrix_of_params!(params,r::AbstractRealisation)
-  @check size(params,2) == num_params(r)
-  μ = get_params(r)
-  @inbounds @views for i in axes(params,2)
-    params[:,i] = μ.params[i]
-  end
-  params
+function get_data_shape(V)
+  T = get_dof_eltype(V)
+  n = num_free_dofs(V)
+  D = num_components(T)
+  return (D,Int(n ÷ D))
 end
 
 function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
@@ -217,25 +172,4 @@ function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVect
     coords_mat[D+1,col] = t
   end
   return coords_mat
-end
-
-#TODO @Isaia: your old tensor_of_coords function stacked params before the coords 
-# on the rows, are you sure it's correct? I am doing the opposite here, please fix it 
-# in case it's wrong.
-function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) where {T,S}
-  TS = promote_type(T,S)
-  D,nx = size(coords)
-  P,np = size(params)
-  tensor = zeros(TS,D+P,nx,np)
-  for (i,x) in enumerate(eachcol(coords))
-    for (j,μ) in enumerate(eachcol(params))
-      for d in 1:D
-        tensor[d,i,j] = x[d]
-      end
-      for p in 1:P
-        tensor[D+p,i,j] = μ[p]
-      end
-    end
-  end
-  return tensor
 end

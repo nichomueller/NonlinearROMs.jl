@@ -95,7 +95,7 @@ get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
 function _integration(a::AbstractArray,meas::GraphMeasure)
   space = get_space(meas)
-  out = scatter(a,space)
+  out = scatter_data(a,space)
   _normalise!(out,meas.weights)
   return out
 end

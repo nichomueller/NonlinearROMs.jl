@@ -259,5 +259,5 @@ end
 function attention_integral(scores,values,meas::GraphMeasure)
   graph = get_space(meas)
   α = attention(vec(scores),graph)
-  scatter(α'.*values,graph)
+  scatter_data(α'.*values,graph)
 end

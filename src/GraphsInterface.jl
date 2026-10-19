@@ -293,7 +293,7 @@ end
 
 # message-passing on graph and graph-induced spaces
 
-function gather(vals::AbstractMatrix,g::AbstractGraph)
+function gather_data(vals::AbstractMatrix,g::AbstractGraph)
   d,n = size(vals)
   @check d == ne(g) "The first dimension must match the number of graph edges"
   @check n == nv(g) "The final dimension must match the number of graph vertices"
@@ -306,7 +306,7 @@ function gather(vals::AbstractMatrix,g::AbstractGraph)
 end
 
 """
-    scatter(vals,g::AbstractGraph) -> per-vertex array
+    scatter_data(vals,g::AbstractGraph) -> per-vertex array
 
 Sums `vals` (one column per edge, in `edges(g)` order; leading axes = channels) into
 its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building block
@@ -315,7 +315,7 @@ behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 """
-function scatter(vals::AbstractVector,g::AbstractGraph)
+function scatter_data(vals::AbstractVector,g::AbstractGraph)
   @check length(vals) == ne(g) "The number of values must match the number of graph edges"
   out = zeros(eltype(vals),nv(g))
   for (k,e) in enumerate(edges(g))
@@ -324,7 +324,7 @@ function scatter(vals::AbstractVector,g::AbstractGraph)
   return out
 end
 
-function scatter(vals::AbstractMatrix,g::AbstractGraph)
+function scatter_data(vals::AbstractMatrix,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
   out = zeros(eltype(vals),size(vals,1),nv(g))
   for (k,e) in enumerate(edges(g))
@@ -365,7 +365,7 @@ end
 
 # compatibility
 
-for f in (:gather,:scatter,:attention)
+for f in (:gather_data,:scatter_data,:attention)
   @eval $f(vals::AbstractArray,space::GraphInducedSpace) = $f(data_on_space(vals,space),get_graph(space))
 end
 

@@ -1,58 +1,39 @@
+build_model(::NeuralModel,args...) = @abstractmethod
+
+function build_lux_chain(layers::Tuple,activation)
+  l = ()
+  for i in 2:(length(layers)-1)
+    l = (l...,Lux.Dense(layers[i-1] => layers[i],activation))
+  end
+  Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
+end
+
+function build_model(model::NOMAD,args...)
+  Lux.Chain(
+    # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
+    Lux.Parallel(
+      vcat;
+      approximator = build_lux_chain(model.approximator_layers,model.activation),
+      y_pass_through = Lux.NoOpLayer()
+    ),
+    # Pass the concatenated vector [approximator(u); y] to the decoder
+    build_lux_chain(model.decoder_layers,model.activation)
+  )
+end
+
+function build_model(model::MultiLayerPerceptron,(values,coords,params))
+  m = size(params,1)
+  n = size(values,1)
+  build_lux_chain((m,model.hidden_layers...,n),model.activation)
+end
+
 function train!(red::KernelReduction,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(red)
   logger = get_logger(red)
   function to_device_batch((x_batch,y_batch))
-    n_dofs,n_samples = size(y_batch)
-    # Dynamically compute the number of physical variables
-    out_channels = n_dofs ÷ n_nodes
-    y_reshaped = reshape(y_batch,out_channels,n_nodes,n_samples)
-    return (x_batch |> XDEV,y_reshaped |> XDEV)
+    #TODO check if this is correct
+    return (x_batch |> XDEV,y_batch |> XDEV)
   end
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function train!(red::DeepONetReduction,train_state,dataloader,stats,x_data_dev)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((f_batch,u_batch)) = ((f_batch |> XDEV,x_data_dev),u_batch |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function train!(red::NOMADReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch(((u_batch,y_batch),v_batch)) = ((u_batch |> XDEV,y_batch |> XDEV),v_batch |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function train!(red::DeepONetReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function train!(red::AutoEncoderReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function train!(red::VAEReduction,train_state,dataloader,stats)
-  red = get_reduction(red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  β = red.model.β
-  loss(model,ps,st,x) = vae_loss(model,ps,st,x;β)
-  to_device_batch(xb) = xb |> XDEV
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss,logger)
-end
-
-function train!(red::MultiLayerPerceptron,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((x,y)) = (x |> XDEV,y |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
@@ -70,23 +51,9 @@ function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function get_data_loader(red::DeepONetReduction,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,inputs)
-  data = prepare_data(red,inputs)
-  dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
-  coords_dev = coords |> XDEV
-  (dataloader,coords_dev)
-end
-
 function train(red::NeuralReduction,inputs,stats;kwargs...)
   train_state = get_train_state(red,inputs;kwargs...)
   dataloader,args... = get_data_loader(red,inputs;shuffle=true,partial=false)
-  train!(red,train_state,dataloader,stats,args...)
-end
-
-function train(red::AutoDecoderReduction,inputs,stats;kwargs...)
-  train_state = get_train_state(red,inputs;kwargs...)
-  dataloader,args... = get_data_loader(red,inputs;shuffle=false,partial=false)
   train!(red,train_state,dataloader,stats,args...)
 end
 
@@ -126,44 +93,45 @@ function train(
   train(solver,inputs,stats;kwargs...)
 end
 
-# utils
+"""
+    train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger) -> TrainedNeuralModel
 
-function prepare_data(::NeuralSolver{<:KernelReduction},(values,coords,params))
-  (values,tensor_of_coords(coords,params))
-end
+Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
+`to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
+as its data argument (already moved to `XDEV`) — DeepONet pairs each batch with a fixed
+set of trunk query points, NOMAD's coordinates are already part of the per-row batch,
+and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`. `loss`
+defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
+function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
+normalisation (or `identity`) bundled into the returned [`TrainedNeuralModel`](@ref).
+"""
+function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
+  init!(logger)
 
-function prepare_data(::NeuralSolver{<:DeepONetReduction},(values,coords,params))
-  (params,values)
-end
+  Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
+    for epoch in 1:logger.max_epochs
+      local current_loss = 0.0f0
 
-function prepare_data(::NeuralSolver{<:NOMADReduction},(values,coords,params))
-  ntot = size(coords,2)*size(params,2)
-  p = zeros(eltype(params),size(params,1),ntot)
-  x = zeros(eltype(coords),size(coords,1),ntot)
-  d = zeros(eltype(values),1,ntot)
+      for raw_batch in dataloader
+        batch_dev = to_device_batch(raw_batch)
 
-  col = 1
-  @views for i in axes(params,2)
-    p = params[:,i]
-    for j in axes(coords,2)
-      p[:,col] = p
-      x[:,col] = coords[:,j]
-      d[1,col] = data[j,i]
-      col += 1
+        _,loss_val,_,train_state = Lux.Training.single_train_step!(
+          Lux.AutoEnzyme(),
+          loss,
+          batch_dev,
+          train_state;
+          return_gradients=Val(false)
+        )
+        current_loss += Float32(loss_val)
+      end
+      current_loss /= length(dataloader)
+
+      step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
+
+      update!(logger,epoch,current_loss)
     end
   end
 
-  (p,x),d
-end
-
-for T in (:AutoEncoderReduction,:AutoDecoderReduction,:VAEReduction,)
-  @eval begin
-    function prepare_data(::NeuralSolver{<:$T},(values,coords,params))
-      (values,values)
-    end
-  end
-end
-
-function prepare_data(::NeuralSolver{<:MLPReduction},(values,coords,params))
-  (params,values)
+  finalize!(logger)
+  return TrainedNeuralModel(train_state,stats)
 end

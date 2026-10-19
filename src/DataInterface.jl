@@ -9,11 +9,11 @@ function sample_coords(s::CoordsSampler,f::DiscreteSpace)
   view(x,s.strategy)
 end
 
-struct Bundle{A<:Tuple}
+struct FeatureBundle{A<:Tuple}
   bundle::A
 end
 
-function get_features(a::Bundle,f::DiscreteSpace)
+function get_features(a::FeatureBundle,f::DiscreteSpace)
   features = init_features(f,a)
   @inbounds for (j,a) in enumerate(a.bundle)
     af = interpolation_values(a,f)
@@ -34,7 +34,7 @@ struct DataFormatter{A,B,C}
   metadata::C
 end
 
-const BundleDataFormatter{A,B} = DataFormatter{A,B,<:Bundle}
+const BundleDataFormatter{A,B} = DataFormatter{A,B,<:FeatureBundle}
 
 function DataFormatter(pass_coords::Val,sampler::CoordsSampler)
   DataFormatter(pass_coords,sampler,nothing)
@@ -70,7 +70,7 @@ end
 
 function gather_data(d::DataFormatter,f::GraphInducedSpace)
   data = fetch_data(d,f)
-  gather(data,get_space(f))
+  gather_data(data,get_space(f))
 end
 
 struct LayerData{A,B}

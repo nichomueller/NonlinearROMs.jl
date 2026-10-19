@@ -281,28 +281,6 @@ It instructs the ROM solvers to use the kernel neural model pipeline (tensor for
 const KernelReduction{M<:KernelNeuralModel} = NeuralReduction{M}
 
 """
-    const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
-
-A reduction wrapper for the Deep Operator Network (DeepONet).
-It instructs the ROM solvers to use the DeepONet pipeline during the offline and online phases.
-
-# Constructors
-- `DeepONetReduction(s::NeuralReduction)`: Wraps an explicitly defined `NeuralReduction`.
-- `DeepONetReduction(;model::DeepONet,kwargs...)`: Automatically builds the `NeuralReduction`, forwarding the training-hyperparameter keyword arguments to [`NeuralReduction`](@ref).
-
-# Examples
-```julia
-# Using an explicit reduction
-s = NeuralReduction(DeepONet(2,3;width=64,depth=3),epochs=1000)
-reduction = DeepONetReduction(s)
-
-# Using kwargs directly
-reduction = DeepONetReduction(model=DeepONet(2,3;width=64,depth=3),epochs=1000,batch_size=32)
-```
-"""
-const DeepONetReduction{M<:DeepONet} = NeuralReduction{M}
-
-"""
     const NOMADReduction{M<:NOMAD} = NeuralReduction{M}
 
 A reduction wrapper for the NOMAD (Non-linear Manifold Decoder) neural operator.
@@ -324,35 +302,11 @@ reduction = NOMADReduction(model=NOMAD(2,3;width=32,depth=2),epochs=1000)
 """
 const NOMADReduction{M<:NOMAD} = NeuralReduction{M}
 
-"""
-    const AutoEncoderReduction{M<:AutoEncoder} = NeuralReduction{M}
-    const AutoDecoderReduction{M<:AutoDecoder} = NeuralReduction{M}
-    const VAEReduction{M<:VariationalAutoEncoder} = NeuralReduction{M}
-
-Reduction wrappers for the reconstruction-based architectures, analogous to
-[`DeepONetReduction`](@ref)/[`NOMADReduction`](@ref): they instruct
-[`reduced_operator`](@ref) to train an [`AutoEncoder`](@ref)/[`AutoDecoder`](@ref)/
-[`VariationalAutoEncoder`](@ref) on the snapshot data itself (no parameters/coordinates
-involved), producing a [`NeuralOperator`](@ref) with `metadata === identity`.
-
-# Constructors
-Same pattern as `DeepONetReduction`/`NOMADReduction`: wrap an explicit `NeuralReduction`,
-or build one from `model=...`/kwargs directly, e.g.
-`AutoEncoderReduction(model=AutoEncoder(width=32,depth=2),epochs=1000)`.
-"""
-const AutoEncoderReduction{M<:AutoEncoder} = NeuralReduction{M}
-const AutoDecoderReduction{M<:AutoDecoder} = NeuralReduction{M}
-const VAEReduction{M<:VariationalAutoEncoder} = NeuralReduction{M}
-
 const MLPReduction{M<:MultiLayerPerceptron} = NeuralReduction{M}
 
 for (f,m) in (
   (:KernelReduction,:KernelNeuralModel),
-  (:DeepONetReduction,:DeepONet),
   (:NOMADReduction,:NOMAD),
-  (:AutoEncoderReduction,:AutoEncoder),
-  (:AutoDecoderReduction,:AutoDecoder),
-  (:VAEReduction,:VariationalAutoEncoder),
   (:MLPReduction,:MultiLayerPerceptron),
 )
   @eval begin

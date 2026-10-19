@@ -83,48 +83,36 @@ import StaticArrays: SVector
 
 export TrainingLog
 export ZScore
-export normalise!
-export get_formatted_data
 include("Utils.jl")
 
 export LRScheduler
 export CosineAnnealing
 export ReduceLROnPlateau
 export Optimiser
-export step_scheduler!
-export get_lr
 include("LRSchedulers.jl")
 
-export Sampler
-export MultiSampler
-export sample
-export get_ids
-export get_param_ids
-export get_time_ids
-include("Samplers.jl")
+export DiscreteSpace
+export FunctionSpace
+export GraphInducedSpace
+include("DiscreteSpaces.jl")
 
-export MeshGraph
-export DistanceGraph
-export build_graph
+export WeightedSimpleDiGraph
+export CoordinateGraph
+export NystromSubspace
+export gather_data
+export scatter_data
+export attention
 include("GraphsInterface.jl")
 
-export LatentCodeLayer
-export VAELayer
-export KernelNeuralLayer
-include("NeuralLayers.jl")
+export FeatureBundle
+export DataFormatter
+include("DataInterface.jl")
 
 export NeuralModel
-export FiniteDimensionalModel
-export CoordinateNeuralModel
-export IntegralKernel
-export DeepONet
+export KernelNeuralModel
 export NOMAD
 export MultiLayerPerceptron
-export AutoEncoder
-export VariationalAutoEncoder
-export AutoDecoder
-export build_model
-export KernelNeuralModel
+export TrainedNeuralModel
 include("NeuralModels.jl")
 
 export NNRegression
@@ -132,25 +120,9 @@ export NNHyperReduction
 export TransientNNRegression
 export TransientNNHyperReduction
 export NeuralReduction
-export DeepONetReduction
-export NOMADReduction
-export AutoEncoderReduction
-export AutoDecoderReduction
-export VAEReduction
+export NOMADReductionon
 export KernelReduction
 include("NeuralReductions.jl")
-
-export TrainedNeuralModel
-export TrainedAutoEncoder
-export TrainedAutoDecoder
-export TrainedVAE
-export train_model!
-export infer_latent
-export encode
-export decode
-export XDEV
-export CDEV
-include("NeuralModelsTraining.jl")
 
 export NeuralSolver
 export NeuralOperator
@@ -159,17 +131,5 @@ include("NeuralSolvers.jl")
 export train
 export resolve_batch_size
 include("NeuralTraining.jl")
-
-export NNRegressor
-export NNContribution
-export TransientNNRegressor
-export TransientNNContribution
-export TransientNNContributionTuple
-include("HyperReductions.jl")
-
-export NNInterpolation
-include("Interpolations.jl")
-
-include("RBOperators.jl")
 
 end # module
