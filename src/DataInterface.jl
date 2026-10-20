@@ -16,16 +16,16 @@ end
 function get_features(a::FeatureBundle,f::DiscreteSpace)
   features = init_features(f,a)
   @inbounds for (j,a) in enumerate(a.bundle)
-    af = interpolation_values(a,f)
+    af = interpolation_values(f,a)
     set_features!(features,af,j)
   end
   return features
 end
 
-function sample_features(cs::CoordStrategy,args...)
+function sample_features(s::CoordsSampler,args...)
   features = get_features(args...)
   c = ntuple(i->Colon(),Val{ndims(features)-1}())
-  view(features,cs.sampler,c...)
+  view(features,s.strategy,c...)
 end
 
 struct DataFormatter{A,B,C}
@@ -114,11 +114,11 @@ function _features_size(uf::SingleFieldParamFESpace,f,a)
 end
 
 function set_features!(cache,interp,j)
-  @view cache[:,j] .= get_interp_values(interp)
+  @views cache[:,j] .= get_interp_values(interp)
 end
 
 function set_features!(cache,interp::ConsecutiveParamVector,j)
-  @view cache[:,j,:] .= get_interp_values(interp)
+  @views cache[:,j,:] .= get_interp_values(interp)
 end
 
 #TODO missing interface for transient param functions

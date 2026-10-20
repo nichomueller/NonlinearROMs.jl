@@ -64,10 +64,12 @@ using Gridap.Geometry
 using Gridap.Helpers
 using Gridap.Polynomials
 using Gridap.ReferenceFEs
+using Gridap.TensorValues
 
 using GridapROMs
 using GridapROMs.DofMaps
 using GridapROMs.ParamDataStructures
+using GridapROMs.ParamFESpaces
 using GridapROMs.ParamODEs
 using GridapROMs.ParamSteady
 using GridapROMs.RBSteady
@@ -94,6 +96,8 @@ include("LRSchedulers.jl")
 export DiscreteSpace
 export FunctionSpace
 export GraphInducedSpace
+export SimpleSpace
+export MultiSpace
 include("DiscreteSpaces.jl")
 
 export WeightedSimpleDiGraph

@@ -3,7 +3,6 @@
       model::A
       epochs::Int
       batch_size::Int
-      sampler::MultiSampler
       optimiser::Optimiser
       trainlog::TrainingLog
     end
@@ -41,12 +40,6 @@ entry point: it builds the `sampler`/`optimiser`/`trainlog` fields from
   to select which training pipeline `train`/`reduced_operator` dispatch to.
 - `epochs::Int`: Total number of training epochs. Default: `20000`.
 - `batch_size::Int`: The batch size for training. If set to `0` or a negative value, it defaults to the total number of available samples (full-batch). Default: `0`.
-- `sampler::MultiSampler`: Built from `space_step`/`param_step`/`time_step`, controls how the
-  spatial DoFs, the parameters, and (for transient problems) the time steps are subsampled
-  from the full-order data before feeding it to the network. Each of `space_step`/`param_step`/
-  `time_step` can be an `Integer` (stride), a `Function` (a per-sample transform, e.g.
-  `p -> log10.(p)`), an `AbstractVector` of explicit indices, or `nothing`/`identity` (no
-  subsampling). Default: `space_step=1`, `param_step=1`, `time_step=nothing`.
 - `lr_scheduler`: The learning rate scheduler to use (e.g., `CosineAnnealing(epochs)`, `ReduceLROnPlateau()`). Default: `CosineAnnealing(epochs)`.
 - `verbose::Bool`: If `true`, prints compilation times, training progress, and loss metrics. Default: `true`.
 - `print_every::Int`: Frequency (in epochs) of the training progress output. Default: `500`.
@@ -79,7 +72,6 @@ struct NeuralReduction{A<:NeuralModel}
   model::A
   epochs::Int
   batch_size::Int
-  sampler::MultiSampler
   optimiser::Optimiser
   trainlog::TrainingLog
 end
@@ -88,9 +80,6 @@ function NeuralReduction(
   model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
-  space_step=1,
-  param_step=1,
-  time_step=nothing,
   lr_scheduler=CosineAnnealing(epochs),
   name=string(nameof(typeof(model))),
   verbose::Bool=true,
@@ -98,7 +87,6 @@ function NeuralReduction(
   kwargs...
   )
 
-  sampler = MultiSampler(;space_step,param_step,time_step)
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
   NeuralReduction(

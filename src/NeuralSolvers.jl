@@ -39,8 +39,8 @@ RBSteady.get_state_reduction(solver::NeuralSolver) = solver.reduction
 RBSteady.get_reduction(solver::NeuralSolver) = solver.reduction
 
 """
-    struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
-      op::ParamOperator{O,T}
+    struct NeuralOperator{O,A<:TrainedNeuralModel} <: ROMOperator{O}
+      op::ParamOperator{O}
       model::A
     end
 
@@ -53,8 +53,8 @@ It stores the high-fidelity operator, and the trained model (weights/states bund
 - `op`: The original high-fidelity parametric operator.
 - `model`: The trained [`TrainedNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
 """
-struct NeuralOperator{O,T,A<:TrainedNeuralModel} <: ROMOperator{O,T}
-  op::ParamOperator{O,T}
+struct NeuralOperator{O,A<:TrainedNeuralModel} <: ROMOperator{O}
+  op::ParamOperator{O}
   model::A
 end
 

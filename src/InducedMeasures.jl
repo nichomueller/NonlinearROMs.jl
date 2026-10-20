@@ -11,19 +11,13 @@ integration(a,meas::InducedMeasure) = @abstractmethod
 
 get_space(meas::InducedMeasure) = @abstractmethod
 
-function integration(a::AbstractArray{T,N},meas::InducedMeasure) where {T,N}
-  latent...,dim = size(a)
-  integration(reshape(a,prod(latent),dim),meas)
-end
-
-function integration(a::AbstractVecOrMat,meas::InducedMeasure)
-  msg = "The array's final dimension must match the number of coordinates in the function space"
-  dim = size(a,ndims(a))
-  @check dim == dimension(get_space(meas)) msg
+function integration(a::AbstractArray{T,3} where T,meas::InducedMeasure)
+  msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(num_coords(meas)); got size $(size(a))"
+  @check size(a,2) == dimension(get_space(meas)) msg
   _integration(a,meas)
 end
 
-function _integration(a::AbstractVecOrMat,meas::InducedMeasure)
+function _integration(a::AbstractArray{T,3} where T,meas::InducedMeasure)
   @abstractmethod
 end
 
