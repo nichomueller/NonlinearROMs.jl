@@ -136,20 +136,6 @@ end
 dimension(μ::Realisation) = length(first(μ))
 dimension(μ::TransientRealisation) = dimension(get_params(μ))
 
-function fetch_data(uh::ParamFEFunction)
-  V = get_fe_space(uh)
-  v = get_free_dof_values(uh)
-  s = get_data_shape(V)
-  reshape(get_all_data(v),s)
-end
-
-function get_data_shape(V)
-  T = get_dof_eltype(V)
-  n = num_free_dofs(V)
-  D = num_components(T)
-  return (D,Int(n ÷ D))
-end
-
 function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
   coords_mat = zeros(T,D,length(coords))
   for (i,coord) in enumerate(coords)

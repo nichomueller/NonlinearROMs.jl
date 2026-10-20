@@ -18,19 +18,25 @@ function interpolation_values(f::FunctionSpace,a)
   lazy_map(a,x)
 end
 
-struct SimpleSpace{A} <: FunctionSpace
+struct SimpleSpace{A,B} <: FunctionSpace
   space::A
+  coords::B
+end
+
+function SimpleSpace(space)
+  coords = get_node_coordinates(space)
+  SimpleSpace(space,coords)
 end
 
 const SimpleFESpace{A<:FESpace} = SimpleSpace{A}
+
+get_coords(f::SimpleSpace) = f.coords
 
 function get_measure(f::SimpleFESpace;factor=2)
   trian = get_triangulation(f.space)
   degree = factor*get_polynomial_order(f.space)
   Measure(trian,degree)
 end
-
-get_coords(f::SimpleFESpace) = get_node_coordinates(f.space)
 
 abstract type SpaceStyle end
 struct CommonDomain <: SpaceStyle end
@@ -107,89 +113,78 @@ function _coords_info(spaces)
   style,coords,lcoord_to_coords,coord_to_lcoords,multiplicity
 end
 
+get_node_coordinates(V) = @abstractmethod
+
+struct FENodeCoordinates{D,T,A<:AbstractVector{Point{D,T}},B<:Table,C<:AbstractVector{<:Integer}} <: AbstractVector{Point{D,T}}
+  coords::A
+  node_to_dofs::B
+  dof_to_nodes::C
+end
+
+Base.size(f::FENodeCoordinates) = size(f.coords)
+Base.getindex(f::FENodeCoordinates,i::Integer) = f.coords[i]
+
 function get_node_coordinates(V::SingleFieldFESpace)
-  cell_dof_basis = get_fe_dof_basis(V)
-  cell_points = change_domain(get_cell_points(cell_dof_basis),PhysicalDomain())
-  cell_phys_nodes = get_data(cell_points)
-  get_nodal_values(V,cell_phys_nodes)
+  d2c = get_free_dof_coordinates(V)
+  d2n,n2d = get_dof_to_node_maps(V)
+  n2c = d2c[n2d]
+  FENodeCoordinates(n2c,d2n,n2d)
 end
 
-function get_value_coordinates(uh::FEFunction)
-  V = get_fe_space(uh)
-  cell_dof_values = get_cell_dof_values(uh)
-  cell_values = 
-  get_nodal_values(V,cell_values)
-end
-
-function get_nodal_values(V::SingleFieldFESpace,cell_values)
+function get_dof_to_node_maps(V::SingleFieldFESpace)
   cell_dof_basis = get_fe_dof_basis(V)
   cell_dof_bases = get_data(cell_dof_basis)
   @notimplementedif !(testitem(cell_dof_bases) isa LagrangianDofBasis)
 
-  cell_dof_to_node = lazy_map(get_dof_to_node,cell_dof_bases)
-  cell_dof_to_comp = lazy_map(get_dof_to_comp,cell_dof_bases)
-  cell_node_to_node = lazy_map((d2n,d2c) -> d2n[findall(d2c .== 1)],cell_dof_to_node,cell_dof_to_comp)
+  dof_to_nodes = zeros(Int32,num_free_dofs(V))
 
-  v = testitem(cell_values)
-  P = eltype(v)
-  T = eltype(P)
-  D = num_components(P)
+  cell_dof_to_lnode = lazy_map(get_dof_to_node,cell_dof_bases)
+  cell_dof_ids = get_cell_dof_ids(V)
+  lnode_cache = array_cache(cell_dof_to_lnode)
+  dof_cache = array_cache(cell_dof_ids)
+  nnodes = 0
+  for cell in eachindex(cell_dof_ids)
+    lnodes = getindex!(lnode_cache,cell_dof_to_lnode,cell)
+    dofs = getindex!(dof_cache,cell_dof_ids,cell)
+
+    # a physical node may carry several dofs (one per component); group the
+    # local dofs of this cell by local node so that all of its free dofs --
+    # whichever components they are -- are assigned the very same node id.
+    cell_lnode_to_node = Dict{Int,Int32}()
+    for i in eachindex(dofs)
+      dof = dofs[i]
+      (dof > 0 && dof_to_nodes[dof] != 0) && (cell_lnode_to_node[lnodes[i]] = dof_to_nodes[dof])
+    end
+    for i in eachindex(dofs)
+      dof = dofs[i]
+      (dof <= 0 || dof_to_nodes[dof] != 0) && continue
+      ln = lnodes[i]
+      node = get!(cell_lnode_to_node,ln) do
+        nnodes += 1
+        nnodes
+      end
+      dof_to_nodes[dof] = node
+    end
+  end
   
-  nnodes = Int(num_free_dofs(V) ÷ D)
-  nsamples = num_samples(v)
-  free_vals = Array{T,3}(undef,D,nnodes,nsamples)
+  node_to_dofs_ptrs = zeros(Int32,1+nnodes)
+  for dof in eachindex(dof_to_nodes)
+    node = dof_to_nodes[dof]
+    node > 0 && (node_to_dofs_ptrs[1+node] += 1)
+  end
+  length_to_ptrs!(node_to_dofs_ptrs)
 
-  gather_nodal_values!(free_vals,V,cell_values,cell_node_to_node)
-  return free_vals
-end
-
-function gather_nodal_values!(free_vals,V::SingleFieldFESpace,cell_vals,cell_node_to_node)
-  cell_dofs = get_cell_dof_ids(V)
-  cache_vals = array_cache(cell_vals)
-  cache_dofs = array_cache(cell_dofs)
-  cache_nodes = array_cache(cell_node_to_node)
-  cells = 1:length(cell_vals)
-
-  for cell in cells
-    vals = getindex!(cache_vals,cell_vals,cell)
-    dofs = getindex!(cache_dofs,cell_dofs,cell)
-    nodes = getindex!(cache_nodes,cell_node_to_node,cell)
-    for i in nodes
-      val = vals[i]
-      dof = dofs[i]
-      if dof > 0
-        for d in eachindex(val)
-          free_vals[d,dof,1] = val[d]
-        end
-      end
+  node_to_dofs_data = zeros(Int,node_to_dofs_ptrs[end]-1)
+  for dof in eachindex(dof_to_nodes)
+    node = dof_to_nodes[dof]
+    if node > 0
+      p = node_to_dofs_ptrs[node]
+      node_to_dofs_data[p] = dof
+      node_to_dofs_ptrs[node] += 1
     end
   end
+  rewind_ptrs!(node_to_dofs_ptrs)
+  node_to_dofs = Table(node_to_dofs_data,node_to_dofs_ptrs)
+
+  return dof_to_nodes,node_to_dofs
 end
-
-function gather_nodal_values!(free_vals,V::SingleFieldFESpace,cell_vals::AbstractArray{<:ParamBlock},cell_node_to_node)
-  cell_dofs = get_cell_dof_ids(V)
-  cache_vals = array_cache(cell_vals)
-  cache_dofs = array_cache(cell_dofs)
-  cache_nodes = array_cache(cell_node_to_node)
-  cells = 1:length(cell_vals)
-
-  for cell in cells
-    vals = getindex!(cache_vals,cell_vals,cell)
-    dofs = getindex!(cache_dofs,cell_dofs,cell)
-    nodes = getindex!(cache_nodes,cell_node_to_node,cell)
-    for i in nodes
-      val = vals[i]
-      dof = dofs[i]
-      if dof > 0
-        for d in eachindex(val)
-          for k in num_samples(val)
-            free_vals[d,dof,k] = get_all_data(val)[d,k]
-          end
-        end
-      end
-    end
-  end
-end
-
-num_samples(v) = 1
-num_samples(v::Union{ParamBlock,AbstractParamData}) = param_length(v)
