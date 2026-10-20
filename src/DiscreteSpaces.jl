@@ -127,8 +127,9 @@ Base.getindex(f::FENodeCoordinates,i::Integer) = f.coords[i]
 function get_node_coordinates(V::SingleFieldFESpace)
   d2c = get_free_dof_coordinates(V)
   d2n,n2d = get_dof_to_node_maps(V)
-  n2c = d2c[n2d]
-  FENodeCoordinates(n2c,d2n,n2d)
+  reps = lazy_map(first,n2d) # one representative dof per node
+  n2c = lazy_map(Reindex(d2c),reps)
+  FENodeCoordinates(n2c,n2d,d2n)
 end
 
 function get_dof_to_node_maps(V::SingleFieldFESpace)
@@ -146,10 +147,6 @@ function get_dof_to_node_maps(V::SingleFieldFESpace)
   for cell in eachindex(cell_dof_ids)
     lnodes = getindex!(lnode_cache,cell_dof_to_lnode,cell)
     dofs = getindex!(dof_cache,cell_dof_ids,cell)
-
-    # a physical node may carry several dofs (one per component); group the
-    # local dofs of this cell by local node so that all of its free dofs --
-    # whichever components they are -- are assigned the very same node id.
     cell_lnode_to_node = Dict{Int,Int32}()
     for i in eachindex(dofs)
       dof = dofs[i]

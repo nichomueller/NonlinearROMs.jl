@@ -371,14 +371,6 @@ end
 
 data_on_space(valsa::AbstractArray,space::GraphInducedSpace) = vals
 
-function subvals(a::AbstractArray,space::NystromSubspace)
-  @notimplemented
-end
-
-function subvals(a::AbstractMatrix,space::NystromSubspace)
-  view(a,space.vertex_map,:)
-end
-
 function subvals(a::AbstractArray{T,3} where T,space::NystromSubspace)
   view(a,:,space.vertex_map,:)
 end
