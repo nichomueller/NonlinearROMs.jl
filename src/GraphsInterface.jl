@@ -217,57 +217,62 @@ function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   return sparse(I,J,V,n,n)
 end
 
-# Graph-induced spaces
-
-get_graph(space::GraphInducedSpace) = @abstractmethod
-
-"""
-    struct CoordinateGraph{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
-      graph::A
-      coords::B
-    end
-"""
-struct CoordinateGraph{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: GraphInducedSpace
-  graph::A
-  coords::B
-  function CoordinateGraph(graph::A,coords::B) where {A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}}
-    @check nv(graph) == length(coords) "CoordinateGraph needs exactly one coordinate per vertex"
-    new{A,B}(graph,coords)
-  end
-end
-
-function GraphInducedSpace(g::AbstractGraph,coords::AbstractVector)
-  CoordinateGraph(g,coords)
-end
-
-function GraphInducedSpace(space::DiscreteSpace;kwargs...)
-  coords = get_coords(space)
-  g = build_graph(coords;kwargs...)
-  CoordinateGraph(g,coords)
-end
-
-get_graph(space::CoordinateGraph) = space.graph
-get_coords(space::CoordinateGraph) = space.coords
-
-struct NystromSubspace{A<:AbstractGraph,B<:AbstractVector{<:Integer},C<:AbstractVector{<:Point}} <: GraphInducedSpace
+struct NystromSubgraph{Ti,A<:AbstractGraph{Ti},B<:AbstractVector{<:Integer}} <: <: Graphs.AbstractSimpleGraph{Ti}
   graph::A
   vertex_map::B
-  coords::C
 end
 
-function NystromSubspace(rng::AbstractRNG,space::GraphInducedSpace;subgraph_size=100)
-  indices = randperm(rng,1:nv(get_graph(space)),subgraph_size)
-  g,vmap = induced_subgraph(get_graph(space),indices)
-  coords = view(get_coords(space),indices)
-  NystromSubspace(g,vmap,coords)
+function NystromSubgraph(rng::AbstractRNG,g::AbstractGraph;subgraph_size=100)
+  indices = randperm(rng,1:nv(g),subgraph_size)
+  g′,vmap = induced_subgraph(g,indices)
+  NystromSubgraph(g′,vmap)
 end
 
-function NystromSubspace(space::GraphInducedSpace;kwargs...)
-  NystromSubspace(Random.default_rng(),space;kwargs...)
+function NystromSubgraph(g::AbstractGraph;kwargs...)
+  NystromSubgraph(Random.default_rng(),g;kwargs...)
 end
 
-get_graph(space::NystromSubspace) = space.graph
-get_coords(space::NystromSubspace) = space.coords
+Graphs.edgetype(::NystromSubgraph{Ti}) where {Ti} = Edge{Ti}
+Graphs.is_directed(g::NystromSubgraph) = is_directed(g.graph)
+
+Graphs.SimpleGraphs.badj(g::NystromSubgraph) = SimpleGraphs.badj(g.graph)
+Graphs.SimpleGraphs.badj(g::NystromSubgraph,v::Integer) = SimpleGraphs.badj(g.graph,v)
+
+function Base.copy(g::NystromSubgraph)
+  NystromSubgraph(copy(g.graph),copy(g.vertex_map))
+end
+
+function Base.:(==)(g::NystromSubgraph,h::NystromSubgraph)
+  g.graph == h.graph && g.vertex_map == h.vertex_map
+end
+
+function Graphs.has_edge(g::NystromSubgraph{Ti},e::Edge{Ti}) where {Ti}
+  has_edge(g.graph,e)
+end
+
+function Graphs.add_edge!(g::NystromSubgraph{Ti},e::Edge{Ti},fw::Tv,bw::Tv=fw) where {Ti,Tv}
+  add_edge!(g.graph,e,fw,bw)
+end
+
+function Graphs.add_edge!(g::NystromSubgraph{Ti},e::Edge{Ti}) where {Ti}
+  add_edge!(g.graph,e)
+end
+
+function Graphs.add_edge!(g::NystromSubgraph{Ti},s::Integer,d::Integer,fw::Tv,bw::Tv=fw) where {Ti,Tv}
+  add_edge!(g.graph,s,d,fw,bw)
+end
+
+function Graphs.rem_edge!(g::NystromSubgraph{Ti},e::Edge{Ti}) where {Ti}
+  rem_edge!(g.graph,e)
+end
+
+function Graphs.add_vertex!(g::NystromSubgraph)
+  add_vertex!(g.graph)
+end
+
+function Graphs.weights(g::NystromSubgraph)
+  weights(g.graph)
+end
 
 # utils
 
@@ -276,7 +281,7 @@ function build_graph(coords::AbstractVector;kwargs...)
   tree = BallTree(data)
   g = WeightedSimpleDiGraph(length(coords))
   build_graph!(g,tree,coords;kwargs...)
-  return CoordinateGraph(g,coords)
+  return GraphInducedSpace(g,coords)
 end
 
 function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
@@ -361,16 +366,4 @@ function attention(scores::AbstractVector{T},g::AbstractGraph) where T
   end
 
   return α
-end
-
-# compatibility
-
-for f in (:gather_data,:scatter_data,:attention)
-  @eval $f(vals::AbstractArray,space::GraphInducedSpace) = $f(data_on_space(vals,space),get_graph(space))
-end
-
-data_on_space(valsa::AbstractArray,space::GraphInducedSpace) = vals
-
-function subvals(a::AbstractArray{T,3} where T,space::NystromSubspace)
-  view(a,:,space.vertex_map,:)
 end

@@ -87,12 +87,9 @@ gather_data(d::LayerData{true},x) = stack((d.fixed_data,x),dims=1)
 
 # utils
 
-_underlying_space(f::SimpleSpace) = f.space
-_underlying_space(f::MultiSpace) = _underlying_space(first(f.space))
-
 function init_features(f,a)
   T = eltype2(get_vector_type(f))
-  s = _features_size(_underlying_space(f),f,a)
+  s = _features_size(get_space(f),f,a)
   zeros(T,s...)
 end
 

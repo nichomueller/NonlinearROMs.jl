@@ -96,13 +96,11 @@ include("LRSchedulers.jl")
 export DiscreteSpace
 export FunctionSpace
 export GraphInducedSpace
-export SimpleSpace
-export MultiSpace
 include("DiscreteSpaces.jl")
 
 export WeightedSimpleDiGraph
-export CoordinateGraph
-export NystromSubspace
+export GraphInducedSpace
+export NystromSubgraph
 export gather_data
 export scatter_data
 export attention

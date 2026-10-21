@@ -26,58 +26,23 @@ struct FSpaceMeasure{A<:FunctionSpace} <: InducedMeasure
 end
 
 InducedMeasure(space::FunctionSpace) = FSpaceMeasure(space)
-InducedMeasure(space::MultiSpace{CommonDomain}) = InducedMeasure(GraphInducedSpace(space))
 
 get_space(meas::FSpaceMeasure) = meas.space
 
-function _integration(a::AbstractMatrix,meas::FSpaceMeasure{<:SimpleFESpace})
-  space = get_space(meas)
-  dof_values = to_dof_values(a,space)
-  ah = FEFunction(space,dof_values)
-  dΩ = get_measure(space)
-  dc = integrate(ah,dΩ)
-  assem = SparseMatrixAssembler(space,space)
-  assemble_vector(assem,collect_cell_vector(dc))
-end
-
 function _integration(a::AbstractArray{T,3} where T,meas::FSpaceMeasure{<:SimpleFESpace})
-  int = zeros(eltype(a),size(a,1),size(a,2))
-  @inbounds for v in eachslice(a,dims=3)
-    int .+= _integration(v,meas)
-  end
-  return int
-end
-
-function _integration(a::AbstractVector,meas::FSpaceMeasure{<:MultiSpace})
   space = get_space(meas)
-  lcache = array_cache(space.coord_to_lcoords)
-  int = zeros(eltype(a))
-  @inbounds @views for i in eachindex(space.spaces)
-    lcoords = getindex!(lcache,space.coord_to_lcoords,i)
-    weighted = a[lcoords] ./ space.multiplicity[lcoords]
-    int += _integration(weighted,space.spaces[i])
+  dΩ = get_measure(space)
+  v = get_fe_basis(space)
+  assem = SparseMatrixAssembler(space,space)
+  b = similar(a)
+  @inbounds @views for d in axes(a,1)
+    aμ = ConsecutiveParamArray(a[d,:,:])
+    bμ = ConsecutiveParamArray(b[d,:,:])
+    ahμ = FEFunction(space,aμ)
+    dc = integrate(ahμ*v,dΩ)
+    assemble_vector!(bμ,assem,collect_cell_vector(space,dc))
   end
-  return int
-end
-
-function _integration(a::AbstractMatrix,meas::FSpaceMeasure{<:MultiSpace})
-  space = get_space(meas)
-  ccache = array_cache(space.lcoord_to_coords)
-  lcache = array_cache(space.coord_to_lcoords)
-  int = zeros(eltype(a),size(a,1))
-  @inbounds @views for i in eachindex(space.spaces)
-    ccoords = getindex!(ccache,space.lcoord_to_coords,i)
-    lcoords = getindex!(lcache,space.coord_to_lcoords,i)
-    weighted = a[:,lcoords] ./ space.multiplicity[lcoords]
-    int[ccoords] += _integration(weighted,space.spaces[i])
-  end
-  return int
-end
-
-function get_measure(V::SingleFieldFESpace)
-  trian = get_triangulation(V)
-  degree = 2*get_polynomial_order(V)
-  Measure(trian,degree)
+  return b
 end
 
 struct GraphMeasure{A<:GraphInducedSpace,B<:AbstractVector} <: InducedMeasure
