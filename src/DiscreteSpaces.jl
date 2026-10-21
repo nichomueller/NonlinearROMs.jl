@@ -14,37 +14,64 @@ function interpolation_values(f::DiscreteSpace,a)
   lazy_map(a,x)
 end
 
-struct FunctionSpace{A} <: DiscreteSpace
+function get_coordinates(f::SingleFieldFESpace)
+  get_free_dof_coordinates(f)
+end
+
+function get_coordinates(f::MultiFieldFESpace)
+  vcat(map(get_coordinates,f)...)
+end
+
+struct FunctionSpace{A,B} <: DiscreteSpace
   space::A
-  function FunctionSpace(space)
-    scalar_space = scalarise(space)
-    A = typeof(scalar_space)
-    FunctionSpace{A}(scalar_space)
+  coords::B
+end
+
+function FunctionSpace(space)
+  scalar_space = scalarise(space)
+  coords = get_coordinates(scalar_space)
+  FunctionSpace(scalar_space,coords)
+end
+
+function FunctionSpace(space::MultiFieldFESpace)
+  trian = get_triangulation(first(space))
+  if !all(s -> trian === get_triangulation(s),space)
+    return FunctionSpace(space...)
   end
+  scalar_spaces = map(scalarise,space)
+  scalar_space = MultiFieldFESpace(scalar_spaces) # forces consecutive style
+  coords = get_coordinates(scalar_space)
+  FunctionSpace(scalar_space,coords)
 end
 
-function FunctionSpace(spaces::Tuple)
+function FunctionSpace(spaces...)
   @warn "Returning the space induced by the graph of the union of the underlying meshes"
-  MultiGraphInducedSpace(spaces)
+  MultiGraphInducedSpace(spaces...)
 end
 
-const SimpleFESpace{A<:FESpace} = FunctionSpace{A}
+get_coords(f::FunctionSpace) = f.coords
 
-get_coords(f::FunctionSpace) = get_free_dof_coordinates(f.space)
-
-function get_measure(f::SimpleFESpace;factor=2)
+function get_measure(f::FunctionSpace{<:FESpace};factor=2)
   trian = get_triangulation(f.space)
   degree = factor*get_polynomial_order(f.space)
   Measure(trian,degree)
 end
 
+abstract type AbstractGraphInducedSpace <: DiscreteSpace end
+
+get_graph(space::AbstractGraphInducedSpace) = @abstractmethod
+
+for f in (:gather_data,:scatter_data,:attention)
+  @eval $f(vals::AbstractArray,space::AbstractGraphInducedSpace) = $f(vals,get_graph(space))
+end
+
 """
-    struct GraphInducedSpace{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: DiscreteSpace
+    struct GraphInducedSpace{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
       graph::A
       coords::B
     end
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: DiscreteSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
   graph::A
   coords::B
   function GraphInducedSpace(graph::A,coords::B) where {A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}}
@@ -62,24 +89,23 @@ end
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 
-for f in (:gather_data,:scatter_data,:attention)
-  @eval $f(vals::AbstractArray,space::GraphInducedSpace) = $f(vals,get_graph(space))
-end
-
-struct MultiGraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},D<:Table} <: DiscreteSpace
+struct MultiGraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
   graph::A
   graphs::NTuple{N,A}
   coords::B
   node_to_lnode::C
 end
 
-function MultiGraphInducedSpace(spaces::Tuple;kwargs...)
+function MultiGraphInducedSpace(spaces...;kwargs...)
   lcoords = map(get_coords,spaces)
   lgraphs = map(x -> build_graph(x;kwargs...),lcoords)
   coords,node_to_lnode = _coords_info(lcoords)
   graph = build_graph(coords;kwargs...)
   GraphInducedSpace(graph,lgraphs,coords,node_to_lnode)
 end
+
+get_graph(space::MultiGraphInducedSpace) = space.graph
+get_coords(space::MultiGraphInducedSpace) = space.coords
 
 # utils
 

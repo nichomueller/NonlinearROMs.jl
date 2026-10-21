@@ -35,8 +35,14 @@ struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
   reduction::NeuralReduction{A}
 end
 
-RBSteady.get_state_reduction(solver::NeuralSolver) = solver.reduction
-RBSteady.get_reduction(solver::NeuralSolver) = solver.reduction
+get_reduction(s::NeuralSolver) = s.reduction
+
+get_sampler(s::NeuralSolver) = get_sampler(s.reduction)
+get_optimiser(s::NeuralSolver) = get_optimiser(s.reduction)
+get_scheduler(s::NeuralSolver) = get_scheduler(s.reduction)
+get_logger(s::NeuralSolver) = get_logger(s.reduction)
+build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.reduction,args...;kwargs...)
+resolve_batch_size(s::NeuralSolver,inputs) = resolve_batch_size(s.reduction,inputs)
 
 """
     struct NeuralOperator{O,A<:TrainedNeuralModel} <: ROMOperator{O}
@@ -76,107 +82,21 @@ Returns a `NeuralOperator` containing the trained network, its optimized weights
 """
 function RBSteady.reduced_operator(
   solver::NeuralSolver,
-  feop::ParamOperator,
-  s::AbstractSnapshots
+  op::ParamOperator,
+  s::AbstractSnapshots;
+  kwargs...
   )
 
-  model = train(solver,feop,s)
-  NeuralOperator(feop,model)
-end
-
-"""
-    reduced_operator(
-      solver::NeuralSolver,
-      feop::ParamOperator,
-      s::AbstractSnapshots,
-      pretrained_op::NeuralOperator;
-      update_stats::Bool=false
-    )
-
-Performs **Fine-Tuning (Continual or Transfer Learning)** on a previously trained Neural Operator.
-It initializes the neural network with the weights and states of the `pretrained_op`, continuing the training using the newly provided snapshots `s` and the configuration defined in `solver`.
-
-# Arguments
-- `solver`: The `NeuralSolver` containing the updated training configuration (e.g., lower learning rate, new epochs).
-- `feop`: The high-fidelity parametric operator.
-- `s`: The new `Snapshots` dataset for fine-tuning.
-- `pretrained_op`: The previously trained `NeuralOperator`.
-
-# Keyword Arguments
-- `update_stats::Bool`: Dictates how data normalization is handled.
-  - If `false` (default): The model inherits the original normalization statistics (\$\\mu\$, \$\\sigma\$, and `max_u`) from the `pretrained_op`. Best for **Continual Learning** where the new data is drawn from the same underlying distribution.
-  - If `true`: The model recomputes entirely new normalization statistics based solely on the new snapshots `s`. Best for **Transfer Learning** when shifting to a drastically different parameter space or domain scale.
-
-# Examples
-```julia
-# Define the shared architecture (2 params -> Branch; 2D coords -> Trunk)
-model_arch = DeepONet(2,2)
-
-# Base Training
-base_strategy = NeuralReduction(model_arch,epochs=5000)
-solver_base = NeuralSolver(LUSolver(),DeepONetReduction(base_strategy))
-pretrained_op = reduced_operator(solver_base,feop,snapshots_base)
-
-# Fine-Tuning with a smaller learning rate on a refined dataset
-ft_strategy = NeuralReduction(
-  model_arch, # match the pretrained one
-  epochs = 1000,
-  lr_scheduler = CosineAnnealing(1000,lr_max=1e-5) # Smaller LR
-  )
-solver_ft = NeuralSolver(LUSolver(),DeepONetReduction(ft_strategy))
-
-# Continual learning (inherits original stats)
-new_op = reduced_operator(solver_ft,feop,snapshots_new,pretrained_op;update_stats=false)
-```
-"""
-function RBSteady.reduced_operator(
-  solver::NeuralSolver,
-  feop::ParamOperator,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  reduction = get_state_reduction(solver)
-  model = train(reduction,feop,s,pretrained_op;update_stats=update_stats)
-  NeuralOperator(feop,model)
-end
-
-"""
-    reduced_operator(
-      solver::NeuralSolver,
-      s::AbstractSnapshots,
-      pretrained_op::NeuralOperator;
-      update_stats::Bool=false
-    )
-
-Automatically extracts the high-fidelity operator (`feop`) from `pretrained_op.op` and invokes the main fine-tuning routine.
-"""
-function RBSteady.reduced_operator(
-  solver::NeuralSolver,
-  s::AbstractSnapshots,
-  pretrained_op::NeuralOperator;
-  update_stats::Bool=false
-  )
-
-  feop = pretrained_op.op
-  reduced_operator(solver,feop,s,pretrained_op;update_stats=update_stats)
+  model = train(solver,op,s;kwargs...)
+  NeuralOperator(op,model)
 end
 
 function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
   # Prepare input
   inputs = get_inputs(solver,op,r)
-  
   # Inference
-  t = @timed begin
-    pred = op.model(inputs)
-  end
-
-  # Prepare output
-  output = to_snapshots(pred,r)
-  stats = CostTracker(t,nruns=num_params(r),name="Kernel Operator Inference")
-
-  return output,stats
+  output = op.model(inputs)
+  return output
 end
 
 # utils
@@ -208,55 +128,4 @@ end
 function get_inputs(solver::NeuralSolver,inputs...)
   sinputs = sample(solver,inputs...)
   get_formatted_inputs(sinputs...)
-end
-
-function get_formatted_inputs(args...)
-  get_formatted_inputs(Float32,args...)
-end
-
-function get_formatted_inputs(::Type{T},values,coords::AbstractVector{<:Point},r::Realisation) where T
-  d = T.(matrix_of_values(values))
-  x = T.(matrix_of_coords(coords))
-  p = T.(matrix_of_params(r))
-  return (d,x,p)
-end
-
-function get_formatted_inputs(::Type{T},values,r::Realisation) where T
-  d = T.(matrix_of_values(values))
-  p = T.(matrix_of_params(r))
-  return (d,p)
-end
-
-function get_formatted_inputs(::Type{T},values,coords::AbstractVector{<:Point},r::TransientRealisation) where T
-  times = get_times(r)
-  d = get_formatted_data(T,values,times)
-  x = T.(matrix_of_coords(coords,times))
-  p = T.(matrix_of_params(r))
-  return (d,x,p)
-end
-
-function get_formatted_inputs(::Type{T},values,r::TransientRealisation) where T
-  times = get_times(r)
-  d = get_formatted_data(T,values,times)
-  p = T.(matrix_of_params(r))
-  return (d,p)
-end
-
-function get_formatted_inputs(::Type{T},coords::AbstractVector{<:Point},r::AbstractRealisation) where T
-  x = T.(matrix_of_coords(coords))
-  p = T.(matrix_of_params(r))
-  return (x,p)
-end
-
-function to_snapshots(x,r::Realisation)
-  np = num_params(r)
-  d = reshape(x,:,np)
-  Snapshots(ConsecutiveParamArray(d),r)
-end
-
-function to_snapshots(x,r::TransientRealisation)
-  np = num_params(r)
-  nt = num_times(r)
-  d = reshape(permutedims(reshape(x,:,nt,np),(1,3,2)),:,nt*np)
-  Snapshots(ConsecutiveParamArray(d),r)
 end

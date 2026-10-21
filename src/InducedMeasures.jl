@@ -11,7 +11,7 @@ integration(a,meas::InducedMeasure) = @abstractmethod
 
 get_space(meas::InducedMeasure) = @abstractmethod
 
-function integration(a::AbstractArray{T,3} where T,meas::InducedMeasure)
+function integration(a::InputData,meas::InducedMeasure)
   msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(num_coords(meas)); got size $(size(a))"
   @check size(a,2) == dimension(get_space(meas)) msg
   _integration(a,meas)
@@ -29,7 +29,7 @@ InducedMeasure(space::FunctionSpace) = FSpaceMeasure(space)
 
 get_space(meas::FSpaceMeasure) = meas.space
 
-function _integration(a::AbstractArray{T,3} where T,meas::FSpaceMeasure{<:SimpleFESpace})
+function _integration(a::InputData,meas::FSpaceMeasure{<:SimpleFESpace})
   space = get_space(meas)
   dΩ = get_measure(space)
   v = get_fe_basis(space)
@@ -39,7 +39,7 @@ function _integration(a::AbstractArray{T,3} where T,meas::FSpaceMeasure{<:Simple
     aμ = ConsecutiveParamArray(a[d,:,:])
     bμ = ConsecutiveParamArray(b[d,:,:])
     ahμ = FEFunction(space,aμ)
-    dc = integrate(ahμ*v,dΩ)
+    dc = integrate(ahμ⋅v,dΩ)
     assemble_vector!(bμ,assem,collect_cell_vector(space,dc))
   end
   return b

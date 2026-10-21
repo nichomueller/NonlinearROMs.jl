@@ -54,9 +54,20 @@ function format_eta(eta_seconds::Real)
   h = div(eta_sec,3600)
   m = div(rem(eta_sec,3600),60)
   s = rem(eta_sec,60)
-  return h > 0 ? "$(lpad(h,2,'0')):$(lpad(m,2,'0')):$(lpad(s,2,'0'))" :
-         "$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  if h > 0
+    "$(lpad(h,2,'0')):$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  else
+    "$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  end  
 end
+
+# input data type 
+
+const InputData{T} = AbstractArray{T,3}
+
+dimension(data::InputData) = size(data,1)
+num_coords(data::InputData) = size(data,2)
+num_samples(data::InputData) = size(data,3)
 
 # normalisation handling 
 

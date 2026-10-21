@@ -8,15 +8,18 @@ is accepted for one-dimensional coordinates). Each adjacent feature pair is
 rotated by a phase derived from the corresponding point's physical coordinates;
 an odd final feature is left unchanged.
 """
-struct RoPELayer{A<:AbstractLuxLayer,T<:AbstractVector} <: AbstractLuxLayer
+struct RoPELayer{A<:AbstractLuxLayer,B<:AbstractVector} <: AbstractLuxLayer
   layer::A
-  inverse_frequencies::T
+  inv_freq::B
 end
 
 function RoPELayer(in_dims::Int,out_dims::Int;kwargs...)
   layer = Dense(in_dims=>out_dims;kwargs...)
-  inverse_frequencies = Float32[10000^(-2*(k-1)/out_dims) for k in 1:div(out_dims,2)]
-  return RoPELayer(layer,inverse_frequencies)
+  inv_freq = zeros(Float32,div(out_dims,2))
+  for i in eachindex(inv_freq)
+    inv_freq[i] = 10000^(-2*(i-1)/out_dims)
+  end
+  return RoPELayer(layer,inv_freq)
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::RoPELayer)
@@ -35,24 +38,24 @@ function (l::RoPELayer)(x::Tuple,ps,st)
   @check length(x) == 2 "RoPELayer input must be a (features, coordinates) tuple"
   features,coordinates = x
   y,st_layer = l.layer(features,ps.layer,st.layer)
-  z = _apply_rope(y,coordinates,l.inverse_frequencies)
+  z = _apply_rope(y,coordinates,l.inv_freq)
   return z,(layer=st_layer,)
 end
 
-function _apply_rope(y::AbstractMatrix,coordinates::AbstractVector,inverse_frequencies)
-  _apply_rope(y,reshape(coordinates,1,:),inverse_frequencies)
+function _apply_rope(y::AbstractMatrix,coordinates::AbstractVector,inv_freq)
+  _apply_rope(y,reshape(coordinates,1,:),inv_freq)
 end
 
-function _apply_rope(y::AbstractMatrix,coordinates::AbstractMatrix,inverse_frequencies)
+function _apply_rope(y::AbstractMatrix,coordinates::AbstractMatrix,inv_freq)
   npoints = size(y,2)
   @check size(coordinates,2) == npoints "Coordinates must have one column per point"
   @check size(coordinates,1) > 0 "At least one coordinate dimension is required"
-  @check div(size(y,1),2) == length(inverse_frequencies) "There must be one rotary frequency per feature pair"
+  @check div(size(y,1),2) == length(inv_freq) "There must be one rotary frequency per feature pair"
   z = similar(y)
-  @inbounds for k in eachindex(inverse_frequencies)
+  @inbounds for k in eachindex(inv_freq)
     i = 2*k-1
     axis = mod1(k,size(coordinates,1))
-    θ = coordinates[axis,:] .* inverse_frequencies[k]
+    θ = coordinates[axis,:] .* inv_freq[k]
     c = cos.(θ)
     s = sin.(θ)
     @views z[i,:] .= c .* y[i,:] .- s .* y[i+1,:]
@@ -83,7 +86,7 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)(x,ps,st)
-  v = gather_data(l.formatter,x)
+  v = fetch_data(l.formatter,x)
   vals,st = l.kernel(v,ps,st)
   y = integration(vals,l.measure)
   return y,st
@@ -245,7 +248,7 @@ end
 
 # utils
 
-function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
+function fapply(W::InputData,x::AbstractMatrix)
   k,in_dims,out_dims = size(W)
   A = reshape(permutedims(W,(2,1,3)),k*out_dims,in_dims)
   b = vec(x)

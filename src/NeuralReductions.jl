@@ -104,13 +104,13 @@ get_optimiser(s::NeuralReduction) = s.optimiser.opt
 get_scheduler(s::NeuralReduction) = s.optimiser.lr_scheduler
 get_logger(s::NeuralReduction) = s.trainlog
 
-function build_model(s::NeuralReduction)
-  build_model(s.model)
+function build_model(s::NeuralReduction,args...;kwargs...)
+  build_model(s.model,args...;kwargs...)
 end
 
-function resolve_batch_size(s::NeuralReduction,(values,coords,params))
+function resolve_batch_size(s::NeuralReduction,inputs::InputData)
   bs = s.batch_size
-  ns = size(params,2)
+  ns = num_samples(inputs)
   bs > 0 ? min(bs,ns) : ns 
 end
 
