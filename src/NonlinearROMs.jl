@@ -108,6 +108,9 @@ export FeatureBundle
 export DataFormatter
 include("DataInterface.jl")
 
+export RoPELayer
+include("NeuralLayers.jl")
+
 export NeuralModel
 export KernelNeuralModel
 export NOMAD

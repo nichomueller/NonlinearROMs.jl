@@ -35,13 +35,13 @@ function update!(log::TrainingLog,epoch::Int,current_loss::Real)
     time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
     eta_seconds = time_per_epoch * (log.max_epochs - epoch)
 
-    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(Float32(current_loss)) \t ETA: $(format_eta(eta_seconds))"
+    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $(format_eta(eta_seconds))"
     println(msg)
   end
   return nothing
 end
 
-function finalize!(log::TrainingLog)
+function finalise!(log::TrainingLog)
   !log.verbose && return nothing
 
   total_mins = round((time() - log.t_start) / 60,digits=2)
@@ -63,6 +63,7 @@ end
 
 # input data type 
 
+const TData = Float32
 const InputData{T} = AbstractArray{T,3}
 const BlockInputData{T} = BlockArray{T,3}
 
@@ -231,33 +232,4 @@ for (f,_f) in zip((:normalise!,:denormalise!),(:_normalise!,:_denormalise!))
       end
     end
   end
-end
-
-# utils
-
-dimension(μ::Realisation) = length(first(μ))
-dimension(μ::TransientRealisation) = dimension(get_params(μ))
-
-function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
-  coords_mat = zeros(T,D,length(coords))
-  for (i,coord) in enumerate(coords)
-    for d in 1:D 
-      coords_mat[d,i] = coord.data[d]
-    end
-  end
-  return coords_mat
-end
-
-function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVector{S}) where {D,T,S}
-  TS = promote_type(T,S)
-  coords_mat = zeros(TS,D+1,length(coords)*length(times))
-  col = 0
-  for t in times,coord in coords
-    col += 1
-    for d in 1:D
-      coords_mat[d,col] = coord.data[d]
-    end
-    coords_mat[D+1,col] = t
-  end
-  return coords_mat
 end

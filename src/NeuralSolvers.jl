@@ -42,7 +42,7 @@ end
 
 get_reduction(s::NeuralSolver) = s.reduction
 
-get_sampler(s::NeuralSolver) = get_sampler(s.reduction)
+get_formatter(s::NeuralSolver) = get_formatter(s.reduction)
 get_optimiser(s::NeuralSolver) = get_optimiser(s.reduction)
 get_scheduler(s::NeuralSolver) = get_scheduler(s.reduction)
 get_logger(s::NeuralSolver) = get_logger(s.reduction)

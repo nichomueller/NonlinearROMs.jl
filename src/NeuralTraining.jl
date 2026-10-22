@@ -8,6 +8,10 @@ function build_lux_chain(layers::Tuple,activation)
   Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
 end
 
+function build_model(model::KernelNeuralModel,args...)
+  #TODO
+end
+
 function build_model(model::NOMAD,args...)
   Lux.Chain(
     # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
@@ -122,7 +126,7 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;
           train_state;
           return_gradients=Val(false)
         )
-        current_loss += Float32(loss_val)
+        current_loss += TData(loss_val)
       end
       current_loss /= length(dataloader)
 
@@ -132,6 +136,6 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;
     end
   end
 
-  finalize!(logger)
+  finalise!(logger)
   return TrainedNeuralModel(train_state,stats)
 end

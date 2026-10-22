@@ -72,6 +72,7 @@ struct NeuralReduction{A<:NeuralModel}
   model::A
   epochs::Int
   batch_size::Int
+  formatter::DataFormatter
   optimiser::Optimiser
   trainlog::TrainingLog
 end
@@ -87,19 +88,20 @@ function NeuralReduction(
   kwargs...
   )
 
+  formatter = DataFormatter(model)
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
   NeuralReduction(
     model,
     epochs,
     batch_size,
-    sampler,
+    formatter,
     optimiser,
     trainlog
   )
 end
 
-get_sampler(s::NeuralReduction) = s.sampler
+get_formatter(s::NeuralReduction) = s.formatter
 get_optimiser(s::NeuralReduction) = s.optimiser.opt
 get_scheduler(s::NeuralReduction) = s.optimiser.lr_scheduler
 get_logger(s::NeuralReduction) = s.trainlog

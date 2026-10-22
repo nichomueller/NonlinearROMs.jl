@@ -4,11 +4,7 @@ end
 
 Sampler() = Sampler(:)
 
-function sample_coords(s::Sampler,f::DiscreteSpace)
-  x = get_coords(f)
-  mat = matrix_of_coords(x)
-  view(mat,:,s.strategy)
-end
+sample(s::Sampler,data::InputData) = view(data,:,s.strategy,:)
 
 struct FeatureBundle{N,T<:AbstractParamFunction}
   bundle::NTuple{N,T}
@@ -25,30 +21,34 @@ ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_realisation(a))
 ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_realisation(a))
 ParamDataStructures.num_times(a::FeatureBundle) = num_times(get_realisation(a))
 
-function get_features(a::FeatureBundle,f::DiscreteSpace)
-  features,offsets = init_features(f,a)
+function get_coords(f::DiscreteSpace,a::FeatureBundle)
+  x = get_coords(f)
+  D = num_components(eltype(x))
+  N = length(x)
+  K = num_params(a)
+  coords = zeros(TData,D,N,K)
+  for (i,xi) in enumerate(x)
+    for d in 1:D 
+      @views coords[d,i,:] .= xi.data[d]
+    end
+  end
+  return coords
+end
+
+function get_values(a::FeatureBundle,f::DiscreteSpace)
+  features,offsets = _init_data(f,a)
   @inbounds for (j,a) in enumerate(a.bundle)
     af = interpolation_values(f,a)
-    set_features!(features,af,offsets[j])
+    _set_data!(features,af,offsets[j])
   end
   return features
 end
 
-function sample_features(s::Sampler,a::FeatureBundle,f::DiscreteSpace)
-  features = get_features(a,f)
-  view(features,:,s.strategy,:)
-end
-
 function get_values(uh::FEFunction,f::DiscreteSpace)
-  values = init_features(f,a)
+  values, = _init_data(f,a)
   u = interpolation_values(f,uh)
-  set_features!(values,u,0)
+  _set_data!(values,u,0)
   return values
-end
-
-function sample_values(s::Sampler,uh::FEFunction,f::DiscreteSpace)
-  u = get_values(f,uh)
-  view(u,:,s.strategy,:)
 end
 
 struct DataFormatter{A,B,C,D}
@@ -73,19 +73,41 @@ function _fetch_data(d::DataFormatter{false,false},f::DiscreteSpace,b::FeatureBu
 end
 
 function _fetch_data(d::DataFormatter{true,false},f::DiscreteSpace,b::FeatureBundle)
-  x = sample_coords(d.sampler,f)
-  (coords = x,features = nothing)
+  coords = sample(d.sampler,get_coords(f,b))
+  (coords = coords,features = nothing)
 end
 
 function _fetch_data(d::DataFormatter{false,true},f::DiscreteSpace,b::FeatureBundle)
-  feats = sample_features(d.sampler,b,f)
+  feats = sample(d.sampler,get_values(f,b))
   (coords = nothing,features = feats)
 end
 
 function _fetch_data(d::DataFormatter{true,true},f::DiscreteSpace,b::FeatureBundle)
-  x = sample_coords(d.sampler,f)
-  features = sample_features(d.sampler,b,f)
-  (coords = x,features = features)
+  coords = sample(d.sampler,get_coords(f,b))
+  features = sample(d.sampler,get_values(f,b))
+  (coords = coords,features = features)
+end
+
+function _fetch_data(d::DataFormatter,f::DiscreteSpace,uh::ParamFEFunction)
+  sample(d.sampler,get_values(f,uh))
+end
+
+_merge_data(a,b) = @abstractmethod
+_merge_data(a::Nothing,b::Nothing) = nothing
+_merge_data(a::Nothing,b) = b
+_merge_data(a,b::Nothing) = a
+_merge_data(a::InputData,b::InputData) = cat(a,b;dims=1)
+
+function merge_data(::DataFormatter,(coords,features))
+  _merge_data(coords,features)
+end
+
+function merge_data(::DataFormatter{<:Any,<:Any,false},fixed_data,new_data)
+  fixed_data
+end
+
+function merge_data(::DataFormatter{<:Any,<:Any,true},fixed_data,new_data)
+  _merge_data(fixed_data,new_data)
 end
 
 function fetch_data(
@@ -93,7 +115,7 @@ function fetch_data(
   f::DiscreteSpace,
   b::FeatureBundle
   )
-
+  
   (input = _fetch_data(d,f,b),)
 end
 
@@ -101,46 +123,36 @@ function fetch_data(
   d::DataFormatter,
   f::DiscreteSpace,
   b::FeatureBundle,
-  uh::FEFunction
+  uh::ParamFEFunction
   )
   
-  (input = _fetch_data(d,f,b),output = sample_values(d.sampler,uh,f))
+  (input = _fetch_data(d,f,b),output = sample(d.sampler,get_values(f,uh)))
 end
 
 function fetch_data_and_stats(args...;kwargs...)
-  data = fetch_data(args...)
-  stats = Normalisation(data;kwargs...)
-  return data,stats
+  (input,output) = fetch_data(args...)
+  stats = Normalisation((input,output);kwargs...)
+  minput = _merge_data(input)
+  return (minput,output),stats
 end
 
-function fetch_data_and_stats(stats::Normalisation,args...;kwargs...)
-  data = fetch_data(args...)
-  normalise!(data,stats)
-  return data,stats
+function fetch_data_from_stats(stats::Normalisation,args...)
+  (input,) = fetch_data(args...)
+  normalise!((input,),stats;normalise=true)
+  minput = _merge_data(input)
+  return minput
 end
-
-struct LayerData{A,B}
-  pass_new_data::Val{A}
-  fixed_data::B
-end
-
-function LayerData(fixed_data;pass_new_data=Val{true}())
-  LayerData(pass_new_data,fixed_data)
-end
-
-fetch_data(d::LayerData{false},x) = d.fixed_data
-fetch_data(d::LayerData{true},x) = cat(d.fixed_data,x,dims=1)
 
 # utils
 
-function init_features(f::DiscreteSpace,a::FeatureBundle)
+function _init_data(f::DiscreteSpace,a::FeatureBundle)
   x = get_coords(f)
   offsets = _offsets(a,testitem(x))
   D = offsets[end]
   N = length(x)
   K = num_params(a)
-  feats = zeros(Float32,D,N,K)
-  return feats,offsets
+  data = zeros(TData,D,N,K)
+  return data,offsets
 end
 
 function _offsets(a::FeatureBundle,x::Point)
@@ -152,22 +164,22 @@ function _offsets(a::FeatureBundle,x::Point)
   return offsets
 end
 
-function set_features!(feats,interp,o)
-  cache = array_cache(interp)
-  @inbounds for i in eachindex(interp)
-    vals = getindex!(cache,interp,i)
-    for k in param_eachindex(vals)
-      _set_feature!(feats,vals[k],o,i,k)
+function _set_data!(data,vals,o)
+  cache = array_cache(vals)
+  @inbounds for i in eachindex(vals)
+    valsi = getindex!(cache,vals,i)
+    for k in param_eachindex(valsi)
+      _set_data!(data,param_getindex(valsi,k),o,i,k)
     end
   end
-  feats
+  data
 end
 
-_set_feature!(feats,vals,o,i,k) = (feats[o+1,i,k] = vals)
+_set_data!(data,valsik,o,i,k) = (data[o+1,i,k] = valsik)
 
-function _set_feature!(feats,vals::Point{D},o,i,k) where D
+function _set_data!(data,valsik::Point{D},o,i,k) where D
   for d in 1:D
-    feats[o+d,i,k] = vals.data[d]
+    data[o+d,i,k] = valsik.data[d]
   end
 end
 
