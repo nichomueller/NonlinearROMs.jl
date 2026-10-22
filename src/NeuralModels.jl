@@ -22,7 +22,7 @@ It maps an input function to an output function through three main stages:
 2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
+struct KernelNeuralModel{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer,D} <: NeuralModel
   lifting::A
   kernel_layers::NTuple{N,B}
   projection::C
@@ -121,26 +121,21 @@ const XDEV = Lux.reactant_device(;force=true)
 
 """
     struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
-      chain::A
+      model::A
       parameters::B
       states::C
       stats::D
     end
 
-A trained Lux `chain` bundled with its optimised parameters/states and the
-normalisation `stats` (a [`Normalisation`](@ref)/[`ZScore`](@ref), or `identity`
-if none) used to pre-normalise inputs and de-normalise outputs. Evaluable as
-`(a::TrainedNeuralModel)(x) -> AbstractMatrix`.
+A trained Lux `model` bundled with its optimised parameters/states and the
+normalisation `stats` (a [`Normalisation`](@ref)/[`ZScore`](@ref)) used to 
+pre-normalise inputs and de-normalise outputs. Evaluable as `(a::TrainedNeuralModel)(x) -> AbstractMatrix`.
 """
 struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
-  chain::A
+  model::A
   parameters::B
   states::C
   stats::D
-end
-
-function TrainedNeuralModel(chain,parameters,states)
-  TrainedNeuralModel(chain,parameters,states,identity)
 end
 
 function TrainedNeuralModel(train_state::Lux.Training.TrainState,args...)
@@ -153,13 +148,12 @@ end
     (m::TrainedNeuralModel)(inputs) -> AbstractArray
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
-a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux chain, then
-rescales the prediction back with `m.stats`. Both steps are no-ops when `m.stats === identity`
-(a model with no normalisation, e.g. an `AutoEncoder`/`AutoDecoder`/`VAE`).
+a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux model, then
+rescales the prediction back with `m.stats`.
 """
 function (m::TrainedNeuralModel)(inputs)
   normalise!(inputs,m.stats)
-  pred, = m.chain(inputs,m.parameters,m.states)
+  pred, = m.model(inputs,m.parameters,m.states)
   denormalise!(pred,m.stats)
   return pred
 end

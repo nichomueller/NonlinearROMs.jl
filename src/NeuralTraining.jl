@@ -77,8 +77,8 @@ function train(
   solver::NeuralSolver,
   op::NeuralOperator,
   data...;
-  update_stats=false,
   normalise=true,
+  update_stats=false,
   kwargs...
   )
 
@@ -103,7 +103,7 @@ set of trunk query points, NOMAD's coordinates are already part of the per-row b
 and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`. `loss`
 defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
 function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
-normalisation (or `identity`) bundled into the returned [`TrainedNeuralModel`](@ref).
+normalisation bundled into the returned [`TrainedNeuralModel`](@ref).
 """
 function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
   init!(logger)

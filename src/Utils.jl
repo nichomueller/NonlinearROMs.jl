@@ -64,90 +64,173 @@ end
 # input data type 
 
 const InputData{T} = AbstractArray{T,3}
+const BlockInputData{T} = BlockArray{T,3}
 
 dimension(data::InputData) = size(data,1)
 num_coords(data::InputData) = size(data,2)
 num_samples(data::InputData) = size(data,3)
 
-struct RolloutData{T,A<:InputData{T}} <: AbstractVector{InputData{T}}
-  data::A
-  steps::Int
+# normalisation handling
+
+abstract type AbstractScore end
+
+normalise!(data,score::AbstractScore) = @abstractmethod
+denormalise!(data,score::AbstractScore) = @abstractmethod
+
+struct MScore{A} <: AbstractScore
+  max::A
 end
 
-Base.length(a::RolloutData) = a.steps
-Base.getindex(a::RolloutData,i::Int) = a.data
+const NoMScore = MScore{Nothing}
 
-# normalisation handling 
+MScore(::Nothing;kwargs...) = MScore{Nothing}(nothing)
 
-struct ZScore{A<:AbstractVector,B<:AbstractVector}
+function MScore(data::InputData;normalise=true)
+  max = maximum(abs,data)
+  normalise && (data ./= max)
+  MScore{typeof(max)}(max)
+end
+
+function normalise!(data,score::NoMScore)
+  data
+end
+
+function normalise!(data,score::MScore)
+  rmul!(data,score.max)
+end
+
+function denormalise!(data,score::NoMScore)
+  data
+end
+
+function denormalise!(data,score::MScore)
+  rdiv!(data,score.max)
+end
+
+struct ZScore{A,B} <: AbstractScore
   μ::A
   σ::B
 end
 
-function ZScore(data::AbstractMatrix;normalise=false)
+const NoZScore = ZScore{Nothing,Nothing}
+
+ZScore(::Nothing;kwargs...) = ZScore(nothing,nothing)
+
+function ZScore(data::InputData;normalise=true)
   if normalise
     stats = ZScore(data;normalise=false)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=2),dims=2)
-  σ = dropdims(std(data,dims=2),dims=2)
+  μ = dropdims(mean(data,dims=3),dims=3)
+  σ = dropdims(std(data,dims=3),dims=3)
   # Avoid dividing by zero if a feature is constant
-  for i in eachindex(σ)
+  @inbounds for i in eachindex(σ)
     iszero(σ[i]) && (σ[i] = one(eltype(σ)))
   end
   return ZScore(μ,σ)
 end
 
-struct Normalisation{T<:Real,A<:ZScore,B<:ZScore}
-  dmax::T
-  pscore::A 
-  xscore::B
+function normalise!(data::AbstractMatrix,score::NoZScore)
+  data
 end
 
-function Normalisation(data,params,coords;normalise=false)
-  dmax = maximum(abs,data)
-  normalise && (data ./= dmax)
-  input = ZScore(params;normalise)
-  output = ZScore(coords;normalise)
-  Normalisation(dmax,input,output)
-end
-
-normalise!(args...) = @abstractmethod
-normalise!(data,::typeof(identity)) = data
-
-function normalise!(data::AbstractVector,stats::ZScore)
+function normalise!(data::AbstractMatrix,stats::ZScore)
   data .-= stats.μ
   data ./= stats.σ
   data
 end
 
-function normalise!(data::AbstractMatrix,stats::ZScore)
-  @inbounds for v in eachcol(data)
-    normalise!(v,stats)
+function denormalise!(data::AbstractMatrix,score::NoZScore)
+  data
+end
+
+function denormalise!(data::AbstractMatrix,stats::ZScore)
+  data .*= stats.σ
+  data .+= stats.μ
+  data
+end
+
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::InputData,stats::ZScore)
+      @inbounds for m in eachslice(data,dims=3)
+        $f(m,stats)
+      end
+      data
+    end
   end
-  data
 end
 
-function normalise!(inout::NTuple{2,AbstractArray},stats::Normalisation)
-  a,b = inout
-  normalise!(a,stats.pscore)
-  normalise!(b,stats.xscore)
+struct Scores{A} <: AbstractScore
+  scores::A
 end
 
-function normalise!(inout::NTuple{3,AbstractArray},stats::Normalisation)
-  a,b,c = inout
-  a ./= stats.dmax
-  normalise!(b,stats.pscore)
-  normalise!(c,stats.xscore)
+for f in (:MScore,:ZScore)
+  @eval begin
+    function $f(data::BlockInputData;kwargs...)
+      scores = map(x -> $f(x;kwargs...),blocks(data))
+      return Scores(scores)
+    end
+
+    function $f(data::NamedTuple;kwargs...)
+      scores = ()
+      for (k,v) in pairs(data)
+        scores = merge(scores,(k => $f(v;kwargs...)))
+      end
+      return Scores(scores)
+    end
+  end
 end
 
-denormalise!(args...) = @abstractmethod
-denormalise!(data,::typeof(identity)) = data
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::BlockInputData,stats::Scores{<:AbstractArray})
+      map($f,blocks(data),stats.scores)
+    end
 
-function denormalise!(data::AbstractArray,stats::Normalisation)
-  rmul!(data,stats.dmax)
-  data
+    function $f(data::NamedTuple,stats::Scores{<:NamedTuple})
+      @inbounds for k in keys(stats.scores)
+        $f(data[k],stats.scores[k])
+      end
+      data
+    end
+  end
+end
+
+struct Normalisation{A<:AbstractScore,B<:AbstractScore}
+  input_score::A
+  output_score::B
+end
+
+function Normalisation((input,output);kwargs...)
+  input_score = ZScore(input;kwargs...)
+  output_score = MScore(output;kwargs...)
+  Normalisation(input_score,output_score)
+end
+
+for (f,_f) in zip((:normalise!,:denormalise!),(:_normalise!,:_denormalise!))
+  @eval begin
+    function $f(data::NamedTuple,stats::Normalisation)
+      $_f((input=data,),stats)
+    end
+
+    function $f(data::InputData,stats::Normalisation)
+      $_f((output=data,),stats)
+    end
+
+    function $_f(data::NamedTuple,stats::Normalisation)
+      for (k,v) in pairs(data)
+        if k == :input
+          $f(v,stats.input_score)
+        elseif k == :output
+          $f(v,stats.output_score)
+        else
+          @notimplemented "Normalisation only supports `:input` and `:output` keys"
+        end
+      end
+    end
+  end
 end
 
 # utils

@@ -69,6 +69,14 @@ end
 
 abstract type AbstractIntegralKernel <: AbstractLuxLayer end
 
+get_in_dimension(k::AbstractLuxLayer) = @abstractmethod
+get_out_dimension(k::AbstractLuxLayer) = @abstractmethod
+
+get_in_dimension(k::Lux.Dense) = k.in
+get_out_dimension(k::Lux.Dense) = k.out
+get_in_dimension(k::Lux.Conv) = k.in
+get_out_dimension(k::Lux.Conv) = k.out
+
 # we potentially want to replace the space with a new one during the online phase
 # thus we make this struct mutable
 mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:LayerData} <: AbstractIntegralKernel
@@ -76,6 +84,9 @@ mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:LayerData
   measure::B
   formatter::C
 end
+
+get_in_dimension(k::IntegralKernel) = get_in_dimension(k.kernel)
+get_out_dimension(k::IntegralKernel) = get_out_dimension(k.kernel)
 
 function Lux.initialparameters(rng::AbstractRNG,l::IntegralKernel)
   Lux.initialparameters(rng,l.kernel)
@@ -97,6 +108,9 @@ struct FourierKernel <: AbstractIntegralKernel
   out_dims::Int
   truncation::Int
 end
+
+get_in_dimension(k::FourierKernel) = k.in_dims
+get_out_dimension(k::FourierKernel) = k.out_dims
 
 function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
   return (
@@ -204,32 +218,20 @@ shape/role regardless of which non-local discretization `kernel` uses.
 """
 struct KernelNeuralLayer{A<:AbstractIntegralKernel,B<:Function} <: AbstractLuxLayer
   kernel::A
-  in_dims::Int
-  out_dims::Int
   activation::B
 end
 
-function KernelNeuralLayer(
-  kernel::AbstractIntegralKernel,
-  in_dims::Int,
-  out_dims::Int;
-  activation=identity,
-  kwargs...
-  )
-
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
-end
-
-function KernelNeuralLayer(kernel::AbstractIntegralKernel,dims::Pair,args...;kwargs...)
-  in_dims,out_dims = dims
-  KernelNeuralLayer(kernel,in_dims,out_dims,args...;kwargs...)
+function KernelNeuralLayer(kernel::AbstractIntegralKernel;activation=identity,kwargs...)
+  KernelNeuralLayer(kernel,activation)
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::KernelNeuralLayer)
+  in_dims = get_in_dimension(l.kernel)
+  out_dims = get_out_dimension(l.kernel)
   return (
     kernel = Lux.initialparameters(rng,l.kernel),
-    weights = Lux.glorot_uniform(rng,l.out_dims,l.in_dims),
-    bias = zeros(Float32,l.out_dims),
+    weights = Lux.glorot_uniform(rng,out_dims,in_dims),
+    bias = zeros(Float32,out_dims),
   )
 end
 
