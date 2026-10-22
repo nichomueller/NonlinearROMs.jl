@@ -101,7 +101,7 @@ function MultiGraphInducedSpace(spaces...;kwargs...)
   lgraphs = map(x -> build_graph(x;kwargs...),lcoords)
   coords,node_to_lnode = _coords_info(lcoords)
   graph = build_graph(coords;kwargs...)
-  GraphInducedSpace(graph,lgraphs,coords,node_to_lnode)
+  MultiGraphInducedSpace(graph,lgraphs,coords,node_to_lnode)
 end
 
 get_graph(space::MultiGraphInducedSpace) = space.graph

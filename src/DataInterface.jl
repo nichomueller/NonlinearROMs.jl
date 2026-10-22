@@ -9,14 +9,16 @@ function sample_coords(s::CoordsSampler,f::DiscreteSpace)
   view(x,s.strategy)
 end
 
-struct FeatureBundle{N,A<:Tuple{N,AbstractParamFunction}}
-  bundle::A
-  function FeatureBundle(bundle::A) where {N,A<:Tuple{N,AbstractParamFunction}}
+struct FeatureBundle{N,T<:AbstractParamFunction}
+  bundle::NTuple{N,T}
+  function FeatureBundle(bundle::NTuple{N,T}) where {N,T<:AbstractParamFunction}
     r = get_realisation(first(bundle))
     @check all(get_realisation(a)==r for a in bundle) "All param functions must have the same realisation"
-    new{N,A}(bundle)
+    new{N,T}(bundle)
   end
 end
+
+const TransientFeatureBundle{N} = FeatureBundle{N,<:TransientParamFunction}
 
 ParamDataStructures.get_realisation(a::FeatureBundle) = get_realisation(first(a.bundle))
 ParamDataStructures.get_params(a::FeatureBundle) = get_params(get_realisation(a))
@@ -24,13 +26,6 @@ ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_realisation(a))
 ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_realisation(a))
 ParamDataStructures.num_times(a::FeatureBundle) = num_times(get_realisation(a))
 
-# steady: [dim(a[1]) + ... + dim(a[N])] x num_coords(f) x num_params(r)
-# transient: [dim(a[1]) + ... + dim(a[N]) + N] x num_coords(f) x num_params(r)
-# if N == 1 and dim(a[1]) == 2, then the output is 
-# [a(x1,p,t1), ..., a(xn,p,t1)
-#              ...
-#  a(x1,p,tK), ..., a(xn,p,tK)]
-# for every parameter p
 function get_features(a::FeatureBundle,f::DiscreteSpace)
   features = init_features(f,a)
   @inbounds for (j,a) in enumerate(a.bundle)
@@ -106,28 +101,28 @@ fetch_data(d::LayerData{true},x) = stack((d.fixed_data,x),dims=1)
 # utils
 
 function init_features(f::DiscreteSpace,a::FeatureBundle)
-  r = get_realisation(a)
-  s = _features_size(f,a,r)
-  zeros(Float32,s...)
+  x = get_coords(f)
+  d = _dimension(a,testitem(x))
+  N = length(x)
+  K = num_params(a)
+  zeros(Float32,d,N,K)
 end
 
-function _features_size(f,a,r)
-  nx = num_coords(f)
-  nb = length(a.bundle)
-  (nx,nb)
-end
-
-function _features_size(f,a,r::TransientRealisation)
-  nb = length(a.bundle)
-  nx = num_coords(f)
-  np = param_length(r)
-  (nb,nx,np)
+function init_features(f::DiscreteSpace,a::TransientFeatureBundle)
+  x = get_coords(f)
+  d = _dimension(a,testitem(x))
+  N = length(x)
+  K = num_params(a)
+  T = num_times(a)
+  feats = zeros(Float32,d,N,K)
+  RolloutData(feats,T)
 end
 
 function _dimension(a::FeatureBundle,x::Point)
   d = 0
   for f in a.bundle
-    d += num_components(eltype(f(x)))
+    T = return_type(f,x)
+    d += num_components(eltype(T))
   end
   return d
 end

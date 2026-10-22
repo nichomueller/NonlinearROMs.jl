@@ -35,6 +35,11 @@ struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
   reduction::NeuralReduction{A}
 end
 
+function NeuralSolver(fesolver::GridapType,model::NeuralModel;kwargs...)
+  reduction = NeuralReduction(model;kwargs...)
+  NeuralSolver(fesolver,reduction)
+end
+
 get_reduction(s::NeuralSolver) = s.reduction
 
 get_sampler(s::NeuralSolver) = get_sampler(s.reduction)

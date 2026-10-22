@@ -69,6 +69,14 @@ dimension(data::InputData) = size(data,1)
 num_coords(data::InputData) = size(data,2)
 num_samples(data::InputData) = size(data,3)
 
+struct RolloutData{T,A<:InputData{T}} <: AbstractVector{InputData{T}}
+  data::A
+  steps::Int
+end
+
+Base.length(a::RolloutData) = a.steps
+Base.getindex(a::RolloutData,i::Int) = a.data
+
 # normalisation handling 
 
 struct ZScore{A<:AbstractVector,B<:AbstractVector}
@@ -138,7 +146,7 @@ denormalise!(args...) = @abstractmethod
 denormalise!(data,::typeof(identity)) = data
 
 function denormalise!(data::AbstractArray,stats::Normalisation)
-  data .*= stats.dmax
+  rmul!(data,stats.dmax)
   data
 end
 

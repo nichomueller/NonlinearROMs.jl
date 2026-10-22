@@ -29,6 +29,19 @@ struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
   activation::D
 end
 
+function KernelNeuralModel(
+  in_dimension::Int,
+  out_dimension::Int;
+  hidden_dimensions=(64,64,64),
+  activation=relu,
+  lifting=Lux.Dense(in_dimension => hidden_dimensions[1],activation),
+  kernel_layers=ntuple(i -> Lux.Dense(hidden_dimensions[i] => hidden_dimensions[i+1],activation),length(hidden_dimensions)-1),
+  projection=Lux.Dense(hidden_dimensions[end] => out_dimension,activation),
+  )
+
+  KernelNeuralModel(lifting,kernel_layers,projection,activation)
+end
+
 """
     struct NOMAD{N,A} <: NeuralModel
       approximator_layers::NTuple{N,Int}
@@ -146,7 +159,7 @@ rescales the prediction back with `m.stats`. Both steps are no-ops when `m.stats
 """
 function (m::TrainedNeuralModel)(inputs)
   normalise!(inputs,m.stats)
-  pred = first(m.chain(inputs,m.parameters,m.states))
+  pred, = m.chain(inputs,m.parameters,m.states)
   denormalise!(pred,m.stats)
   return pred
 end
