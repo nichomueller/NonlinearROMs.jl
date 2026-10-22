@@ -298,14 +298,13 @@ end
 
 # message-passing on graph and graph-induced spaces
 
-function gather_data(vals::AbstractMatrix,g::AbstractGraph)
-  d,n = size(vals)
-  @check d == ne(g) "The first dimension must match the number of graph edges"
+function gather_data(vals::InputData,g::AbstractGraph)
+  d,n,k = size(vals)
   @check n == nv(g) "The final dimension must match the number of graph vertices"
-  out = zeros(eltype(vals),2*d,ne(g))
+  out = zeros(eltype(vals),2*d,ne(g),k)
   for (k,e) in enumerate(edges(g))
-    @views out[1:d,k] .+= vals[:,src(e)]
-    @views out[d+1:end,k] .+= vals[:,dst(e)]
+    @views out[1:d,k] .+= vals[:,src(e),:]
+    @views out[d+1:end,k] .+= vals[:,dst(e),:]
   end
   return out
 end
@@ -320,20 +319,11 @@ behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 """
-function scatter_data(vals::AbstractVector,g::AbstractGraph)
-  @check length(vals) == ne(g) "The number of values must match the number of graph edges"
-  out = zeros(eltype(vals),nv(g))
-  for (k,e) in enumerate(edges(g))
-    out[dst(e)] += vals[k]
-  end
-  return out
-end
-
-function scatter_data(vals::AbstractMatrix,g::AbstractGraph)
+function scatter_data(vals::InputData,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
-  out = zeros(eltype(vals),size(vals,1),nv(g))
+  out = zeros(eltype(vals),size(vals,1),nv(g),size(vals,3))
   for (k,e) in enumerate(edges(g))
-    @views out[:,dst(e)] .+= vals[:,k]
+    @views out[:,dst(e),:] .+= vals[:,k,:]
   end
   return out
 end

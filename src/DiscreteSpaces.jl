@@ -89,7 +89,7 @@ end
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 
-struct MultiGraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
+struct MultiGraphInducedSpace{N,A<:AbstractGraph,B<:AbstractVector{<:Point},C<:Table} <: AbstractGraphInducedSpace
   graph::A
   graphs::NTuple{N,A}
   coords::B

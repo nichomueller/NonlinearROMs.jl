@@ -9,7 +9,7 @@ function build_lux_chain(layers::Tuple,activation)
 end
 
 function build_model(model::KernelNeuralModel,args...)
-  #TODO
+  KernelOperator(model.lifting,model.kernel_layers,model.projection)
 end
 
 function build_model(model::NOMAD,args...)
@@ -35,7 +35,11 @@ function train!(red::KernelReduction,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(red)
   logger = get_logger(red)
   function to_device_batch((x_batch,y_batch))
-    #TODO check if this is correct
+    # x_batch is the per-sample-fixed (x,a(x)) tensor DataInterface.jl already merged
+    # into one plain array (KernelOperator's lifting consumes it directly, with no
+    # further formatting needed); y_batch is the target values. Both are plain
+    # arrays, so moving them to device is a direct transfer, same as every other
+    # architecture's to_device_batch.
     return (x_batch |> XDEV,y_batch |> XDEV)
   end
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)

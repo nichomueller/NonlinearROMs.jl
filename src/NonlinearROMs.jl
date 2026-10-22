@@ -91,22 +91,39 @@ export ReduceLROnPlateau
 export Optimiser
 include("LRSchedulers.jl")
 
-export DiscreteSpace
-export FunctionSpace
-export GraphInducedSpace
-include("DiscreteSpaces.jl")
-
 export WeightedSimpleDiGraph
-export GraphInducedSpace
 export NystromSubgraph
 export gather_data
 export scatter_data
 export attention
 include("GraphsInterface.jl")
 
+export DiscreteSpace
+export FunctionSpace
+export GraphInducedSpace
+export MultiGraphInducedSpace
+include("DiscreteSpaces.jl")
+
+export InducedMeasure
+export FSpaceMeasure
+export GraphMeasure
+export get_space
+export integration
+include("InducedMeasures.jl")
+
 export FeatureBundle
 export DataFormatter
 include("DataInterface.jl")
+
+export AbstractIntegralKernel
+export IntegralKernel
+export FourierKernel
+export AttentionKernel
+export MultipleAttentionKernel
+export KernelNeuralLayer
+export KernelOperator
+export prepare_kernel_input
+include("IntegralKernels.jl")
 
 export RoPELayer
 include("NeuralLayers.jl")
@@ -123,7 +140,7 @@ export NNHyperReduction
 export TransientNNRegression
 export TransientNNHyperReduction
 export NeuralReduction
-export NOMADReductionon
+export NOMADReduction
 export KernelReduction
 include("NeuralReductions.jl")
 

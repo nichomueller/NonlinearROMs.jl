@@ -29,7 +29,7 @@ InducedMeasure(space::FunctionSpace) = FSpaceMeasure(space)
 
 get_space(meas::FSpaceMeasure) = meas.space
 
-function _integration(a::InputData,meas::FSpaceMeasure{<:SimpleFESpace})
+function _integration(a::InputData,meas::FSpaceMeasure{<:FunctionSpace{<:FESpace}})
   space = get_space(meas)
   dΩ = get_measure(space)
   v = get_fe_basis(space)
@@ -59,10 +59,22 @@ function InducedMeasure(space::GraphInducedSpace)
   return GraphMeasure(space,w)
 end
 
+function InducedMeasure(space::MultiGraphInducedSpace)
+  graph = get_graph(space)
+  w = zeros(Int,nv(graph))
+  cache = array_cache(space.node_to_lnode)
+  for e in edges(graph)
+    v = dst(e)
+    lnodes = getindex!(cache,space.node_to_lnode,v)
+    w[v] += length(lnodes)
+  end
+  return GraphMeasure(space,w)
+end
+
 get_space(meas::GraphMeasure) = meas.space
 get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
-function _integration(a::AbstractArray,meas::GraphMeasure)
+function _integration(a::InputData,meas::GraphMeasure)
   space = get_space(meas)
   out = scatter_data(a,space)
   _normalise!(out,meas.weights)
@@ -71,16 +83,9 @@ end
 
 # utils 
 
-function _normalise!(a::AbstractVector,weights::AbstractVector)
-  for i in eachindex(a)
-    !iszero(weights[i]) && (a[i] /= weights[i])
-  end
-  a
-end
-
-function _normalise!(a::AbstractMatrix,weights::AbstractVector)
-  @views for i in eachindex(a)
-    !iszero(weights[i]) && (a[:,i] ./= weights[i])
+function _normalise!(a::InputData,weights::AbstractVector)
+  @views for i in axes(a,2)
+    !iszero(weights[i]) && (a[:,i,:] ./= weights[i])
   end
   a
 end

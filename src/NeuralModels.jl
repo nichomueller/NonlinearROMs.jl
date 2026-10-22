@@ -9,11 +9,22 @@ implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 abstract type NeuralModel <: Map end
 
 """
-    struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
+    DataFormatter(model::NeuralModel) -> DataFormatter
+
+Default data-formatting policy for a [`NeuralModel`](@ref): pass both coordinates
+and features, never the running kernel-layer state (`pass_new_data=false`), with
+no subsampling. Architectures whose training pipeline actually consumes a
+`DataFormatter` (currently [`KernelNeuralModel`](@ref)) should specialise this to
+pick a different default; every other architecture ignores the field, so the
+flat default here only needs to be constructible, not meaningful.
+"""
+DataFormatter(::NeuralModel) = DataFormatter()
+
+"""
+    struct KernelNeuralModel{N,A,B,C} <: NeuralModel
       lifting::A
       kernel_layers::NTuple{N,B}
       projection::C
-      activation::D
     end
 
 Generic architecture for kernel-based neural models.
@@ -22,24 +33,10 @@ It maps an input function to an output function through three main stages:
 2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralModel{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer,D} <: NeuralModel
+struct KernelNeuralModel{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer} <: NeuralModel
   lifting::A
   kernel_layers::NTuple{N,B}
   projection::C
-  activation::D
-end
-
-function KernelNeuralModel(
-  in_dimension::Int,
-  out_dimension::Int;
-  hidden_dimensions=(64,64,64),
-  activation=relu,
-  lifting=Lux.Dense(in_dimension => hidden_dimensions[1],activation),
-  kernel_layers=ntuple(i -> Lux.Dense(hidden_dimensions[i] => hidden_dimensions[i+1],activation),length(hidden_dimensions)-1),
-  projection=Lux.Dense(hidden_dimensions[end] => out_dimension,activation),
-  )
-
-  KernelNeuralModel(lifting,kernel_layers,projection,activation)
 end
 
 """
