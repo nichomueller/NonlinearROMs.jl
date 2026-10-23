@@ -21,19 +21,12 @@ ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_realisation(a))
 ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_realisation(a))
 ParamDataStructures.num_times(a::FeatureBundle) = num_times(get_realisation(a))
 
-function get_coords(f::DiscreteSpace,a::FeatureBundle)
-  x = get_coords(f)
-  D = num_components(eltype(x))
-  N = length(x)
-  K = num_params(a)
-  coords = zeros(TData,D,N,K)
-  for (i,xi) in enumerate(x)
-    for d in 1:D 
-      @views coords[d,i,:] .= xi.data[d]
-    end
-  end
-  return coords
-end
+get_param_fun(a::GenericField) = a.object
+get_param_fun(a::ParamFEFunction) = get_param_fun(testitem(get_data(get_data(a))))
+ParamDataStructures.get_params(a::FeatureBundle) = get_params(get_param_fun(a))
+ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_param_fun(a))
+ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_params(a))
+ParamDataStructures.num_times(a::FeatureBundle) = length(get_times(a))
 
 function get_values(a::FeatureBundle,f::DiscreteSpace)
   features,offsets = _init_data(f,a)
@@ -45,9 +38,9 @@ function get_values(a::FeatureBundle,f::DiscreteSpace)
 end
 
 function get_values(uh::FEFunction,f::DiscreteSpace)
-  values, = _init_data(f,a)
+  values,offsets = _init_data(f,a)
   u = interpolation_values(f,uh)
-  _set_data!(values,u,0)
+  _set_data!(values,u,offsets[1])
   return values
 end
 
@@ -55,6 +48,7 @@ struct DataFormatter{A,B,C,D}
   pass_coords::Val{A}
   pass_features::Val{B}
   pass_new_data::Val{C}
+  normalise::Bool
   sampler::Sampler{D}
 end
 
@@ -62,41 +56,50 @@ function DataFormatter(;
   pass_coords=Val{true}(),
   pass_features=Val{true}(),
   pass_new_data=Val{false}(),
+  normalise=true,
   sampler=Sampler()
   )
 
-  DataFormatter(pass_coords,pass_features,pass_new_data,sampler)
+  DataFormatter(pass_coords,pass_features,pass_new_data,normalise,sampler)
 end
 
-function _fetch_data(d::DataFormatter{false,false},f::DiscreteSpace,b::FeatureBundle)
-  (coords = nothing,features = nothing)
+# input
+function fetch_data(::DataFormatter{false,false},(coords,features))
+  @notimplemented "Wait ... no input?"
 end
 
-function _fetch_data(d::DataFormatter{true,false},f::DiscreteSpace,b::FeatureBundle)
-  coords = sample(d.sampler,get_coords(f,b))
-  (coords = coords,features = nothing)
+# input
+function fetch_data(::DataFormatter{true,false},(coords,features))
+  (
+    coords = sample(d.sampler,coords),
+    features = nothing
+  )
 end
 
-function _fetch_data(d::DataFormatter{false,true},f::DiscreteSpace,b::FeatureBundle)
-  feats = sample(d.sampler,get_values(f,b))
-  (coords = nothing,features = feats)
+# input
+function fetch_data(d::DataFormatter{false,true},(coords,features))
+  (
+    coords = nothing,
+    features = sample(d.sampler,features)
+  )
 end
 
-function _fetch_data(d::DataFormatter{true,true},f::DiscreteSpace,b::FeatureBundle)
-  coords = sample(d.sampler,get_coords(f,b))
-  features = sample(d.sampler,get_values(f,b))
-  (coords = coords,features = features)
+# input
+function fetch_data(d::DataFormatter{true,true},(coords,features))
+  (
+    coords = sample(d.sampler,coords),
+    features = sample(d.sampler,features)
+  )
 end
 
-function _fetch_data(d::DataFormatter,f::DiscreteSpace,uh::ParamFEFunction)
-  sample(d.sampler,get_values(f,uh))
+# output 
+function fetch_data(d::DataFormatter,values::InputData)
+  sample(d.sampler,values)
 end
 
-_merge_data(a,b) = @abstractmethod
-_merge_data(a::Nothing,b::Nothing) = nothing
-_merge_data(a::Nothing,b) = b
-_merge_data(a,b::Nothing) = a
-_merge_data(a::InputData,b::InputData) = cat(a,b;dims=1)
+function fetch_stats(d::DataFormatter,data)
+  Normalisation(data;normalise=d.normalise)
+end
 
 function merge_data(::DataFormatter,data::NamedTuple)
   @check haskey(data,:input)
@@ -117,43 +120,37 @@ function merge_data(::DataFormatter{<:Any,<:Any,true},fixed_data,new_data)
   _merge_data(fixed_data,new_data)
 end
 
-function fetch_data(
-  d::DataFormatter,
-  f::DiscreteSpace,
-  b::FeatureBundle
-  )
-  
-  (input = _fetch_data(d,f,b),)
-end
-
-function fetch_data(
-  d::DataFormatter,
-  f::DiscreteSpace,
-  b::FeatureBundle,
-  uh::ParamFEFunction
-  )
-  
-  (input = _fetch_data(d,f,b),output = sample(d.sampler,get_values(f,uh)))
-end
-
-function fetch_data_and_stats(d::DataFormatter,args...)
-  data = fetch_data(args...)
-  stats = Normalisation(data;normalise=d.normalise)
-  mdata = _merge_data(data)
-  return mdata,stats
-end
-
-function fetch_data_from_stats(stats::Normalisation,d::DataFormatter,args...)
-  data = fetch_data(args...)
-  normalise!(data,stats;normalise=d.normalise)
-  mdata = _merge_data(data)
-  return mdata
-end
-
 # utils
 
-function _init_data(f::DiscreteSpace,a::FeatureBundle)
-  x = get_coords(f)
+function _get_coords(x::AbstractVector{<:Point},K::Int)
+  D = num_components(eltype(x))
+  N = length(x)
+  coords = zeros(TData,D,N,K)
+  for (i,xi) in enumerate(x)
+    for d in 1:D 
+      @views coords[d,i,:] .= xi.data[d]
+    end
+  end
+  return coords
+end
+
+function _get_features(a::FeatureBundle,x::AbstractVector{<:Point})
+  features,offsets = _init_data(a,x)
+  @inbounds for (j,a) in enumerate(a)
+    af = lazy_map(a,x)
+    _set_data!(features,af,offsets[j])
+  end
+  return features
+end
+
+function _get_values(ah::ParamFEFunction,x::AbstractVector{<:Point})
+  values,offsets = _init_data(ah,x)
+  a = lazy_map(ah,x)
+  _set_data!(values,a,first(offsets))
+  return values
+end
+
+function _init_data(a,x)
   offsets = _offsets(a,testitem(x))
   D = offsets[end]
   N = length(x)
@@ -168,6 +165,13 @@ function _offsets(a::FeatureBundle,x::Point)
     T = return_type(f,x)
     offsets[i+1] = offsets[i] + num_components(eltype(T))
   end
+  return offsets
+end
+
+function _offsets(a::ParamFEFunction,x::Point)
+  offsets = zeros(Int,2)
+  T = return_type(a,x)
+  offsets[2] = num_components(eltype(T))
   return offsets
 end
 
@@ -189,6 +193,12 @@ function _set_data!(data,valsik::Point{D},o,i,k) where D
     data[o+d,i,k] = valsik.data[d]
   end
 end
+
+_merge_data(a,b) = @abstractmethod
+_merge_data(a::Nothing,b::Nothing) = nothing
+_merge_data(a::Nothing,b) = b
+_merge_data(a,b::Nothing) = a
+_merge_data(a::InputData,b::InputData) = cat(a,b;dims=1)
 
 # data formatter:
 # 1) x

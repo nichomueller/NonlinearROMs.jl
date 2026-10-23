@@ -1,3 +1,6 @@
+const CDEV = Lux.cpu_device()
+const XDEV = Lux.reactant_device(;force=true)
+
 build_model(::NeuralModel,args...) = @abstractmethod
 
 function build_lux_chain(layers::Tuple,activation)
@@ -67,7 +70,7 @@ end
 
 function train(
   solver::NeuralSolver,
-  feop::ParamOperator,
+  feop::ParamFEOperator,
   args...;
   normalise=true,
   kwargs...
@@ -97,7 +100,7 @@ function train(
 end
 
 """
-    train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger) -> TrainedNeuralModel
+    train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger) -> NeuralOperator
 
 Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
 `to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
@@ -106,7 +109,7 @@ set of trunk query points, NOMAD's coordinates are already part of the per-row b
 and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`. `loss`
 defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
 function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
-normalisation bundled into the returned [`TrainedNeuralModel`](@ref).
+normalisation bundled into the returned [`NeuralOperator`](@ref).
 """
 function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
   init!(logger)
@@ -136,5 +139,5 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;
   end
 
   finalise!(logger)
-  return TrainedNeuralModel(train_state,stats)
+  return NeuralOperator(train_state,stats)
 end

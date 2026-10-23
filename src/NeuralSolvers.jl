@@ -50,31 +50,48 @@ build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.reduction,args...
 resolve_batch_size(s::NeuralSolver,inputs) = resolve_batch_size(s.reduction,inputs)
 
 """
-    struct NeuralOperator{O,A<:TrainedNeuralModel} <: ROMOperator{O}
-      op::ParamOperator{O}
-      model::A
+    struct NeuralOperator{A,B,C,D} <: AbstractLuxLayer
+      chain::A
+      parameters::B
+      states::C
+      stats::D
     end
 
-The evaluated Reduced Basis Operator for Neural Operators.
-This struct is the direct output of the offline training phase and is passed to the `solve` function during the online phase.
-
-It stores the high-fidelity operator, and the trained model (weights/states bundled inside it).
-
-# Fields
-- `op`: The original high-fidelity parametric operator.
-- `model`: The trained [`TrainedNeuralModel`](@ref) (Lux chain + optimised parameters/states bundled together).
+A trained Lux `chain` bundled with its optimised parameters/states and the
+normalisation `stats` (a [`Normalisation`](@ref)/[`ZScore`](@ref)) used to 
+pre-normalise inputs and de-normalise outputs. Evaluable as `(a::NeuralOperator)(x) -> AbstractMatrix`.
 """
-struct NeuralOperator{O,A<:TrainedNeuralModel} <: ROMOperator{O}
-  op::ParamOperator{O}
-  model::A
+struct NeuralOperator{A,B,C,D} <: AbstractLuxLayer
+  chain::A
+  parameters::B
+  states::C
+  stats::D
 end
 
-ParamSteady.get_fe_operator(op::NeuralOperator) = op.op
+function NeuralOperator(train_state::Lux.Training.TrainState,args...)
+  parameters = train_state.parameters |> CDEV
+  states = Lux.testmode(train_state.states) |> CDEV
+  NeuralOperator(train_state.chain,parameters,states,args...)
+end
+
+"""
+    (m::NeuralOperator)(inputs) -> AbstractArray
+
+Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
+a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux chain, then
+rescales the prediction back with `m.stats`.
+"""
+function (m::NeuralOperator)(inputs)
+  normalise!(inputs,m.stats)
+  pred, = m.chain(inputs,m.parameters,m.states)
+  denormalise!(pred,m.stats)
+  return pred
+end
 
 """
     reduced_operator(
       solver::NeuralSolver,
-      feop::ParamOperator,
+      feop::ParamFEOperator,
       s::AbstractSnapshots
     )
 
@@ -85,49 +102,100 @@ It automatically extracts the training dataset (parameters/sensors and spatial c
 
 Returns a `NeuralOperator` containing the trained network, its optimized weights, and the normalization statistics required for the online phase.
 """
-function RBSteady.reduced_operator(
+function neural_operator(
   solver::NeuralSolver,
-  op::ParamOperator,
-  s::AbstractSnapshots;
-  kwargs...
+  input_space::InputSpace,
+  output_space::OutputSpace
   )
-
-  model = train(solver,op,s;kwargs...)
-  NeuralOperator(op,model)
+  
+  data,stats = fetch_data_and_stats(solver,input_space,output_space)
+  model = train(solver,data,stats)
+  NeuralOperator(model)
 end
 
-function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
-  # Prepare input
-  data = fetch_data_from_stats(solver,op,r)
-  # Inference
+function neural_operator(
+  solver::NeuralSolver,
+  old_op::NeuralOperator,
+  input_space::InputSpace,
+  output_space::OutputSpace
+  )
+  
+  data,stats = fetch_data_and_stats(solver,old_op,input_space,output_space)
+  model = train(solver,data,stats)
+  NeuralOperator(model)
+end
+
+function Algebra.solve(
+  solver::NeuralSolver,
+  op::NeuralOperator,
+  input_space::InputSpace
+  )
+
+  data = fetch_data_from_stats(solver,op,input_space)
   output = op.model(data)
   return output
 end
 
 # utils
 
+fetch_data(solver::NeuralSolver,args...) = fetch_data(get_formatter(solver),args...)
+fetch_stats(solver::NeuralSolver,args...) = fetch_stats(get_formatter(solver),args...)
+merge_data(solver::NeuralSolver,args...) = merge_data(get_formatter(solver),args...)
+
 function fetch_data_and_stats(
   solver::NeuralSolver,
-  r::AbstractRealisation,
-  args...
+  input_space::InputSpace,
+  output_space::OutputSpace
   )
 
-  formatter = get_formatter(solver)
-  space = get_discrete_space(solver)
-  feats = get_features(solver,r)
-  fetch_data_and_stats(formatter,space,feats,args...)
+  data = (
+    input = fetch_data(solver,input_space),
+    output = fetch_data(solver,output_space)
+  )
+  stats = fetch_stats(solver,data)
+  mdata = merge_data(solver,data)
+  return mdata,stats
+end
+
+function fetch_data_and_stats(
+  solver::NeuralSolver,
+  input_space::InputSpace
+  )
+
+  data = (
+    input = fetch_data(solver,input_space),
+  )
+  stats = fetch_stats(solver,data)
+  mdata = merge_data(solver,data)
+  return mdata,stats
 end
 
 function fetch_data_from_stats(
   solver::NeuralSolver,
-  op::NeuralOperator,
-  r::AbstractRealisation,
-  args...
+  input_space::InputSpace,
+  output_space::OutputSpace,
+  stats::Normalisation
   )
 
-  formatter = get_formatter(solver)
-  space = get_discrete_space(solver)
-  feats = get_features(solver,r)
-  stats = get_stats(op)
-  fetch_data_from_stats(stats,formatter,space,feats,args...)
+  data = (
+    input = fetch_data(solver,input_space),
+    output = fetch_data(solver,output_space)
+  )
+  normalise!(data,stats)
+  mdata = merge_data(solver,data)
+  return mdata
+end
+
+function fetch_data_from_stats(
+  solver::NeuralSolver,
+  input_space::InputSpace,
+  stats::Normalisation
+  )
+
+  data = (
+    input = fetch_data(solver,input_space),
+  )
+  normalise!(data,stats)
+  mdata = merge_data(solver,data)
+  return mdata
 end

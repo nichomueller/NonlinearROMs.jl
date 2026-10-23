@@ -77,6 +77,7 @@ using GridapROMs.RBTransient
 using GridapROMs.Utils
 
 import Lux: AbstractLuxLayer
+import Gridap.Fields: GenericField
 import GridapROMs.RBSteady: get_interpolation,allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
 import Random: AbstractRNG
 import StaticArrays: MVector,SVector
@@ -132,7 +133,6 @@ export NeuralModel
 export KernelNeuralModel
 export NOMAD
 export MultiLayerPerceptron
-export TrainedNeuralModel
 include("NeuralModels.jl")
 
 export NNRegression

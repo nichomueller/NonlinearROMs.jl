@@ -15,33 +15,87 @@ function interpolation_values(f::DiscreteSpace,a)
 end
 
 function get_coordinates(f::SingleFieldFESpace)
+  @abstractmethod
+end
+
+function get_coordinates(f::SingleFieldFESpace)
   get_free_dof_coordinates(f)
 end
 
 function get_coordinates(f::MultiFieldFESpace)
-  vcat(map(get_coordinates,f)...)
+  map(get_coordinates,f) |> mortar
 end
 
-struct FunctionSpace{A,B} <: DiscreteSpace
-  space::A
+abstract type TrainingSpace <: DiscreteSpace end
+
+fetch_data(d::DataFormatter,f::TrainingSpace) = @abstractmethod
+
+struct InputSpace{A<:InputData,B<:InputData} <: TrainingSpace
   coords::B
+  features::A
+end
+
+function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
+  coords = _get_coords(x,num_params(a))
+  features = _get_features(a,x)
+  InputSpace(coords,features)
+end
+
+function InputSpace(space,a::FeatureBundle)
+  x = get_coords(space)
+  InputSpace(a,x)
+end
+
+get_coords(f::InputSpace) = f.coords
+get_features(f::InputSpace) = f.features
+
+function fetch_data(d::DataFormatter,f::InputSpace)
+  input = (coords=f.coords,features=f.features)
+  fetch_data(d,input)
+end
+
+struct OutputSpace{A,B<:InputData} <: TrainingSpace
+  space::A
+  values::B
+end
+
+function OutputSpace(uh::ParamFEFunction)
+  f = get_fe_space(uh)
+  x = get_coordinates(f)
+  values = _get_values(uh,x)
+  OutputSpace(f,values)
+end
+
+function OutputSpace(space)
+  OutputSpace(zero(space))
+end
+
+function fetch_data(d::DataFormatter,f::OutputSpace)
+  output = f.values
+  fetch_data(d,output)
+end
+
+struct FunctionSpace{A} <: DiscreteSpace
+  space::A
 end
 
 function FunctionSpace(space)
   scalar_space = scalarise(space)
-  coords = get_coordinates(scalar_space)
-  FunctionSpace(scalar_space,coords)
+  A = typeof(scalar_space)
+  FunctionSpace{A}(scalar_space)
 end
 
 function FunctionSpace(space::MultiFieldFESpace)
   trian = get_triangulation(first(space))
   if !all(s -> trian === get_triangulation(s),space)
-    return FunctionSpace(space...)
+    lcoords = map(get_coords,space)
+    sets = map(Set,lcoords)
+    !isempty(∩(sets...)) && return FunctionSpace(space...)
   end
   scalar_spaces = map(scalarise,space)
-  scalar_space = MultiFieldFESpace(scalar_spaces) # forces consecutive style
-  coords = get_coordinates(scalar_space)
-  FunctionSpace(scalar_space,coords)
+  # force block style
+  scalar_space = MultiFieldFESpace(scalar_spaces;style=BlockMultiFieldStyle())
+  FunctionSpace{typeof(scalar_space)}(scalar_space)
 end
 
 function FunctionSpace(spaces...)
@@ -49,7 +103,7 @@ function FunctionSpace(spaces...)
   MultiGraphInducedSpace(spaces...)
 end
 
-get_coords(f::FunctionSpace) = f.coords
+get_coords(f::FunctionSpace) = get_coordinates(f.space)
 
 function get_measure(f::FunctionSpace{<:FESpace};factor=2)
   trian = get_triangulation(f.space)
