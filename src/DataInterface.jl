@@ -98,8 +98,15 @@ _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::InputData,b::InputData) = cat(a,b;dims=1)
 
-function merge_data(::DataFormatter,(coords,features))
-  _merge_data(coords,features)
+function merge_data(::DataFormatter,data::NamedTuple)
+  @check haskey(data,:input)
+  input = _merge_data(data.input.coords,data.input.features)
+  if haskey(data,:output)
+    output = data.output
+    return (input=input,output=output)
+  else
+    return (input=input,)
+  end
 end
 
 function merge_data(::DataFormatter{<:Any,<:Any,false},fixed_data,new_data)
@@ -129,18 +136,18 @@ function fetch_data(
   (input = _fetch_data(d,f,b),output = sample(d.sampler,get_values(f,uh)))
 end
 
-function fetch_data_and_stats(args...;kwargs...)
-  (input,output) = fetch_data(args...)
-  stats = Normalisation((input,output);kwargs...)
-  minput = _merge_data(input)
-  return (minput,output),stats
+function fetch_data_and_stats(d::DataFormatter,args...)
+  data = fetch_data(args...)
+  stats = Normalisation(data;normalise=d.normalise)
+  mdata = _merge_data(data)
+  return mdata,stats
 end
 
-function fetch_data_from_stats(stats::Normalisation,args...)
-  (input,) = fetch_data(args...)
-  normalise!((input,),stats;normalise=true)
-  minput = _merge_data(input)
-  return minput
+function fetch_data_from_stats(stats::Normalisation,d::DataFormatter,args...)
+  data = fetch_data(args...)
+  normalise!(data,stats;normalise=d.normalise)
+  mdata = _merge_data(data)
+  return mdata
 end
 
 # utils

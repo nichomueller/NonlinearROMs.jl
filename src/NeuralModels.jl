@@ -1,24 +1,28 @@
 """
-    abstract type NeuralModel <: Map end
+    abstract type NeuralModel end
 
 Abstract supertype for neural network models. Any concrete subtype must
 implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 `(param_dim × batch_size)` matrix of parameters and the output is a
 `(output_dim × batch_size)` matrix of predictions.
 """
-abstract type NeuralModel <: Map end
+abstract type NeuralModel end
 
-"""
-    DataFormatter(model::NeuralModel) -> DataFormatter
+abstract type KernelStyle end
 
-Default data-formatting policy for a [`NeuralModel`](@ref): pass both coordinates
-and features, never the running kernel-layer state (`pass_new_data=false`), with
-no subsampling. Architectures whose training pipeline actually consumes a
-`DataFormatter` (currently [`KernelNeuralModel`](@ref)) should specialise this to
-pick a different default; every other architecture ignores the field, so the
-flat default here only needs to be constructible, not meaningful.
-"""
-DataFormatter(::NeuralModel) = DataFormatter()
+DataFormatter(::KernelStyle) = DataFormatter()
+
+struct IntegralStyle{A<:InducedMeasure} <: KernelStyle 
+  measure::A
+end
+
+struct FourierStyle <: KernelStyle 
+  truncation::Int
+end
+
+function DataFormatter(style::FourierStyle)
+  DataFormatter(pass_coords=Val{false}(),pass_features=Val{false}(),pass_new_data=Val{true}())
+end
 
 """
     struct KernelNeuralModel{N,A,B,C} <: NeuralModel
@@ -33,10 +37,34 @@ It maps an input function to an output function through three main stages:
 2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
 3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
 """
-struct KernelNeuralModel{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer} <: NeuralModel
-  lifting::A
-  kernel_layers::NTuple{N,B}
-  projection::C
+struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+  style::A
+  layers::NTuple{N,Int}
+  activation::B
+  formatter::C
+end
+
+function KernelNeuralModel(
+  style::KernelStyle,
+  in_dimension::Int,
+  out_dimension::Int;
+  hidden_layers=(16,16),
+  activation=tanh,
+  formatter=DataFormatter(style)
+  )
+
+  layers = (in_dimension,hidden_layers...,out_dimension)
+  KernelNeuralModel(style,layers,activation,formatter)
+end
+
+function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)
+  style = IntegralStyle(InducedMeasure(f))
+  KernelNeuralModel(style,args...;kwargs...)
+end
+
+function KernelNeuralModel(args...;truncation=16,kwargs...)
+  style = FourierStyle(truncation)
+  KernelNeuralModel(style,args...;kwargs...)
 end
 
 """
@@ -117,19 +145,19 @@ const CDEV = Lux.cpu_device()
 const XDEV = Lux.reactant_device(;force=true)
 
 """
-    struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
-      model::A
+    struct TrainedNeuralModel{A,B,C,D} <: AbstractLuxLayer
+      chain::A
       parameters::B
       states::C
       stats::D
     end
 
-A trained Lux `model` bundled with its optimised parameters/states and the
+A trained Lux `chain` bundled with its optimised parameters/states and the
 normalisation `stats` (a [`Normalisation`](@ref)/[`ZScore`](@ref)) used to 
 pre-normalise inputs and de-normalise outputs. Evaluable as `(a::TrainedNeuralModel)(x) -> AbstractMatrix`.
 """
-struct TrainedNeuralModel{A,B,C,D} <: NeuralModel
-  model::A
+struct TrainedNeuralModel{A,B,C,D} <: AbstractLuxLayer
+  chain::A
   parameters::B
   states::C
   stats::D
@@ -138,19 +166,19 @@ end
 function TrainedNeuralModel(train_state::Lux.Training.TrainState,args...)
   parameters = train_state.parameters |> CDEV
   states = Lux.testmode(train_state.states) |> CDEV
-  TrainedNeuralModel(train_state.model,parameters,states,args...)
+  TrainedNeuralModel(train_state.chain,parameters,states,args...)
 end
 
 """
     (m::TrainedNeuralModel)(inputs) -> AbstractArray
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or
-a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux model, then
+a plain matrix): normalises `inputs` in place with `m.stats`, runs the Lux chain, then
 rescales the prediction back with `m.stats`.
 """
 function (m::TrainedNeuralModel)(inputs)
   normalise!(inputs,m.stats)
-  pred, = m.model(inputs,m.parameters,m.states)
+  pred, = m.chain(inputs,m.parameters,m.states)
   denormalise!(pred,m.stats)
   return pred
 end

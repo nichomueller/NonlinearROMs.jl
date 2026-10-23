@@ -37,7 +37,7 @@ end
 
 @testset "Learning Rate Schedulers" begin
   # CosineAnnealing
-  ca = CosineAnnealing(100,lr_max=1.0f0,lr_min=0.0f0)
+  ca = CosineAnnealing(100,lr_max=1.0f0,lr_min=zero(TData))
   @test get_lr(ca) == 1.0f0
 
   opt_state = Optimisers.setup(Adam(1.0f0),[1.0f0])

@@ -8,7 +8,8 @@ function build_lux_chain(layers::Tuple,activation)
   Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
 end
 
-function build_model(model::KernelNeuralModel,args...)
+function build_model(model::KernelNeuralModel)
+  lifting = Lux.Dense(layers[i-1] => layers[i],activation)
   KernelOperator(model.lifting,model.kernel_layers,model.projection)
 end
 
@@ -35,12 +36,7 @@ function train!(red::KernelReduction,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(red)
   logger = get_logger(red)
   function to_device_batch((x_batch,y_batch))
-    # x_batch is the per-sample-fixed (x,a(x)) tensor DataInterface.jl already merged
-    # into one plain array (KernelOperator's lifting consumes it directly, with no
-    # further formatting needed); y_batch is the target values. Both are plain
-    # arrays, so moving them to device is a direct transfer, same as every other
-    # architecture's to_device_batch.
-    return (x_batch |> XDEV,y_batch |> XDEV)
+    (x_batch |> XDEV,y_batch |> XDEV)
   end
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
@@ -72,33 +68,32 @@ end
 function train(
   solver::NeuralSolver,
   feop::ParamOperator,
-  data...;
+  args...;
   normalise=true,
   kwargs...
   )
 
-  inputs,stats = get_inputs_and_stats(solver,feop,data...;normalise)
-  train(solver,inputs,stats;kwargs...)
+  data,stats = fetch_data_and_stats(solver,feop,args...;normalise)
+  train(solver,data,stats;kwargs...)
 end
 
 function train(
   solver::NeuralSolver,
   op::NeuralOperator,
-  data...;
+  args...;
   normalise=true,
   update_stats=false,
   kwargs...
   )
 
-  inputs,stats = if update_stats
-    get_inputs_and_stats(solver,op,data...;normalise)
+  data,stats = if update_stats
+    fetch_data_and_stats(solver,op,args...;normalise)
   else
-    inputs = get_inputs(solver,op,data...)
     stats = get_stats(op)
-    normalise && normalise!(inputs,stats)
-    inputs,stats
+    data = fetch_data_from_stats(stats,solver,op,args...;normalise)
+    data,stats
   end
-  train(solver,inputs,stats;kwargs...)
+  train(solver,data,stats;kwargs...)
 end
 
 """
@@ -118,7 +113,7 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;
 
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
     for epoch in 1:logger.max_epochs
-      local current_loss = 0.0f0
+      local current_loss = zero(TData)
 
       for raw_batch in dataloader
         batch_dev = to_device_batch(raw_batch)

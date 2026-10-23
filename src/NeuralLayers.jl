@@ -42,6 +42,8 @@ function (l::RoPELayer)(x::Tuple,ps,st)
   return z,(layer=st_layer,)
 end
 
+# utils 
+
 function _apply_rope(y::AbstractMatrix,coordinates::AbstractVector,inv_freq)
   _apply_rope(y,reshape(coordinates,1,:),inv_freq)
 end

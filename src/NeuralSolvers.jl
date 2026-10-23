@@ -98,39 +98,36 @@ end
 
 function Algebra.solve(solver::NeuralSolver,op::NeuralOperator,r::AbstractRealisation)
   # Prepare input
-  inputs = get_inputs(solver,op,r)
+  data = fetch_data_from_stats(solver,op,r)
   # Inference
-  output = op.model(inputs)
+  output = op.model(data)
   return output
 end
 
 # utils
 
-function get_inputs_and_stats(args...;normalise=true)
-  inputs = get_inputs(args...)
-  stats = Normalisation(inputs;normalise)
-  return inputs,stats
+function fetch_data_and_stats(
+  solver::NeuralSolver,
+  r::AbstractRealisation,
+  args...
+  )
+
+  formatter = get_formatter(solver)
+  space = get_discrete_space(solver)
+  feats = get_features(solver,r)
+  fetch_data_and_stats(formatter,space,feats,args...)
 end
 
-function get_inputs(solver::NeuralSolver,op::ParamOperator,s::AbstractSnapshots)
-  data = get_param_data(s)
-  r = get_realisation(s)
-  get_inputs(solver,op,data,r)
-end
+function fetch_data_from_stats(
+  solver::NeuralSolver,
+  op::NeuralOperator,
+  r::AbstractRealisation,
+  args...
+  )
 
-function get_inputs(solver::NeuralSolver,op::ParamOperator,values,r::AbstractRealisation)
-  trial = get_trial(op)
-  coords = get_free_dof_coordinates(trial)
-  get_inputs(solver,values,coords,r)
-end
-
-function get_inputs(solver::NeuralSolver,op::ParamOperator,r::AbstractRealisation)
-  trial = get_trial(op)
-  coords = get_free_dof_coordinates(trial)
-  get_inputs(solver,coords,r)
-end
-
-function get_inputs(solver::NeuralSolver,inputs...)
-  sinputs = sample(solver,inputs...)
-  get_formatted_inputs(sinputs...)
+  formatter = get_formatter(solver)
+  space = get_discrete_space(solver)
+  feats = get_features(solver,r)
+  stats = get_stats(op)
+  fetch_data_from_stats(stats,formatter,space,feats,args...)
 end
