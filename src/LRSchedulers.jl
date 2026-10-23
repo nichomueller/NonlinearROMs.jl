@@ -69,13 +69,26 @@ mutable struct ReduceLROnPlateau <: LRScheduler
   current_lr::TData
 end
 
-function ReduceLROnPlateau(;patience=100,factor=TData(0.5),min_lr=TData(1e-6),start_lr=TData(0.001))
+function ReduceLROnPlateau(;
+  patience=100,
+  factor=TData(0.5),
+  min_lr=TData(1e-6),
+  start_lr=TData(0.001)
+  )
+
   ReduceLROnPlateau(patience,factor,min_lr,0,TData(Inf),start_lr)
 end
 
 get_lr(s::ReduceLROnPlateau) = s.current_lr
 
-function step_scheduler!(s::ReduceLROnPlateau,opt_state,epoch,current_loss;verbose::Bool=false)
+function step_scheduler!(
+  s::ReduceLROnPlateau,
+  opt_state,
+  epoch,
+  current_loss;
+  verbose::Bool=false
+  )
+
   if current_loss < s.best_loss
     s.best_loss = current_loss
     s.wait = 0
@@ -105,6 +118,10 @@ function Optimiser(;
   weight_decay::Real=0.0
   )
 
-  opt = weight_decay > 0 ? Optimisers.OptimiserChain(opt,Optimisers.WeightDecay(weight_decay)) : opt
+  opt = if weight_decay > 0
+    Optimisers.OptimiserChain(opt,Optimisers.WeightDecay(weight_decay)) 
+  else
+    opt
+  end
   Optimiser(opt,lr_scheduler)
 end

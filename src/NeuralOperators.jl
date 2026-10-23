@@ -71,7 +71,7 @@ end
 function NeuralOperator(train_state::Lux.Training.TrainState,args...)
   parameters = train_state.parameters |> CDEV
   states = Lux.testmode(train_state.states) |> CDEV
-  NeuralOperator(train_state.chain,parameters,states,args...)
+  NeuralOperator(train_state.model,parameters,states,args...)
 end
 
 """

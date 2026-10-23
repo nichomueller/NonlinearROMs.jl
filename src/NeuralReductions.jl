@@ -81,6 +81,7 @@ function NeuralReduction(
   model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
+  formatter = DataFormatter(model),
   lr_scheduler=CosineAnnealing(epochs),
   name=string(nameof(typeof(model))),
   verbose::Bool=true,
@@ -88,7 +89,6 @@ function NeuralReduction(
   kwargs...
   )
 
-  formatter = DataFormatter(model)
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
   NeuralReduction(

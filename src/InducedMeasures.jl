@@ -1,5 +1,6 @@
 dimension(f::FunctionSpace) = num_coords(f)
 dimension(g::AbstractGraph) = ne(g) # graphs are evaluated per-edge
+dimension(space::AbstractGraphInducedSpace) = dimension(get_graph(space))
 
 abstract type InducedMeasure end
 

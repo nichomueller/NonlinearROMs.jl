@@ -23,7 +23,7 @@ get_out_dimension(k::FourierKernel) = k.out_dims
 
 function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
   return (
-    kernel = rand(rng,Uniform(-1,1),l.truncation,l.out_dims,l.in_dims),
+    kernel = TData(2) .* rand(rng,TData,l.truncation,l.out_dims,l.in_dims) .- TData(1),
   )
 end
 
@@ -115,7 +115,7 @@ function (l::AttentionKernel)((fixed_data,v),ps,st)
   return (fixed_data,y),(score=st_score,value=st_value)
 end
 
-struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure,E<:DataFormatter} <: AbstractIntegralKernel
+mutable struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure,E<:DataFormatter} <: AbstractIntegralKernel
   const scores::A
   const values::B
   const aggregation::C

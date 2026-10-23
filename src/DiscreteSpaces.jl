@@ -15,10 +15,6 @@ function interpolation_values(f::DiscreteSpace,a)
 end
 
 function get_coordinates(f::SingleFieldFESpace)
-  @abstractmethod
-end
-
-function get_coordinates(f::SingleFieldFESpace)
   get_free_dof_coordinates(f)
 end
 
@@ -43,7 +39,7 @@ end
 
 function InputSpace(space,a::FeatureBundle)
   x = get_coords(space)
-  InputSpace(a,x)
+  InputSpace(x,a)
 end
 
 get_coords(f::InputSpace) = f.coords
@@ -77,6 +73,7 @@ end
 
 struct FunctionSpace{A} <: DiscreteSpace
   space::A
+  FunctionSpace{A}(space::A) where A = new{A}(space)
 end
 
 function FunctionSpace(space)

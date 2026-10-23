@@ -6,27 +6,26 @@ Sampler() = Sampler(:)
 
 sample(s::Sampler,data::InputData) = view(data,:,s.strategy,:)
 
-struct FeatureBundle{N,T<:AbstractParamFunction}
-  bundle::NTuple{N,T}
-  function FeatureBundle(bundle::NTuple{N,T}) where {N,T<:AbstractParamFunction}
-    r = get_realisation(first(bundle))
-    @check all(get_realisation(a)==r for a in bundle) "All param functions must have the same realisation"
+struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
+  bundle::T
+  function FeatureBundle(bundle::T) where {N,T<:NTuple{N,AbstractParamFunction}}
+    p = get_params(first(bundle))
+    @check all(get_params(a)==p for a in bundle) "All param functions must share the same parameters"
     new{N,T}(bundle)
   end
 end
 
-ParamDataStructures.get_realisation(a::FeatureBundle) = get_realisation(first(a.bundle))
-ParamDataStructures.get_params(a::FeatureBundle) = get_params(get_realisation(a))
-ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_realisation(a))
-ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_realisation(a))
-ParamDataStructures.num_times(a::FeatureBundle) = num_times(get_realisation(a))
+ParamDataStructures.get_params(a::FeatureBundle) = get_params(first(a.bundle))
+ParamDataStructures.get_times(a::FeatureBundle) = get_times(first(a.bundle))
+ParamDataStructures.num_params(a::FeatureBundle) = num_params(first(a.bundle))
+ParamDataStructures.num_times(a::FeatureBundle) = num_times(first(a.bundle))
 
 get_param_fun(a::GenericField) = a.object
 get_param_fun(a::ParamFEFunction) = get_param_fun(testitem(get_data(get_data(a))))
-ParamDataStructures.get_params(a::FeatureBundle) = get_params(get_param_fun(a))
-ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_param_fun(a))
-ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_params(a))
-ParamDataStructures.num_times(a::FeatureBundle) = length(get_times(a))
+ParamDataStructures.get_params(a::ParamFEFunction) = get_params(get_param_fun(a))
+ParamDataStructures.get_times(a::ParamFEFunction) = get_times(get_param_fun(a))
+ParamDataStructures.num_params(a::ParamFEFunction) = num_params(get_params(a))
+ParamDataStructures.num_times(a::ParamFEFunction) = length(get_times(a))
 
 struct DataFormatter{A,B,C,D}
   pass_coords::Val{A}
@@ -53,7 +52,7 @@ function fetch_data(::DataFormatter{false,false},(coords,features))
 end
 
 # input
-function fetch_data(::DataFormatter{true,false},(coords,features))
+function fetch_data(d::DataFormatter{true,false},(coords,features))
   (
     coords = sample(d.sampler,coords),
     features = nothing
@@ -120,8 +119,8 @@ end
 
 function _get_features(a::FeatureBundle,x::AbstractVector{<:Point})
   features,offsets = _init_data(a,x)
-  @inbounds for (j,a) in enumerate(a)
-    af = lazy_map(a,x)
+  @inbounds for (j,aj) in enumerate(a.bundle)
+    af = lazy_map(aj,x)
     _set_data!(features,af,offsets[j])
   end
   return features
@@ -145,7 +144,7 @@ end
 
 function _offsets(a::FeatureBundle,x::Point)
   offsets = zeros(Int,length(a.bundle)+1)
-  for (i,f) in 1:length(a.bundle)
+  for (i,f) in enumerate(a.bundle)
     T = return_type(f,x)
     offsets[i+1] = offsets[i] + num_components(eltype(T))
   end

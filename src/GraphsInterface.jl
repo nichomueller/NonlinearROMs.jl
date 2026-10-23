@@ -217,13 +217,14 @@ function Graphs.weights(g::WeightedSimpleDiGraph{Ti,Tv}) where {Ti,Tv}
   return sparse(I,J,V,n,n)
 end
 
-struct NystromSubgraph{Ti,A<:AbstractGraph{Ti},B<:AbstractVector{<:Integer}} <: <: Graphs.AbstractSimpleGraph{Ti}
+struct NystromSubgraph{Ti,A<:AbstractGraph{Ti},B<:AbstractVector{<:Integer}} <: Graphs.AbstractSimpleGraph{Ti}
   graph::A
   vertex_map::B
 end
 
 function NystromSubgraph(rng::AbstractRNG,g::AbstractGraph;subgraph_size=100)
-  indices = randperm(rng,1:nv(g),subgraph_size)
+  i = randperm(rng,nv(g))
+  indices = view(i,1:subgraph_size)
   g′,vmap = induced_subgraph(g,indices)
   NystromSubgraph(g′,vmap)
 end
@@ -302,9 +303,9 @@ function gather_data(vals::InputData,g::AbstractGraph)
   d,n,k = size(vals)
   @check n == nv(g) "The final dimension must match the number of graph vertices"
   out = zeros(eltype(vals),2*d,ne(g),k)
-  for (k,e) in enumerate(edges(g))
-    @views out[1:d,k] .+= vals[:,src(e),:]
-    @views out[d+1:end,k] .+= vals[:,dst(e),:]
+  for (i,e) in enumerate(edges(g))
+    @views out[1:d,i,:] .+= vals[:,src(e),:]
+    @views out[d+1:end,i,:] .+= vals[:,dst(e),:]
   end
   return out
 end
@@ -322,8 +323,8 @@ fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 function scatter_data(vals::InputData,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
   out = zeros(eltype(vals),size(vals,1),nv(g),size(vals,3))
-  for (k,e) in enumerate(edges(g))
-    @views out[:,dst(e),:] .+= vals[:,k,:]
+  for (i,e) in enumerate(edges(g))
+    @views out[:,dst(e),:] .+= vals[:,i,:]
   end
   return out
 end
