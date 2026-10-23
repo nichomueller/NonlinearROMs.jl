@@ -11,17 +11,15 @@ end
 
 build_model(::NeuralModel,args...) = @abstractmethod
 
-_pass_new_data(::DataFormatter{<:Any,<:Any,C}) where C = C
-
 function build_kernel_neural_layer(
   style::IntegralStyle,
   formatter::DataFormatter,
-  din::Int,in_dims::Int,out_dims::Int,
+  fixed_dims::Int,in_dims::Int,out_dims::Int,
   activation
   )
 
-  merged = _pass_new_data(formatter) ? din+in_dims : din
-  inner = Lux.Dense(merged*kernel_input_multiplier(style.measure) => out_dims)
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
+  inner = Lux.Dense(inner_dims => out_dims)
   kernel = IntegralKernel(inner,style.measure,formatter)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
@@ -29,25 +27,25 @@ end
 function build_kernel_neural_layer(
   style::FourierStyle,
   formatter::DataFormatter,
-  din::Int,in_dims::Int,out_dims::Int,
+  fixed_dims::Int,in_dims::Int,out_dims::Int,
   activation
   )
 
-  merged = _pass_new_data(formatter) ? din+in_dims : din
-  kernel = FourierKernel(merged,out_dims,style.truncation)
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
+  kernel = FourierKernel(inner_dims,out_dims,style.truncation)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
 function build_model(model::KernelNeuralModel,(inputs,outputs))
-  input_channels = size(inputs,1)
-  output_channels = size(outputs,1)
-  widths = (input_channels,model.hidden_layers...,output_channels)
+  in_dims = size(inputs,1)
+  out_dims = size(outputs,1)
+  widths = (in_dims,model.hidden_layers...,out_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
   klayers = ntuple(
     i -> build_kernel_neural_layer(
       model.style,
       model.formatter,
-      input_channels,
+      in_dims,
       widths[i+1],
       widths[i+2],
       model.activation
@@ -72,9 +70,9 @@ function build_model(model::NOMAD,(inputs,outputs))
 end
 
 function build_model(model::MultiLayerPerceptron,(inputs,outputs))
-  input_channels = size(inputs,1)
-  output_channels = size(outputs,1)
-  build_lux_chain((input_channels,model.hidden_layers...,output_channels),model.activation)
+  in_dims = size(inputs,1)
+  out_dims = size(outputs,1)
+  build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
 function train!(red::KernelReduction,train_state,dataloader,stats)
@@ -150,4 +148,15 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;
 
   finalise!(logger)
   return NeuralOperator(train_state,stats)
+end
+
+# utils
+
+_shape_factor(::KernelStyle) = 1
+_shape_factor(::IntegralStyle{<:GraphMeasure}) = 2
+
+_augment_dims(::DataFormatter{<:Any,<:Any,C}) where C = C
+
+function _get_inner_dims(s,d,fixed_dims,in_dims)
+  _shape_factor(s) * (in_dims + _augment_dims(d)*fixed_dims)
 end

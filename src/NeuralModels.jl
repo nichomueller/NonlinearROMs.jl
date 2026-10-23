@@ -116,13 +116,13 @@ function NOMAD(
   ncoords_in::Int;
   width::Int=64,
   depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  approximator_layers=(nsensors_in,hidden...,width),
-  decoder_layers=(width+ncoords_in,hidden...,1),
   activation=tanh
   )
 
-  NOMAD(Tuple(approximator_layers),Tuple(decoder_layers),activation)
+  hidden = ntuple(_ -> width,depth)
+  approximator_layers = (nsensors_in,hidden...,width)
+  decoder_layers = (width+ncoords_in,hidden...,1)
+  NOMAD(approximator_layers,decoder_layers,activation)
 end
 
 """

@@ -9,8 +9,28 @@ abstract type DiscreteSpace end
 get_coords(f::DiscreteSpace) = @abstractmethod
 num_coords(f::DiscreteSpace) = length(get_coords(f))
 
+"""
+    get_coordinates(f::SingleFieldFESpace) -> AbstractVector{<:Point}
+
+The physical location of every *mesh node*, as opposed to every dof: for a
+vector-valued space (`D` independent components per node), `get_free_dof_coordinates`
+repeats each node's coordinate `D` times (once per component dof), which is not what
+a neural operator wants to see as its spatial input. When `f`'s own `NodeToDofGlue`
+metadata is available (the standard `TestFESpace`/`TrialFESpace` construction path),
+it's used directly to keep exactly one coordinate per node, component-1's; this is
+computed on `f` itself, before any component-splitting (see `scalarise`), since the
+component-split space doesn't carry this metadata and isn't meant to.
+"""
 function get_coordinates(f::SingleFieldFESpace)
-  get_free_dof_coordinates(f)
+  x = get_free_dof_coordinates(f)
+  _comp1_filter(f,x)
+end
+
+_comp1_filter(f,x) = x
+
+function _comp1_filter(f::UnconstrainedFESpace{V,<:Gridap.FESpaces.NodeToDofGlue},x) where V
+  mask = isone.(f.metadata.free_dof_to_comp)
+  x[mask]
 end
 
 function get_coordinates(f::MultiFieldFESpace)
@@ -66,28 +86,29 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
   fetch_data(d,output)
 end
 
-struct FunctionSpace{A} <: DiscreteSpace
+struct FunctionSpace{A,B} <: DiscreteSpace
   space::A
-  FunctionSpace{A}(space::A) where A = new{A}(space)
+  coords::B
 end
 
 function FunctionSpace(space)
+  coords = get_coordinates(space)
   scalar_space = scalarise(space)
-  A = typeof(scalar_space)
-  FunctionSpace{A}(scalar_space)
+  FunctionSpace(scalar_space,coords)
 end
 
 function FunctionSpace(space::MultiFieldFESpace)
   trian = get_triangulation(first(space))
   if !all(s -> trian === get_triangulation(s),space)
-    lcoords = map(get_coords,space)
+    lcoords = map(get_coordinates,space)
     sets = map(Set,lcoords)
     !isempty(∩(sets...)) && return FunctionSpace(space...)
   end
+  coords = get_coordinates(space)
   scalar_spaces = map(scalarise,space)
   # force block style
   scalar_space = MultiFieldFESpace(scalar_spaces;style=BlockMultiFieldStyle())
-  FunctionSpace{typeof(scalar_space)}(scalar_space)
+  FunctionSpace(scalar_space,coords)
 end
 
 function FunctionSpace(spaces...)
@@ -95,7 +116,7 @@ function FunctionSpace(spaces...)
   MultiGraphInducedSpace(spaces...)
 end
 
-get_coords(f::FunctionSpace) = get_coordinates(f.space)
+get_coords(f::FunctionSpace) = f.coords
 
 function get_measure(f::FunctionSpace{<:FESpace};factor=2)
   trian = get_triangulation(f.space)
@@ -170,26 +191,38 @@ function scalarise(U::ParamTrialFESpace)
   ParamTrialFESpace(get_param_entry(get_dirichlet_values(U),diri_node),V)
 end
 
+"""
+    scalarise(V::UnconstrainedFESpace) -> UnconstrainedFESpace
+
+An equivalent space with `TData`-valued dofs, splitting a vector-valued `V` (`D`
+independent components per node) down to one of its scalar components: `D` times
+fewer free/dirichlet dofs, one dof per mesh node. Relies on the dof numbering
+being component-major (every component-1 dof for a cell is a contiguous subrange
+of `1:num_free_dofs(V)`/`-1:-num_dirichlet_dofs(V)`, matching how Gridap's standard
+`TestFESpace` construction numbers dofs) -- not independently verified here for the
+vector-valued (`D>1`) case, only exercised so far with already-scalar spaces.
+Coordinates are deliberately not this function's job: see `get_coordinates`, which
+reads them off the *original*, un-split `V` instead (its `NodeToDofGlue` metadata is
+always valid, unlike the space built here, which only needs to support FE assembly).
+"""
 function scalarise(V::UnconstrainedFESpace)
   cell_dof_basis = get_fe_dof_basis(V)
   cell_dof_bases = get_data(cell_dof_basis)
   @notimplementedif !(testitem(cell_dof_bases) isa LagrangianDofBasis)
 
   D = maximum(get_dof_to_comp(testitem(cell_dof_bases)))
-  isone(D) && return V # already scalar: splitting would just discard dof-coordinate metadata for nothing
+  @notimplementedif !(num_free_dofs(V) % D == 0 && num_dirichlet_dofs(V) % D == 0)
 
   cell_dof_to_lnode = lazy_map(get_dof_to_node,cell_dof_bases)
   cell_dof_to_lcomp = lazy_map(get_dof_to_comp,cell_dof_bases)
   cell_to_scalar_ldof = lazy_map((ln,lc) -> ln[findall(isone,lc)],cell_dof_to_lnode,cell_dof_to_lcomp)
 
-  @notimplementedif !(num_free_dofs(V) % D == 0 && num_dirichlet_dofs(V) % D == 0)
-
   vtype = change_eltype(get_vector_type(V),TData)
-  nfree = round(Int,num_free_dofs(V) ÷ D)
-  ndiri = round(Int,num_dirichlet_dofs(V) ÷ D)
+  nfree = div(num_free_dofs(V),D)
+  ndiri = div(num_dirichlet_dofs(V),D)
   cell_node_ids = _restrict(get_cell_dof_ids(V),cell_to_scalar_ldof)
   cell_node_basis = _restrict(get_fe_dof_basis(V),cell_to_scalar_ldof)
-  diri_node = _restrict_dirichlet(cell_node_ids,num_dirichlet_dofs(V))
+  diri_node = _restrict_dirichlet(cell_node_ids,ndiri)
   diri_node_tag = get_dirichlet_dof_tag(V)[diri_node]
   UnconstrainedFESpace(
     vtype,

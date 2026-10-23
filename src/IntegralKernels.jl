@@ -12,17 +12,6 @@ kernel_input(x,meas::InducedMeasure) = kernel_input(x,get_space(meas))
 kernel_input(x,space::DiscreteSpace) = x
 kernel_input(x,space::AbstractGraphInducedSpace) = gather_data(x,get_graph(space))
 
-"""
-    kernel_input_multiplier(meas::InducedMeasure) -> Int
-
-How many times `kernel_input` multiplies the channel count of whatever it's given:
-1 for FE-quadrature (identity), 2 for a graph measure (`gather_data`'s `[src;dst]`
-concatenation). Used to size an `AbstractIntegralKernel`'s own internal network.
-"""
-kernel_input_multiplier(meas::InducedMeasure) = kernel_input_multiplier(get_space(meas))
-kernel_input_multiplier(::DiscreteSpace) = 1
-kernel_input_multiplier(::AbstractGraphInducedSpace) = 2
-
 struct FourierKernel <: AbstractIntegralKernel
   in_dims::Int
   out_dims::Int

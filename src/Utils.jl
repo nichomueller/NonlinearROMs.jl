@@ -97,7 +97,7 @@ function normalise!(data,score::NoMScore)
 end
 
 function normalise!(data,score::MScore)
-  rmul!(data,score.max)
+  rdiv!(data,score.max)
 end
 
 function denormalise!(data,score::NoMScore)
@@ -105,7 +105,7 @@ function denormalise!(data,score::NoMScore)
 end
 
 function denormalise!(data,score::MScore)
-  rdiv!(data,score.max)
+  rmul!(data,score.max)
 end
 
 struct ZScore{A,B} <: AbstractScore
@@ -210,26 +210,14 @@ function Normalisation((input,output);kwargs...)
   Normalisation(input_score,output_score)
 end
 
-for (f,_f) in zip((:normalise!,:denormalise!),(:_normalise!,:_denormalise!))
+for f in (:normalise!,:denormalise!)
   @eval begin
-    function $f(data::NamedTuple,stats::Normalisation)
-      $_f((input=data,),stats)
+    function $f(inputs::NamedTuple,stats::Normalisation)
+      $f(inputs,stats.input_score)
     end
 
-    function $f(data::InputData,stats::Normalisation)
-      $_f((output=data,),stats)
-    end
-
-    function $_f(data::NamedTuple,stats::Normalisation)
-      for (k,v) in pairs(data)
-        if k == :input
-          $f(v,stats.input_score)
-        elseif k == :output
-          $f(v,stats.output_score)
-        else
-          @notimplemented "Normalisation only supports `:input` and `:output` keys"
-        end
-      end
+    function $f(outputs::InputData,stats::Normalisation)
+      $f(outputs,stats.output_score)
     end
   end
 end

@@ -2,15 +2,54 @@ dimension(f::FunctionSpace) = num_coords(f)
 dimension(g::AbstractGraph) = ne(g) # graphs are evaluated per-edge
 dimension(space::AbstractGraphInducedSpace) = dimension(get_graph(space))
 
-abstract type InducedMeasure end
+function compute_weights(f::DiscreteSpace)
+  @abstractmethod
+end
 
-InducedMeasure(space::DiscreteSpace) = @abstractmethod
+function compute_weights(f::FunctionSpace{<:FESpace})
+  dΩ = get_measure(f)
+  M = assemble_matrix((u,v) -> ∫(u⋅v)dΩ,f.space,f.space)
+  return TData.(M)
+end
 
-CellData.integrate(a,meas::InducedMeasure) = integration(a,meas)
+function compute_weights(f::GraphInducedSpace)
+  graph = get_graph(f)
+  w = zeros(Int,nv(graph))
+  for e in edges(graph)
+    w[dst(e)] += 1
+  end
+  return w
+end
+
+function compute_weights(f::MultiGraphInducedSpace)
+  graph = get_graph(f)
+  w = zeros(Int,nv(graph))
+  cache = array_cache(f.node_to_lnode)
+  for e in edges(graph)
+    v = dst(e)
+    lnodes = getindex!(cache,f.node_to_lnode,v)
+    w[v] += length(lnodes)
+  end
+  return w
+end
+
+struct InducedMeasure{A<:DiscreteSpace,B<:AbstractArray}
+  space::A
+  weights::B
+end
+
+function InducedMeasure(space::DiscreteSpace)
+  weights = compute_weights(space)
+  InducedMeasure(space,weights)
+end
+
+const FESpaceMeasure = InducedMeasure{<:FunctionSpace{<:FESpace},<:AbstractMatrix}
+const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractVector}
 
 integration(a,meas::InducedMeasure) = @abstractmethod
 
-get_space(meas::InducedMeasure) = @abstractmethod
+get_space(meas::InducedMeasure) = meas.space
+get_weights(meas::InducedMeasure) = meas.weights
 
 function integration(a::InputData,meas::InducedMeasure)
   msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(dimension(get_space(meas))); got size $(size(a))"
@@ -19,61 +58,17 @@ function integration(a::InputData,meas::InducedMeasure)
 end
 
 function _integration(a::AbstractArray,meas::InducedMeasure)
-  @abstractmethod
+  @notimplemented
 end
 
-struct FSpaceMeasure{A<:FunctionSpace} <: InducedMeasure
-  space::A
+function _integration(a::InputData,meas::FESpaceMeasure)
+  M = get_weights(meas)
+  D,N,K = size(a)
+  a2 = reshape(permutedims(a,(2,1,3)),N,D*K)
+  b2 = M*a2
+  permutedims(reshape(b2,N,D,K),(2,1,3))
 end
 
-InducedMeasure(space::FunctionSpace) = FSpaceMeasure(space)
-
-get_space(meas::FSpaceMeasure) = meas.space
-
-function _integration(a::InputData,meas::FSpaceMeasure{<:FunctionSpace{<:FESpace}})
-  space = get_space(meas)
-  fespace = space.space
-  dΩ = get_measure(space)
-  v = get_fe_basis(fespace)
-  assem = SparseMatrixAssembler(fespace,fespace)
-  b = similar(a)
-  @inbounds @views for d in axes(a,1)
-    aμ = ConsecutiveParamArray(a[d,:,:])
-    bμ = ConsecutiveParamArray(b[d,:,:])
-    ahμ = FEFunction(fespace,aμ)
-    dc = integrate(ahμ⋅v,dΩ)
-    assemble_vector!(bμ,assem,collect_cell_vector(fespace,dc))
-  end
-  return b
-end
-
-struct GraphMeasure{A<:GraphInducedSpace,B<:AbstractVector} <: InducedMeasure
-  space::A
-  weights::B
-end
-
-function InducedMeasure(space::GraphInducedSpace)
-  graph = get_graph(space)
-  w = zeros(Int,nv(graph))
-  for e in edges(graph)
-    w[dst(e)] += 1
-  end
-  return GraphMeasure(space,w)
-end
-
-function InducedMeasure(space::MultiGraphInducedSpace)
-  graph = get_graph(space)
-  w = zeros(Int,nv(graph))
-  cache = array_cache(space.node_to_lnode)
-  for e in edges(graph)
-    v = dst(e)
-    lnodes = getindex!(cache,space.node_to_lnode,v)
-    w[v] += length(lnodes)
-  end
-  return GraphMeasure(space,w)
-end
-
-get_space(meas::GraphMeasure) = meas.space
 get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
 function _integration(a::InputData,meas::GraphMeasure)

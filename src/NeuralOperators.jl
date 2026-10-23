@@ -147,13 +147,11 @@ function fetch_data_and_stats(
   output_space::OutputSpace
   )
 
-  data = (
-    input = fetch_data(solver,input_space),
-    output = fetch_data(solver,output_space)
-  )
-  stats = fetch_stats(solver,data)
-  mdata = merge_data(solver,data)
-  return mdata,stats
+  input = fetch_data(solver,input_space)
+  output = fetch_data(solver,output_space)
+  stats = fetch_stats(solver,(input,output))
+  data = (input=merge_data(solver,input),output=output)
+  return data,stats
 end
 
 function fetch_data_and_stats(
@@ -161,12 +159,7 @@ function fetch_data_and_stats(
   input_space::InputSpace
   )
 
-  data = (
-    input = fetch_data(solver,input_space),
-  )
-  stats = fetch_stats(solver,data)
-  mdata = merge_data(solver,data)
-  return mdata,stats
+  @notimplemented "Must provide output to properly build a normalisation factor"
 end
 
 function fetch_data_from_stats(
@@ -176,13 +169,11 @@ function fetch_data_from_stats(
   stats::Normalisation
   )
 
-  data = (
-    input = fetch_data(solver,input_space),
-    output = fetch_data(solver,output_space)
-  )
-  normalise!(data,stats)
-  mdata = merge_data(solver,data)
-  return mdata
+  input = fetch_data(solver,input_space)
+  output = fetch_data(solver,output_space)
+  normalise!(input,stats)
+  normalise!(output,stats)
+  return (input=merge_data(solver,input),output=output)
 end
 
 function fetch_data_from_stats(
@@ -191,10 +182,7 @@ function fetch_data_from_stats(
   stats::Normalisation
   )
 
-  data = (
-    input = fetch_data(solver,input_space),
-  )
-  normalise!(data,stats)
-  mdata = merge_data(solver,data)
-  return mdata
+  input = fetch_data(solver,input_space)
+  normalise!(input,stats)
+  return merge_data(solver,input)
 end

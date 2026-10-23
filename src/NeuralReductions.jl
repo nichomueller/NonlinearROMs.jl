@@ -110,13 +110,11 @@ function build_model(s::NeuralReduction,args...;kwargs...)
   build_model(s.model,args...;kwargs...)
 end
 
-function resolve_batch_size(s::NeuralReduction,inputs::InputData)
+function resolve_batch_size(s::NeuralReduction,(inputs,outputs))
   bs = s.batch_size
   ns = num_samples(inputs)
   bs > 0 ? min(bs,ns) : ns
 end
-
-resolve_batch_size(s::NeuralReduction,data::NamedTuple) = resolve_batch_size(s,data.input)
 
 # interface for RB subspace + NN hyper-reduction machinery
 

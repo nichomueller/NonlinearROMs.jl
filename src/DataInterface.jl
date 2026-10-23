@@ -79,16 +79,8 @@ function fetch_stats(d::DataFormatter,data)
   Normalisation(data;normalise=d.normalise)
 end
 
-function merge_data(::DataFormatter,data::NamedTuple)
-  @check haskey(data,:input)
-  input = data[:input]
-  input = _merge_data(data.input.coords,data.input.features)
-  if haskey(data,:output)
-    output = data[:output]
-    return (input=input,output=output)
-  else
-    return (input=input,)
-  end
+function merge_data(d::DataFormatter,(coords,features)::NamedTuple)
+  _merge_data(coords,features)
 end
 
 function merge_data(::DataFormatter{<:Any,<:Any,false},fixed_data,new_data)

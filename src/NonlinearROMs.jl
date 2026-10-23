@@ -119,7 +119,7 @@ export get_graph
 include("DiscreteSpaces.jl")
 
 export InducedMeasure
-export FSpaceMeasure
+export FESpaceMeasure
 export GraphMeasure
 export get_space
 export integration
@@ -131,8 +131,6 @@ export FourierKernel
 export AttentionKernel
 export MultipleAttentionKernel
 export KernelNeuralLayer
-export kernel_input
-export kernel_input_multiplier
 export Lift
 export Project
 include("IntegralKernels.jl")
