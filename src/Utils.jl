@@ -175,9 +175,9 @@ for f in (:MScore,:ZScore)
     end
 
     function $f(data::NamedTuple;kwargs...)
-      scores = ()
+      scores = NamedTuple()
       for (k,v) in pairs(data)
-        scores = merge(scores,(k => $f(v;kwargs...)))
+        scores = merge(scores,NamedTuple{(k,)}(($f(v;kwargs...),)))
       end
       return Scores(scores)
     end

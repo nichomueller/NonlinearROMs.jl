@@ -9,11 +9,6 @@ abstract type DiscreteSpace end
 get_coords(f::DiscreteSpace) = @abstractmethod
 num_coords(f::DiscreteSpace) = length(get_coords(f))
 
-function interpolation_values(f::DiscreteSpace,a)
-  x = get_coords(f)
-  lazy_map(a,x)
-end
-
 function get_coordinates(f::SingleFieldFESpace)
   get_free_dof_coordinates(f)
 end
@@ -133,8 +128,7 @@ end
 
 function GraphInducedSpace(space;kwargs...)
   coords = get_coords(space)
-  g = build_graph(coords;kwargs...)
-  GraphInducedSpace(g,coords)
+  build_graph(coords;kwargs...)
 end
 
 get_graph(space::GraphInducedSpace) = space.graph
@@ -181,22 +175,24 @@ function scalarise(V::UnconstrainedFESpace)
   cell_dof_bases = get_data(cell_dof_basis)
   @notimplementedif !(testitem(cell_dof_bases) isa LagrangianDofBasis)
 
+  D = maximum(get_dof_to_comp(testitem(cell_dof_bases)))
+  isone(D) && return V # already scalar: splitting would just discard dof-coordinate metadata for nothing
+
   cell_dof_to_lnode = lazy_map(get_dof_to_node,cell_dof_bases)
   cell_dof_to_lcomp = lazy_map(get_dof_to_comp,cell_dof_bases)
   cell_to_scalar_ldof = lazy_map((ln,lc) -> ln[findall(isone,lc)],cell_dof_to_lnode,cell_dof_to_lcomp)
 
-  P = eltype(testitem(cell_dof_bases))
-  D = num_components(P)
-  @notimplementedif !(num_free_dofs(V) % D == 0 && num_dirichlet_dofs(V) % D == 0) 
-  
+  @notimplementedif !(num_free_dofs(V) % D == 0 && num_dirichlet_dofs(V) % D == 0)
+
+  vtype = change_eltype(get_vector_type(V),TData)
   nfree = round(Int,num_free_dofs(V) ÷ D)
   ndiri = round(Int,num_dirichlet_dofs(V) ÷ D)
-  cell_node_ids = _restrict_dirichlet(get_cell_dof_ids(V),cell_to_scalar_ldof)
+  cell_node_ids = _restrict(get_cell_dof_ids(V),cell_to_scalar_ldof)
   cell_node_basis = _restrict(get_fe_dof_basis(V),cell_to_scalar_ldof)
   diri_node = _restrict_dirichlet(cell_node_ids,num_dirichlet_dofs(V))
   diri_node_tag = get_dirichlet_dof_tag(V)[diri_node]
   UnconstrainedFESpace(
-    get_vector_type(V),
+    vtype,
     nfree,
     ndiri,
     cell_node_ids,
@@ -208,6 +204,8 @@ function scalarise(V::UnconstrainedFESpace)
     V.ntags
   )
 end
+
+TensorValues.change_eltype(::Type{Vector{T1}},::Type{T2}) where {T1,T2} = Vector{T2}
 
 _restrict(a,ldof_map) = lazy_map((x,ldof) -> x[ldof],a,ldof_map)
 

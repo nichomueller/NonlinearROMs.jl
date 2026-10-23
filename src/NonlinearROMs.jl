@@ -96,6 +96,7 @@ include("LRSchedulers.jl")
 
 export FeatureBundle
 export DataFormatter
+export Sampler
 include("DataInterface.jl")
 
 export WeightedSimpleDiGraph
@@ -106,9 +107,15 @@ export attention
 include("GraphsInterface.jl")
 
 export DiscreteSpace
+export TrainingSpace
+export InputSpace
+export OutputSpace
 export FunctionSpace
 export GraphInducedSpace
 export MultiGraphInducedSpace
+export get_coords
+export get_features
+export get_graph
 include("DiscreteSpaces.jl")
 
 export InducedMeasure
@@ -124,13 +131,19 @@ export FourierKernel
 export AttentionKernel
 export MultipleAttentionKernel
 export KernelNeuralLayer
-export prepare_kernel_input
+export kernel_input
+export kernel_input_multiplier
+export Lift
+export Project
 include("IntegralKernels.jl")
 
 export RoPELayer
 include("NeuralLayers.jl")
 
 export NeuralModel
+export KernelStyle
+export IntegralStyle
+export FourierStyle
 export KernelNeuralModel
 export NOMAD
 export MultiLayerPerceptron
@@ -147,6 +160,7 @@ include("NeuralReductions.jl")
 
 export NeuralSolver
 export NeuralOperator
+export neural_operator
 include("NeuralOperators.jl")
 
 export train

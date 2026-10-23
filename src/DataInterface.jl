@@ -20,12 +20,7 @@ ParamDataStructures.get_times(a::FeatureBundle) = get_times(first(a.bundle))
 ParamDataStructures.num_params(a::FeatureBundle) = num_params(first(a.bundle))
 ParamDataStructures.num_times(a::FeatureBundle) = num_times(first(a.bundle))
 
-get_param_fun(a::GenericField) = a.object
-get_param_fun(a::ParamFEFunction) = get_param_fun(testitem(get_data(get_data(a))))
-ParamDataStructures.get_params(a::ParamFEFunction) = get_params(get_param_fun(a))
-ParamDataStructures.get_times(a::ParamFEFunction) = get_times(get_param_fun(a))
-ParamDataStructures.num_params(a::ParamFEFunction) = num_params(get_params(a))
-ParamDataStructures.num_times(a::ParamFEFunction) = length(get_times(a))
+ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
 
 struct DataFormatter{A,B,C,D}
   pass_coords::Val{A}
@@ -47,12 +42,12 @@ function DataFormatter(;
 end
 
 # input
-function fetch_data(::DataFormatter{false,false},(coords,features))
+function fetch_data(::DataFormatter{false,false},(coords,features)::NamedTuple)
   @notimplemented "Wait ... no input?"
 end
 
 # input
-function fetch_data(d::DataFormatter{true,false},(coords,features))
+function fetch_data(d::DataFormatter{true,false},(coords,features)::NamedTuple)
   (
     coords = sample(d.sampler,coords),
     features = nothing
@@ -60,7 +55,7 @@ function fetch_data(d::DataFormatter{true,false},(coords,features))
 end
 
 # input
-function fetch_data(d::DataFormatter{false,true},(coords,features))
+function fetch_data(d::DataFormatter{false,true},(coords,features)::NamedTuple)
   (
     coords = nothing,
     features = sample(d.sampler,features)
@@ -68,7 +63,7 @@ function fetch_data(d::DataFormatter{false,true},(coords,features))
 end
 
 # input
-function fetch_data(d::DataFormatter{true,true},(coords,features))
+function fetch_data(d::DataFormatter{true,true},(coords,features)::NamedTuple)
   (
     coords = sample(d.sampler,coords),
     features = sample(d.sampler,features)
@@ -86,9 +81,10 @@ end
 
 function merge_data(::DataFormatter,data::NamedTuple)
   @check haskey(data,:input)
+  input = data[:input]
   input = _merge_data(data.input.coords,data.input.features)
   if haskey(data,:output)
-    output = data.output
+    output = data[:output]
     return (input=input,output=output)
   else
     return (input=input,)
@@ -176,6 +172,9 @@ function _set_data!(data,valsik::Point{D},o,i,k) where D
     data[o+d,i,k] = valsik.data[d]
   end
 end
+
+_unblock(a) = a
+_unblock(a::BlockArray) = Array(a)
 
 _merge_data(a,b) = @abstractmethod
 _merge_data(a::Nothing,b::Nothing) = nothing

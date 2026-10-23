@@ -1,3 +1,42 @@
+
+"""
+    struct Lift{A<:AbstractLuxLayer} <: AbstractLuxLayer
+
+Adapts a plain local layer (e.g. `Lux.Dense`) to a [`KernelNeuralModel`](@ref)'s
+chain: called as `l(fixed_data,ps,st)`, it runs `layer` on `fixed_data` alone (no
+running state exists yet) and injects the result into the `(fixed_data,v)` tuple
+convention every [`KernelNeuralLayer`](@ref) downstream expects.
+"""
+struct Lift{A<:AbstractLuxLayer} <: AbstractLuxLayer
+  layer::A
+end
+
+Lux.initialparameters(rng::AbstractRNG,l::Lift) = Lux.initialparameters(rng,l.layer)
+Lux.initialstates(rng::AbstractRNG,l::Lift) = Lux.initialstates(rng,l.layer)
+
+function (l::Lift)(fixed_data,ps,st)
+  v,st = l.layer(fixed_data,ps,st)
+  return (fixed_data,v),st
+end
+
+"""
+    struct Project{A<:AbstractLuxLayer} <: AbstractLuxLayer
+
+The mirror of [`Lift`](@ref): called as `l((fixed_data,v),ps,st)`, it drops
+`fixed_data` and runs `layer` on `v` alone, turning the final hidden state into
+a plain prediction matching the training target's shape.
+"""
+struct Project{A<:AbstractLuxLayer} <: AbstractLuxLayer
+  layer::A
+end
+
+Lux.initialparameters(rng::AbstractRNG,l::Project) = Lux.initialparameters(rng,l.layer)
+Lux.initialstates(rng::AbstractRNG,l::Project) = Lux.initialstates(rng,l.layer)
+
+function (l::Project)((fixed_data,v),ps,st)
+  l.layer(v,ps,st)
+end
+
 """
     RoPELayer(in_dims, out_dims; kwargs...)
 

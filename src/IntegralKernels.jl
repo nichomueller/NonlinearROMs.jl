@@ -12,6 +12,17 @@ kernel_input(x,meas::InducedMeasure) = kernel_input(x,get_space(meas))
 kernel_input(x,space::DiscreteSpace) = x
 kernel_input(x,space::AbstractGraphInducedSpace) = gather_data(x,get_graph(space))
 
+"""
+    kernel_input_multiplier(meas::InducedMeasure) -> Int
+
+How many times `kernel_input` multiplies the channel count of whatever it's given:
+1 for FE-quadrature (identity), 2 for a graph measure (`gather_data`'s `[src;dst]`
+concatenation). Used to size an `AbstractIntegralKernel`'s own internal network.
+"""
+kernel_input_multiplier(meas::InducedMeasure) = kernel_input_multiplier(get_space(meas))
+kernel_input_multiplier(::DiscreteSpace) = 1
+kernel_input_multiplier(::AbstractGraphInducedSpace) = 2
+
 struct FourierKernel <: AbstractIntegralKernel
   in_dims::Int
   out_dims::Int
@@ -214,7 +225,8 @@ end
 
 function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
   (_,kout),kst = l.kernel((fixed_data,v),ps.kernel,st.kernel)
-  wout = ps.weights*v
+  sz = size(v)
+  wout = reshape(ps.weights*reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
   y = l.activation.(wout .+ kout .+ ps.bias)
   return (fixed_data,y),(kernel=kst,)
 end

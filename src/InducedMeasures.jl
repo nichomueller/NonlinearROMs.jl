@@ -13,7 +13,7 @@ integration(a,meas::InducedMeasure) = @abstractmethod
 get_space(meas::InducedMeasure) = @abstractmethod
 
 function integration(a::InputData,meas::InducedMeasure)
-  msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(num_coords(meas)); got size $(size(a))"
+  msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(dimension(get_space(meas))); got size $(size(a))"
   @check size(a,2) == dimension(get_space(meas)) msg
   _integration(a,meas)
 end
@@ -32,16 +32,17 @@ get_space(meas::FSpaceMeasure) = meas.space
 
 function _integration(a::InputData,meas::FSpaceMeasure{<:FunctionSpace{<:FESpace}})
   space = get_space(meas)
+  fespace = space.space
   dΩ = get_measure(space)
-  v = get_fe_basis(space)
-  assem = SparseMatrixAssembler(space,space)
+  v = get_fe_basis(fespace)
+  assem = SparseMatrixAssembler(fespace,fespace)
   b = similar(a)
   @inbounds @views for d in axes(a,1)
     aμ = ConsecutiveParamArray(a[d,:,:])
     bμ = ConsecutiveParamArray(b[d,:,:])
-    ahμ = FEFunction(space,aμ)
+    ahμ = FEFunction(fespace,aμ)
     dc = integrate(ahμ⋅v,dΩ)
-    assemble_vector!(bμ,assem,collect_cell_vector(space,dc))
+    assemble_vector!(bμ,assem,collect_cell_vector(fespace,dc))
   end
   return b
 end

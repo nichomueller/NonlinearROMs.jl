@@ -8,6 +8,8 @@ implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 """
 abstract type NeuralModel end
 
+DataFormatter(::NeuralModel) = DataFormatter()
+
 abstract type KernelStyle end
 
 DataFormatter(::KernelStyle) = DataFormatter()
@@ -25,17 +27,28 @@ function DataFormatter(style::FourierStyle)
 end
 
 """
-    struct KernelNeuralModel{N,A,B,C} <: NeuralModel
-      lifting::A
-      kernel_layers::NTuple{N,B}
-      projection::C
+    struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+      style::A
+      hidden_layers::NTuple{N,Int}
+      activation::B
+      formatter::C
     end
 
-Generic architecture for kernel-based neural models.
-It maps an input function to an output function through three main stages:
-1. Lifting (P): A local operator mapping input features to a higher-dimensional hidden representation.
-2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
-3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
+Recipe for a kernel-based neural operator (Kovachki et al.), in the same spirit as
+[`NOMAD`](@ref)/[`MultiLayerPerceptron`](@ref): `hidden_layers` only holds the
+hidden widths, with the input/output dimensions inferred from the training data
+at `build_model` time. `style` picks the non-local discretisation shared by every
+hidden layer (`IntegralStyle` for a graph/FE-quadrature [`InducedMeasure`](@ref),
+`FourierStyle` for an FNO-style spectral kernel); `formatter` is the single
+[`DataFormatter`](@ref) that both decides what the model's fixed per-sample input
+is made of (`x`/`a(x)`) and, inside every hidden layer, whether the running hidden
+state `v` gets folded into that kernel's own input.
+
+`build_model` turns this recipe into an actual `Lux.Chain`:
+1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
+2. Iterative Kernel Integration: a stack of `KernelNeuralLayer`s (one per interior
+   hidden-width transition) performing the non-local processing.
+3. Projection (Q): a local `Dense` layer mapping the final hidden state to the output dimension.
 """
 struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
   style::A
@@ -63,6 +76,8 @@ function KernelNeuralModel(args...;truncation=16,kwargs...)
   style = FourierStyle(truncation)
   KernelNeuralModel(style,args...;kwargs...)
 end
+
+DataFormatter(model::KernelNeuralModel) = model.formatter
 
 """
     struct NOMAD{N,A} <: NeuralModel

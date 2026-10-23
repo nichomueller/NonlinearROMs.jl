@@ -109,8 +109,7 @@ function neural_operator(
   )
   
   data,stats = fetch_data_and_stats(solver,input_space,output_space)
-  model = train(solver,data,stats)
-  NeuralOperator(model)
+  train(solver,data,stats)
 end
 
 function neural_operator(
@@ -121,8 +120,7 @@ function neural_operator(
   )
   
   data,stats = fetch_data_and_stats(solver,old_op,input_space,output_space)
-  model = train(solver,data,stats)
-  NeuralOperator(model)
+  train(solver,data,stats)
 end
 
 function Algebra.solve(
@@ -131,8 +129,9 @@ function Algebra.solve(
   input_space::InputSpace
   )
 
-  data = fetch_data_from_stats(solver,op,input_space)
-  output = op.model(data)
+  data = fetch_data_from_stats(solver,input_space,op.stats)
+  output, = op.chain(data,op.parameters,op.states)
+  denormalise!(output,op.stats)
   return output
 end
 

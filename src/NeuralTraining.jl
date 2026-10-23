@@ -11,11 +11,51 @@ end
 
 build_model(::NeuralModel,args...) = @abstractmethod
 
+_pass_new_data(::DataFormatter{<:Any,<:Any,C}) where C = C
+
+function build_kernel_neural_layer(
+  style::IntegralStyle,
+  formatter::DataFormatter,
+  din::Int,in_dims::Int,out_dims::Int,
+  activation
+  )
+
+  merged = _pass_new_data(formatter) ? din+in_dims : din
+  inner = Lux.Dense(merged*kernel_input_multiplier(style.measure) => out_dims)
+  kernel = IntegralKernel(inner,style.measure,formatter)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
+end
+
+function build_kernel_neural_layer(
+  style::FourierStyle,
+  formatter::DataFormatter,
+  din::Int,in_dims::Int,out_dims::Int,
+  activation
+  )
+
+  merged = _pass_new_data(formatter) ? din+in_dims : din
+  kernel = FourierKernel(merged,out_dims,style.truncation)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
+end
+
 function build_model(model::KernelNeuralModel,(inputs,outputs))
-  #TODO complete this
   input_channels = size(inputs,1)
   output_channels = size(outputs,1)
-  # Lux.Chain(...)
+  widths = (input_channels,model.hidden_layers...,output_channels)
+  lift = Lux.Dense(widths[1] => widths[2],model.activation)
+  klayers = ntuple(
+    i -> build_kernel_neural_layer(
+      model.style,
+      model.formatter,
+      input_channels,
+      widths[i+1],
+      widths[i+2],
+      model.activation
+    ),
+    length(widths)-3
+  )
+  project = Lux.Dense(widths[end-1] => widths[end])
+  Lux.Chain(Lift(lift),klayers...,Project(project))
 end
 
 function build_model(model::NOMAD,(inputs,outputs))
@@ -56,14 +96,13 @@ end
 
 function get_data_loader(red::NeuralReduction,data;shuffle=true,partial=false)
   batchsize = resolve_batch_size(red,data)
-  # data = prepare_data(red,inputs) #TODO what is this for?
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
 function train(red::NeuralReduction,data,stats;kwargs...)
   train_state = get_train_state(red,data;kwargs...)
-  dataloader,args... = get_data_loader(red,data;shuffle=true,partial=false)
-  train!(red,train_state,dataloader,stats,args...)
+  dataloader = get_data_loader(red,data;shuffle=true,partial=false)
+  train!(red,train_state,dataloader,stats)
 end
 
 function train(solver::NeuralSolver,data,stats;kwargs...)

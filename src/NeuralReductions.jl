@@ -113,8 +113,10 @@ end
 function resolve_batch_size(s::NeuralReduction,inputs::InputData)
   bs = s.batch_size
   ns = num_samples(inputs)
-  bs > 0 ? min(bs,ns) : ns 
+  bs > 0 ? min(bs,ns) : ns
 end
+
+resolve_batch_size(s::NeuralReduction,data::NamedTuple) = resolve_batch_size(s,data.input)
 
 # interface for RB subspace + NN hyper-reduction machinery
 
