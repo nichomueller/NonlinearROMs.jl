@@ -9,7 +9,8 @@ end
 function compute_weights(f::FunctionSpace{<:FESpace})
   dΩ = get_measure(f)
   M = assemble_matrix((u,v) -> ∫(u⋅v)dΩ,f.space,f.space)
-  return TData.(M)
+  m = get_node_masks(f)
+  return TData.(M[m,m])
 end
 
 function compute_weights(f::GraphInducedSpace)
@@ -47,9 +48,10 @@ const FESpaceMeasure = InducedMeasure{<:FunctionSpace{<:FESpace},<:AbstractMatri
 const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractVector}
 
 integration(a,meas::InducedMeasure) = @abstractmethod
-
 get_space(meas::InducedMeasure) = meas.space
 get_weights(meas::InducedMeasure) = meas.weights
+
+get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
 function integration(a::InputData,meas::InducedMeasure)
   msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(dimension(get_space(meas))); got size $(size(a))"
@@ -69,20 +71,12 @@ function _integration(a::InputData,meas::FESpaceMeasure)
   permutedims(reshape(b2,N,D,K),(2,1,3))
 end
 
-get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
-
 function _integration(a::InputData,meas::GraphMeasure)
+  w = get_weights(meas)
   space = get_space(meas)
   out = scatter_data(a,space)
-  _normalise!(out,meas.weights)
-  return out
-end
-
-# utils 
-
-function _normalise!(a::InputData,weights::AbstractVector)
-  @views for i in axes(a,2)
-    !iszero(weights[i]) && (a[:,i,:] ./= weights[i])
+  @views for i in axes(out,2)
+    !iszero(w[i]) && (out[:,i,:] ./= w[i])
   end
-  a
+  return out
 end

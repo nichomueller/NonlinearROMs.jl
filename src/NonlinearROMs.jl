@@ -86,6 +86,7 @@ import StaticArrays: MVector,SVector
 
 export TrainingLog
 export ZScore
+export EnergyLoss
 include("Utils.jl")
 
 export LRScheduler

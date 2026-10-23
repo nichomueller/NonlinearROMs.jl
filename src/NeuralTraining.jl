@@ -19,7 +19,7 @@ function build_kernel_neural_layer(
   )
 
   inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
-  inner = Lux.Dense(inner_dims => out_dims)
+  inner = Lux.Dense(inner_dims => out_dims*in_dims)
   kernel = IntegralKernel(inner,style.measure,formatter)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
@@ -75,13 +75,12 @@ function build_model(model::MultiLayerPerceptron,(inputs,outputs))
   build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
-function train!(red::KernelReduction,train_state,dataloader,stats)
+function train!(red::NeuralReduction,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(red)
+  loss = get_loss(red)
   logger = get_logger(red)
-  function to_device_batch((x_batch,y_batch))
-    (x_batch |> XDEV,y_batch |> XDEV)
-  end
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+  to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
+  train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
 end
 
 function get_train_state(red::NeuralReduction,data;rng=Random.default_rng(),seed=1234)
@@ -108,7 +107,7 @@ function train(solver::NeuralSolver,data,stats;kwargs...)
 end
 
 """
-    train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger) -> NeuralOperator
+    train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger) -> NeuralOperator
 
 Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
 `to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
@@ -119,7 +118,7 @@ defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats
 function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
 normalisation bundled into the returned [`NeuralOperator`](@ref).
 """
-function train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss=Lux.MSELoss(),logger)
+function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
   init!(logger)
 
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
@@ -158,5 +157,5 @@ _shape_factor(::IntegralStyle{<:GraphMeasure}) = 2
 _augment_dims(::DataFormatter{<:Any,<:Any,C}) where C = C
 
 function _get_inner_dims(s,d,fixed_dims,in_dims)
-  _shape_factor(s) * (in_dims + _augment_dims(d)*fixed_dims)
+  _shape_factor(s) * (fixed_dims + _augment_dims(d)*in_dims)
 end

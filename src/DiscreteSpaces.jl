@@ -9,28 +9,10 @@ abstract type DiscreteSpace end
 get_coords(f::DiscreteSpace) = @abstractmethod
 num_coords(f::DiscreteSpace) = length(get_coords(f))
 
-"""
-    get_coordinates(f::SingleFieldFESpace) -> AbstractVector{<:Point}
-
-The physical location of every *mesh node*, as opposed to every dof: for a
-vector-valued space (`D` independent components per node), `get_free_dof_coordinates`
-repeats each node's coordinate `D` times (once per component dof), which is not what
-a neural operator wants to see as its spatial input. When `f`'s own `NodeToDofGlue`
-metadata is available (the standard `TestFESpace`/`TrialFESpace` construction path),
-it's used directly to keep exactly one coordinate per node, component-1's; this is
-computed on `f` itself, before any component-splitting (see `scalarise`), since the
-component-split space doesn't carry this metadata and isn't meant to.
-"""
 function get_coordinates(f::SingleFieldFESpace)
   x = get_free_dof_coordinates(f)
-  _comp1_filter(f,x)
-end
-
-_comp1_filter(f,x) = x
-
-function _comp1_filter(f::UnconstrainedFESpace{V,<:Gridap.FESpaces.NodeToDofGlue},x) where V
-  mask = isone.(f.metadata.free_dof_to_comp)
-  x[mask]
+  masks = get_node_masks(f)
+  view(x,masks)
 end
 
 function get_coordinates(f::MultiFieldFESpace)
@@ -86,6 +68,24 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
   fetch_data(d,output)
 end
 
+function to_element(f::OutputSpace,data::InputData)
+  comps = get_free_dof_to_comp(f.space)
+  nodes = get_free_dof_to_node(f.space)
+  # `data`'s 2nd axis is indexed in "comp-1 free dof" order (see get_coordinates'
+  # masking), not by raw node id, so we need the node -> position-in-that-order map
+  comp1_dofs = findall(isone,comps)
+  node_to_pos = Dict(nodes[dof] => pos for (pos,dof) in enumerate(comp1_dofs))
+  @check size(data,1)*size(data,2) == length(comps) "Data does not match the output space's dof count"
+  T = eltype2(get_dirichlet_dof_values(f.space))
+  u = zeros(T,length(comps),size(data,3))
+  @inbounds @views for dof in eachindex(comps)
+    pos = node_to_pos[nodes[dof]]
+    u[dof,:] .= data[comps[dof],pos,:]
+  end
+  pu = ConsecutiveParamArray(u)
+  FEFunction(f.space,pu)
+end
+
 struct FunctionSpace{A,B} <: DiscreteSpace
   space::A
   coords::B
@@ -93,8 +93,7 @@ end
 
 function FunctionSpace(space)
   coords = get_coordinates(space)
-  scalar_space = scalarise(space)
-  FunctionSpace(scalar_space,coords)
+  FunctionSpace(space,coords)
 end
 
 function FunctionSpace(space::MultiFieldFESpace)
@@ -105,10 +104,7 @@ function FunctionSpace(space::MultiFieldFESpace)
     !isempty(∩(sets...)) && return FunctionSpace(space...)
   end
   coords = get_coordinates(space)
-  scalar_spaces = map(scalarise,space)
-  # force block style
-  scalar_space = MultiFieldFESpace(scalar_spaces;style=BlockMultiFieldStyle())
-  FunctionSpace(scalar_space,coords)
+  FunctionSpace(space,coords)
 end
 
 function FunctionSpace(spaces...)
@@ -175,89 +171,24 @@ get_coords(space::MultiGraphInducedSpace) = space.coords
 
 # utils
 
-scalarise(V) = @notimplemented
+get_node_masks(f) = map(isone,get_free_dof_to_comp(f))
 
-function scalarise(U::TrialFESpace)
-  V = scalarise(get_fe_space(U))
-  cell_node_ids = get_cell_dof_ids(V)
-  diri_node = _restrict_dirichlet(cell_node_ids,num_dirichlet_dofs(U))
-  TrialFESpace(view(get_dirichlet_values(U),diri_node),V)
+function get_free_dof_to_comp(f)
+  @notimplementedif !hasfield(typeof(f),:space)
+  get_free_dof_to_comp(getfield(f,:space))
 end
 
-function scalarise(U::ParamTrialFESpace)
-  V = scalarise(get_fe_space(U))
-  cell_node_ids = get_cell_dof_ids(V)
-  diri_node = _restrict_dirichlet(cell_node_ids,num_dirichlet_dofs(U))
-  ParamTrialFESpace(get_param_entry(get_dirichlet_values(U),diri_node),V)
+function get_free_dof_to_comp(f::UnconstrainedFESpace{V,<:FESpaces.NodeToDofGlue}) where V
+  f.metadata.free_dof_to_comp
 end
 
-"""
-    scalarise(V::UnconstrainedFESpace) -> UnconstrainedFESpace
-
-An equivalent space with `TData`-valued dofs, splitting a vector-valued `V` (`D`
-independent components per node) down to one of its scalar components: `D` times
-fewer free/dirichlet dofs, one dof per mesh node. Relies on the dof numbering
-being component-major (every component-1 dof for a cell is a contiguous subrange
-of `1:num_free_dofs(V)`/`-1:-num_dirichlet_dofs(V)`, matching how Gridap's standard
-`TestFESpace` construction numbers dofs) -- not independently verified here for the
-vector-valued (`D>1`) case, only exercised so far with already-scalar spaces.
-Coordinates are deliberately not this function's job: see `get_coordinates`, which
-reads them off the *original*, un-split `V` instead (its `NodeToDofGlue` metadata is
-always valid, unlike the space built here, which only needs to support FE assembly).
-"""
-function scalarise(V::UnconstrainedFESpace)
-  cell_dof_basis = get_fe_dof_basis(V)
-  cell_dof_bases = get_data(cell_dof_basis)
-  @notimplementedif !(testitem(cell_dof_bases) isa LagrangianDofBasis)
-
-  D = maximum(get_dof_to_comp(testitem(cell_dof_bases)))
-  @notimplementedif !(num_free_dofs(V) % D == 0 && num_dirichlet_dofs(V) % D == 0)
-
-  cell_dof_to_lnode = lazy_map(get_dof_to_node,cell_dof_bases)
-  cell_dof_to_lcomp = lazy_map(get_dof_to_comp,cell_dof_bases)
-  cell_to_scalar_ldof = lazy_map((ln,lc) -> ln[findall(isone,lc)],cell_dof_to_lnode,cell_dof_to_lcomp)
-
-  vtype = change_eltype(get_vector_type(V),TData)
-  nfree = div(num_free_dofs(V),D)
-  ndiri = div(num_dirichlet_dofs(V),D)
-  cell_node_ids = _restrict(get_cell_dof_ids(V),cell_to_scalar_ldof)
-  cell_node_basis = _restrict(get_fe_dof_basis(V),cell_to_scalar_ldof)
-  diri_node = _restrict_dirichlet(cell_node_ids,ndiri)
-  diri_node_tag = get_dirichlet_dof_tag(V)[diri_node]
-  UnconstrainedFESpace(
-    vtype,
-    nfree,
-    ndiri,
-    cell_node_ids,
-    get_fe_basis(V),
-    cell_node_basis,
-    get_cell_is_dirichlet(V),
-    diri_node_tag,
-    get_dirichlet_cells(V),
-    V.ntags
-  )
+function get_free_dof_to_node(f)
+  @notimplementedif !hasfield(typeof(f),:space)
+  get_free_dof_to_node(getfield(f,:space))
 end
 
-TensorValues.change_eltype(::Type{Vector{T1}},::Type{T2}) where {T1,T2} = Vector{T2}
-
-_restrict(a,ldof_map) = lazy_map((x,ldof) -> x[ldof],a,ldof_map)
-
-function _restrict(a::CellDof,ldof_map)
-  CellDof(_restrict(get_data(a),ldof_map),get_triangulation(a),DomainStyle(a))
-end
-
-function _restrict_dirichlet(cell_node_ids,ndiri)
-  diri_nodes = falses(ndiri)
-  cache = array_cache(cell_node_ids)
-  for cell in eachindex(cell_node_ids)
-    nodes = getindex!(cache,cell_node_ids,cell)
-    for node in nodes
-      if node < 0
-        diri_nodes[abs(node)] = 1
-      end
-    end
-  end
-  findall(diri_nodes)
+function get_free_dof_to_node(f::UnconstrainedFESpace{V,<:FESpaces.NodeToDofGlue}) where V
+  f.metadata.free_dof_to_node
 end
 
 function _a_to_b(a,b)

@@ -8,9 +8,31 @@ get_out_dimension(k::Lux.Dense) = k.out
 get_in_dimension(k::Lux.Conv) = k.in
 get_out_dimension(k::Lux.Conv) = k.out
 
-kernel_input(x,meas::InducedMeasure) = kernel_input(x,get_space(meas))
-kernel_input(x,space::DiscreteSpace) = x
-kernel_input(x,space::AbstractGraphInducedSpace) = gather_data(x,get_graph(space))
+kernel_input(x,meas::InducedMeasure) = x
+kernel_input(x,meas::GraphMeasure) = gather_data(x,get_graph(meas))
+
+"""
+    kv(k,v,meas::InducedMeasure)
+
+Explicit `κ_θ(x,y,...)·v(y)` product in Kovachki et al.'s
+`(K_t v)(x) = ∫ κ_θ(x,y,...) v(y) dy`: `k` is κ_θ's output, a flattened
+`dout*din`-vector per evaluation point (edge, for a graph measure), and `v` is
+the running hidden state at the SAME points `k` was evaluated at (gathered to
+match `k`'s per-edge/per-point indexing by the `GraphMeasure` method below,
+mirroring how `kernel_input` gathers data for feeding `κ_θ` itself). This batched
+matrix-vector product is independent of whether `v` is ALSO fed as one of
+`κ_θ`'s own inputs -- that's `formatter`'s/`pass_new_data`'s concern, orthogonal
+to this one.
+"""
+function kv(k,v,meas::InducedMeasure)
+  _kv(k,v)
+end
+
+function kv(k,v,meas::GraphMeasure)
+  graph = get_graph(meas)
+  ids = src.(edges(graph))
+  _kv(k,view(v,:,ids,:))
+end
 
 struct FourierKernel <: AbstractIntegralKernel
   in_dims::Int
@@ -80,9 +102,10 @@ end
 function (l::IntegralKernel)((fixed_data,v),ps,st)
   x = merge_data(l.formatter,fixed_data,v)
   xk = kernel_input(x,l.measure)
-  vals,st = l.kernel(xk,ps,st)
-  y = integration(vals,l.measure)
-  return (fixed_data,y),st
+  k,st = l.kernel(xk,ps,st)
+  y = kv(k,v,l.measure)
+  z = integration(y,l.measure)
+  return (fixed_data,z),st
 end
 
 mutable struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel
@@ -237,4 +260,14 @@ function attention_integral(scores,values,meas::GraphMeasure)
   graph = get_space(meas)
   α = attention(vec(scores),graph)
   scatter_data(α'.*values,graph)
+end
+
+# reconstructs the (dout x din) matrix flattened into k's first axis and applies
+# it to v, batched over the (N,K) = (num_points,num_params) trailing axes
+function _kv(k::InputData,v::InputData)
+  din,N,nbatch = size(v)
+  dout = div(size(k,1),din)
+  k_r = reshape(k,din,dout,N,nbatch)
+  v_r = reshape(v,din,1,N,nbatch)
+  dropdims(sum(k_r.*v_r,dims=1),dims=1)
 end

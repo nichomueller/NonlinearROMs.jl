@@ -45,6 +45,7 @@ get_reduction(s::NeuralSolver) = s.reduction
 get_formatter(s::NeuralSolver) = get_formatter(s.reduction)
 get_optimiser(s::NeuralSolver) = get_optimiser(s.reduction)
 get_scheduler(s::NeuralSolver) = get_scheduler(s.reduction)
+get_loss(s::NeuralSolver) = get_loss(s.reduction)
 get_logger(s::NeuralSolver) = get_logger(s.reduction)
 build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.reduction,args...;kwargs...)
 resolve_batch_size(s::NeuralSolver,inputs) = resolve_batch_size(s.reduction,inputs)
@@ -133,6 +134,17 @@ function Algebra.solve(
   output, = op.chain(data,op.parameters,op.states)
   denormalise!(output,op.stats)
   return output
+end
+
+function Algebra.solve(
+  solver::NeuralSolver,
+  op::NeuralOperator,
+  input_space::InputSpace,
+  output_space::OutputSpace
+  )
+
+  output = solve(solver,op,input_space)
+  to_element(output_space,output)
 end
 
 # utils

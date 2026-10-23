@@ -221,3 +221,15 @@ for f in (:normalise!,:denormalise!)
     end
   end
 end
+
+# losses
+
+struct EnergyLoss{A<:AbstractMatrix,B} <: Lux.AbstractLossFunction
+  X::A
+end
+
+function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
+  Xŷ = loss.X * ŷ
+  Xy = loss.X * y
+  return Lux.unsafe_apply_loss(Lux.MSELoss(mean),Xŷ,Xy)
+end

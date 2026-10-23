@@ -74,6 +74,7 @@ struct NeuralReduction{A<:NeuralModel}
   batch_size::Int
   formatter::DataFormatter
   optimiser::Optimiser
+  loss::Function
   trainlog::TrainingLog
 end
 
@@ -83,6 +84,7 @@ function NeuralReduction(
   batch_size::Int=0,
   formatter = DataFormatter(model),
   lr_scheduler=CosineAnnealing(epochs),
+  loss=Lux.MSELoss(),
   name=string(nameof(typeof(model))),
   verbose::Bool=true,
   print_every::Int=500,
@@ -97,6 +99,7 @@ function NeuralReduction(
     batch_size,
     formatter,
     optimiser,
+    loss,
     trainlog
   )
 end
@@ -104,6 +107,7 @@ end
 get_formatter(s::NeuralReduction) = s.formatter
 get_optimiser(s::NeuralReduction) = s.optimiser.opt
 get_scheduler(s::NeuralReduction) = s.optimiser.lr_scheduler
+get_loss(s::NeuralReduction) = s.loss
 get_logger(s::NeuralReduction) = s.trainlog
 
 function build_model(s::NeuralReduction,args...;kwargs...)
