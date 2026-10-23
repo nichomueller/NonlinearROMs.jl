@@ -1,8 +1,6 @@
 const CDEV = Lux.cpu_device()
 const XDEV = Lux.reactant_device(;force=true)
 
-build_model(::NeuralModel,args...) = @abstractmethod
-
 function build_lux_chain(layers::Tuple,activation)
   l = ()
   for i in 2:(length(layers)-1)
@@ -11,12 +9,16 @@ function build_lux_chain(layers::Tuple,activation)
   Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
 end
 
-function build_model(model::KernelNeuralModel)
-  lifting = Lux.Dense(layers[i-1] => layers[i],activation)
-  KernelOperator(model.lifting,model.kernel_layers,model.projection)
+build_model(::NeuralModel,args...) = @abstractmethod
+
+function build_model(model::KernelNeuralModel,(inputs,outputs))
+  #TODO complete this
+  input_channels = size(inputs,1)
+  output_channels = size(outputs,1)
+  # Lux.Chain(...)
 end
 
-function build_model(model::NOMAD,args...)
+function build_model(model::NOMAD,(inputs,outputs))
   Lux.Chain(
     # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
     Lux.Parallel(
@@ -29,10 +31,10 @@ function build_model(model::NOMAD,args...)
   )
 end
 
-function build_model(model::MultiLayerPerceptron,(values,coords,params))
-  m = size(params,1)
-  n = size(values,1)
-  build_lux_chain((m,model.hidden_layers...,n),model.activation)
+function build_model(model::MultiLayerPerceptron,(inputs,outputs))
+  input_channels = size(inputs,1)
+  output_channels = size(outputs,1)
+  build_lux_chain((input_channels,model.hidden_layers...,output_channels),model.activation)
 end
 
 function train!(red::KernelReduction,train_state,dataloader,stats)
@@ -44,59 +46,28 @@ function train!(red::KernelReduction,train_state,dataloader,stats)
   train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
 end
 
-function get_train_state(red::NeuralReduction,inputs;rng=Random.default_rng(),seed=1234)
+function get_train_state(red::NeuralReduction,data;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(red,inputs)
+  model = build_model(red,data)
   opt = get_optimiser(red)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,inputs)
-  data = prepare_data(red,inputs)
+function get_data_loader(red::NeuralReduction,data;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(red,data)
+  # data = prepare_data(red,inputs) #TODO what is this for?
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function train(red::NeuralReduction,inputs,stats;kwargs...)
-  train_state = get_train_state(red,inputs;kwargs...)
-  dataloader,args... = get_data_loader(red,inputs;shuffle=true,partial=false)
+function train(red::NeuralReduction,data,stats;kwargs...)
+  train_state = get_train_state(red,data;kwargs...)
+  dataloader,args... = get_data_loader(red,data;shuffle=true,partial=false)
   train!(red,train_state,dataloader,stats,args...)
 end
 
-function train(solver::NeuralSolver,inputs,stats;kwargs...)
-  train(get_reduction(solver),inputs,stats;kwargs...)
-end
-
-function train(
-  solver::NeuralSolver,
-  feop::ParamFEOperator,
-  args...;
-  normalise=true,
-  kwargs...
-  )
-
-  data,stats = fetch_data_and_stats(solver,feop,args...;normalise)
-  train(solver,data,stats;kwargs...)
-end
-
-function train(
-  solver::NeuralSolver,
-  op::NeuralOperator,
-  args...;
-  normalise=true,
-  update_stats=false,
-  kwargs...
-  )
-
-  data,stats = if update_stats
-    fetch_data_and_stats(solver,op,args...;normalise)
-  else
-    stats = get_stats(op)
-    data = fetch_data_from_stats(stats,solver,op,args...;normalise)
-    data,stats
-  end
-  train(solver,data,stats;kwargs...)
+function train(solver::NeuralSolver,data,stats;kwargs...)
+  train(get_reduction(solver),data,stats;kwargs...)
 end
 
 """

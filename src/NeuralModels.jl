@@ -39,22 +39,19 @@ It maps an input function to an output function through three main stages:
 """
 struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
   style::A
-  layers::NTuple{N,Int}
+  hidden_layers::NTuple{N,Int}
   activation::B
   formatter::C
 end
 
 function KernelNeuralModel(
-  style::KernelStyle,
-  in_dimension::Int,
-  out_dimension::Int;
+  style::KernelStyle;
   hidden_layers=(16,16),
   activation=tanh,
   formatter=DataFormatter(style)
   )
 
-  layers = (in_dimension,hidden_layers...,out_dimension)
-  KernelNeuralModel(style,layers,activation,formatter)
+  KernelNeuralModel(style,hidden_layers,activation,formatter)
 end
 
 function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)
@@ -134,9 +131,9 @@ end
 function MultiLayerPerceptron(;
   width::Int=64,
   depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
+  hidden_layers=ntuple(_ -> width,depth),
   activation=tanh
   )
 
-  MultiLayerPerceptron(Tuple(hidden),activation)
+  MultiLayerPerceptron(hidden_layers,activation)
 end

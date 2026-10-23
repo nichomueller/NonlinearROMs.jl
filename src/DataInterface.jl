@@ -28,22 +28,6 @@ ParamDataStructures.get_times(a::FeatureBundle) = get_times(get_param_fun(a))
 ParamDataStructures.num_params(a::FeatureBundle) = num_params(get_params(a))
 ParamDataStructures.num_times(a::FeatureBundle) = length(get_times(a))
 
-function get_values(a::FeatureBundle,f::DiscreteSpace)
-  features,offsets = _init_data(f,a)
-  @inbounds for (j,a) in enumerate(a.bundle)
-    af = interpolation_values(f,a)
-    _set_data!(features,af,offsets[j])
-  end
-  return features
-end
-
-function get_values(uh::FEFunction,f::DiscreteSpace)
-  values,offsets = _init_data(f,a)
-  u = interpolation_values(f,uh)
-  _set_data!(values,u,offsets[1])
-  return values
-end
-
 struct DataFormatter{A,B,C,D}
   pass_coords::Val{A}
   pass_features::Val{B}

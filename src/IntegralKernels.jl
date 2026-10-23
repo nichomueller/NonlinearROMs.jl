@@ -219,60 +219,6 @@ function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
   return (fixed_data,y),(kernel=kst,)
 end
 
-# """
-#     struct KernelOperator{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer} <: AbstractLuxLayer
-#       lifting::A
-#       kernel_layers::NTuple{N,B}
-#       projection::C
-#     end
-
-# The actual `Lux.AbstractLuxLayer` that runs a [`KernelNeuralModel`](@ref) recipe
-# (built from one via `build_model`). Called as `l(fixed_data,ps,st)`, where
-# `fixed_data` is the per-sample `(x,a(x))` tensor assembled once upstream (see
-# [`DataInterface.fetch_data`](@ref)):
-# 1. `lifting` maps `fixed_data` alone to the initial hidden state `v₀` (Kovachki
-#    et al.'s `P`) -- there is no previous-layer state yet, so no tuple is needed here.
-# 2. Each `kernel_layers[i]` is called as `(fixed_data,v)`, threading `fixed_data`
-#    through unchanged alongside the evolving `v`, so every layer's own
-#    `DataFormatter` can independently decide which of `(x,a(x),v)` it needs.
-# 3. `projection` maps the final `v` alone to the output dimension (Kovachki et
-#    al.'s `Q`).
-# `KernelNeuralModel` itself can't be this layer directly, since it's a `NeuralModel`
-# (`<: Map`, Gridap's abstract type), not an `AbstractLuxLayer`.
-# """
-# struct KernelOperator{N,A<:AbstractLuxLayer,B<:KernelNeuralLayer,C<:AbstractLuxLayer} <: AbstractLuxLayer
-#   lifting::A
-#   kernel_layers::NTuple{N,B}
-#   projection::C
-# end
-
-# function Lux.initialparameters(rng::AbstractRNG,l::KernelOperator{N}) where N
-#   return (
-#     lifting = Lux.initialparameters(rng,l.lifting),
-#     kernel_layers = ntuple(i -> Lux.initialparameters(rng,l.kernel_layers[i]),Val(N)),
-#     projection = Lux.initialparameters(rng,l.projection),
-#   )
-# end
-
-# function Lux.initialstates(rng::AbstractRNG,l::KernelOperator{N}) where N
-#   return (
-#     lifting = Lux.initialstates(rng,l.lifting),
-#     kernel_layers = ntuple(i -> Lux.initialstates(rng,l.kernel_layers[i]),Val(N)),
-#     projection = Lux.initialstates(rng,l.projection),
-#   )
-# end
-
-# function (l::KernelOperator{N})(fixed_data,ps,st) where N
-#   v,st_lift = l.lifting(fixed_data,ps.lifting,st.lifting)
-#   st_layers = ()
-#   for i in 1:N
-#     (_,v),sti = l.kernel_layers[i]((fixed_data,v),ps.kernel_layers[i],st.kernel_layers[i])
-#     st_layers = (st_layers...,sti)
-#   end
-#   y,st_proj = l.projection(v,ps.projection,st.projection)
-#   return y,(lifting=st_lift,kernel_layers=st_layers,projection=st_proj)
-# end
-
 # utils
 
 function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T

@@ -92,6 +92,10 @@ export ReduceLROnPlateau
 export Optimiser
 include("LRSchedulers.jl")
 
+export FeatureBundle
+export DataFormatter
+include("DataInterface.jl")
+
 export WeightedSimpleDiGraph
 export NystromSubgraph
 export gather_data
@@ -112,17 +116,12 @@ export get_space
 export integration
 include("InducedMeasures.jl")
 
-export FeatureBundle
-export DataFormatter
-include("DataInterface.jl")
-
 export AbstractIntegralKernel
 export IntegralKernel
 export FourierKernel
 export AttentionKernel
 export MultipleAttentionKernel
 export KernelNeuralLayer
-export KernelOperator
 export prepare_kernel_input
 include("IntegralKernels.jl")
 
@@ -146,7 +145,7 @@ include("NeuralReductions.jl")
 
 export NeuralSolver
 export NeuralOperator
-include("NeuralSolvers.jl")
+include("NeuralOperators.jl")
 
 export train
 export resolve_batch_size
