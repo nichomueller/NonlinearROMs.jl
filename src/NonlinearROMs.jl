@@ -162,6 +162,11 @@ export NeuralOperator
 export neural_operator
 include("NeuralOperators.jl")
 
+export collect_trajectory
+export rollout_data
+export rollout
+include("Rollout.jl")
+
 export train
 export resolve_batch_size
 include("NeuralTraining.jl")

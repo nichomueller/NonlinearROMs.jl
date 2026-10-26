@@ -65,11 +65,53 @@ end
 
 const TData = Float32
 const InputData{T} = AbstractArray{T,3}
-const BlockInputData{T} = BlockArray{T,3}
 
 dimension(data::InputData) = size(data,1)
 num_coords(data::InputData) = size(data,2)
 num_samples(data::InputData) = size(data,3)
+
+"""
+    struct RangedInputData{T,A<:InputData{T}} <: InputData{T}
+      data::A
+      ranges::Vector{UnitRange{Int}}
+    end
+
+A plain `InputData` array plus, for a multi-field `OutputSpace` (see
+`DataInterface.jl`'s `_get_values(::MultiFieldParamFEFunction,...)`), each
+field's channel range within `.data`'s first axis -- a single field just gets
+`[1:size(data,1)]`. `OutputSpace.values` is always one of these; `to_element` is
+the only place `.ranges` is actually read (to carve the reconstructed free-dof
+vector back up per field). Everywhere else (training, normalisation) it's used
+exactly like the plain array it wraps -- `size`/`getindex`/`setindex!` delegate
+straight to `.data` (declaring `IndexStyle`=`IndexLinear` so Julia's generic
+`AbstractArray` fallbacks route multi-dimensional indexing/views through them
+too), so no other code needs to know or care that it's there.
+"""
+struct RangedInputData{T,N,A<:InputData{T},B<:NTuple{N,AbstractVector}} <: InputData{T}
+  data::A
+  ranges::B
+end
+
+function RangedInputData(data::InputData)
+  ranges = (1:size(data,1),)
+  RangedInputData(data,ranges)
+end
+
+function RangedInputData(data::AbstractVector{<:InputData})
+  count = 0
+  ranges = ()
+  for d in data
+    D = size(d,1)
+    ranges = (ranges...,count+1:count+D)
+    count += D
+  end
+  RangedInputData(reduce(vcat,data),ranges)
+end
+
+Base.size(d::RangedInputData) = size(d.data)
+Base.IndexStyle(::Type{<:RangedInputData}) = IndexLinear()
+Base.getindex(d::RangedInputData,i::Int) = getindex(d.data,i)
+Base.setindex!(d::RangedInputData,v,i::Int) = setindex!(d.data,v,i)
 
 # normalisation handling
 
@@ -169,11 +211,6 @@ end
 
 for f in (:MScore,:ZScore)
   @eval begin
-    function $f(data::BlockInputData;kwargs...)
-      scores = map(x -> $f(x;kwargs...),blocks(data))
-      return Scores(scores)
-    end
-
     function $f(data::NamedTuple;kwargs...)
       scores = NamedTuple()
       for (k,v) in pairs(data)
@@ -186,10 +223,6 @@ end
 
 for f in (:normalise!,:denormalise!)
   @eval begin
-    function $f(data::BlockInputData,stats::Scores{<:AbstractArray})
-      map($f,blocks(data),stats.scores)
-    end
-
     function $f(data::NamedTuple,stats::Scores{<:NamedTuple})
       @inbounds for k in keys(stats.scores)
         $f(data[k],stats.scores[k])
@@ -224,7 +257,7 @@ end
 
 # losses
 
-struct EnergyLoss{A<:AbstractMatrix,B} <: Lux.AbstractLossFunction
+struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
   X::A
 end
 

@@ -299,15 +299,23 @@ end
 
 # message-passing on graph and graph-induced spaces
 
+"""
+    gather_data(vals,g::AbstractGraph) -> per-edge array
+
+Pure indexing (`src.(edges(g))`/`dst.(edges(g))` are computed from `g` alone, never
+from `vals`, so they're ordinary concrete arrays even when `vals` is a Reactant-traced
+tensor): no edge ever needs to accumulate more than one value, unlike `scatter_data`,
+so a plain vectorised gather suffices and no per-edge Julia loop is traced. A loop
+here would otherwise get unrolled into one set of MLIR ops per edge -- fine at
+boh.jl's ~200 edges, but a multi-field graph (e.g. Stokes' combined velocity+pressure
+point cloud) can have tens of thousands, enough to exhaust Reactant's internal
+MLIR symbol-naming budget.
+"""
 function gather_data(vals::InputData,g::AbstractGraph)
-  d,n,k = size(vals)
-  @check n == nv(g) "The final dimension must match the number of graph vertices"
-  out = zeros(eltype(vals),2*d,ne(g),k)
-  for (i,e) in enumerate(edges(g))
-    @views out[1:d,i,:] .+= vals[:,src(e),:]
-    @views out[d+1:end,i,:] .+= vals[:,dst(e),:]
-  end
-  return out
+  @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
+  idx_src = src.(edges(g))
+  idx_dst = dst.(edges(g))
+  vcat(vals[:,idx_src,:],vals[:,idx_dst,:])
 end
 
 """
@@ -319,14 +327,45 @@ behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph
 (plain GNO) and the softmax-weighted aggregation in `attention`/`AttentionKernel`
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
+
+Unlike `gather_data`, this genuinely needs to accumulate (several edges can share a
+destination vertex), so it's expressed as a dense `(nv,ne)` incidence-matrix matmul
+(`_scatter_apply`) rather than a per-edge loop: a loop here gets unrolled into one set
+of MLIR ops per edge -- fine at boh.jl's ~200 edges, but a multi-field graph (e.g.
+Stokes' combined velocity+pressure point cloud) can have tens of thousands, enough to
+exhaust Reactant's internal MLIR symbol-naming budget.
+
+This standalone method builds `S` (`_scatter_matrix`) fresh every call, which is only
+safe called *outside* an active Reactant/Enzyme trace: `S`'s own construction is a
+`setindex!`-based loop, and once nested inside an already-tracing call stack (as it
+would be if called from a model's forward pass during training), Reactant's overlay
+intercepts even allocations/writes that don't depend on any traced value, turning `S`
+into a traced array and hitting "scalar indexing disallowed". `GraphInducedSpace`
+instead precomputes `S` once at construction (plain, untraced Julia, see
+`DiscreteSpaces.jl`) and overrides `scatter_data` to reuse it -- that cached-matrix
+path is the one actually exercised during training.
 """
 function scatter_data(vals::InputData,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
-  out = zeros(eltype(vals),size(vals,1),nv(g),size(vals,3))
-  for (i,e) in enumerate(edges(g))
-    @views out[:,dst(e),:] .+= vals[:,i,:]
+  S = _scatter_matrix(eltype(vals),g)
+  _scatter_apply(vals,S)
+end
+
+_scatter_matrix(::Type{T},g::AbstractGraph) where T = _scatter_matrix!(zeros(T,nv(g),ne(g)),g)
+
+function _scatter_matrix!(S::AbstractMatrix,g::AbstractGraph)
+  @inbounds for (i,e) in enumerate(edges(g))
+    S[dst(e),i] = one(eltype(S))
   end
-  return out
+  S
+end
+
+function _scatter_apply(vals::InputData,S::AbstractMatrix)
+  d,ne_,k = size(vals)
+  n = size(S,1)
+  v2 = reshape(permutedims(vals,(2,1,3)),ne_,d*k)
+  out2 = S*v2
+  permutedims(reshape(out2,n,d,k),(2,1,3))
 end
 
 """

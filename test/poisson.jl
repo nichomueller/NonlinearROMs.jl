@@ -1,27 +1,16 @@
-using Gridap
+using Gridap 
 using GridapROMs
-
 using GridapROMs.RBSteady
-using GridapROMs.ParamDataStructures
 using NonlinearROMs
-using Test
-
-method=:pod
-compression=:global
-tol=1e-4
-nparams=50
-nparams_res=floor(Int,nparams/3)
-nparams_jac=floor(Int,nparams/4)
-ncentroids=2
 
 pdomain = (1,10,1,10,1,10)
 pspace = ParamSpace(pdomain)
 
 domain = (0,1,0,1)
-partition = (10,10)
+partition = (5,5)
 model = CartesianDiscreteModel(domain,partition)
 
-order = 2
+order = 1
 degree = 2*order
 
 Ω = Triangulation(model)
@@ -41,44 +30,71 @@ gμ(μ) = parameterise(g,μ)
 h(μ) = x -> abs(cos(μ[3]*x[2]))
 hμ(μ) = parameterise(h,μ)
 
-stiffness(μ,u,v,dΩ) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
-rhs(μ,v,dΩ,dΓn) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
-res(μ,u,v,dΩ,dΓn) = stiffness(μ,u,v,dΩ) - rhs(μ,v,dΩ,dΓn)
+stiffness(μ,u,v) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
+rhs(μ,v) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
 
 trian_res = (Ω,Γn)
 trian_stiffness = (Ω,)
 domains = FEDomains(trian_res,trian_stiffness)
 
 reffe = ReferenceFE(lagrangian,Float64,order)
-test = LexicographicFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
+test = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
 trial = ParamTrialFESpace(test,gμ)
 
-fesolver = LUSolver()
-state_reduction = Reduction(tol,H1();nparams,compression)
-res_reduction = NNHyperReduction(tol;nparams_res,compression)
-jac_reduction = NNHyperReduction(tol;nparams_jac,compression)
-rbsolver = RBSolver(fesolver,state_reduction,res_reduction,jac_reduction)
+feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test,domains)
+fesolver = LinearFESolver(LUSolver())
 
-feop = LinearParamOperator(res,stiffness,pspace,trial,test,domains)
-fesnaps,= solution_snapshots(rbsolver,feop)
-rbop = reduced_operator(rbsolver,feop,fesnaps)
+μ = realisation(pspace;nparams=50)
+uhμ = solve(fesolver,feop,μ)
 
-μon = realisation(feop;nparams=10,sampling=:uniform)
-x̂,rbstats = solve(rbsolver,rbop,μon)
-x,festats = solution_snapshots(rbsolver,feop,μon)
-perf = eval_performance(rbsolver,rbop,x,x̂,festats,rbstats)
+using GridapROMs.ParamDataStructures
+using Gridap.Algebra
 
-@test all(isfinite,get_all_data(x̂))
+# bundle of parameterised functions evaluated as the kernel's fixed (x,a(x)) input,
+# alongside x itself (see InputSpace below)
+features = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
 
-# operator regression (NNRegression)
+# the discretisation: x -> a graph induced by the test space's dof coordinates,
+# used both for the input sampling (InputSpace) and for the non-local integral
+# kernel itself (IntegralStyle wraps a GraphMeasure over this same graph)
+fspace = FunctionSpace(test)
+gspace = GraphInducedSpace(fspace;radius=0.3)
 
-res_reduction_2 = NNRegression(tol;nparams=nparams_res)
-jac_reduction_2 = NNRegression(tol;nparams=nparams_jac)
-rbsolver_2 = RBSolver(fesolver,state_reduction,res_reduction_2,jac_reduction_2)
+input_space = InputSpace(fspace,features)
 
-rbop_2 = reduced_operator(rbsolver_2,feop,fesnaps)
+# the output space: the FE solution itself, sampled at the same dof coordinates
+output_space = OutputSpace(uhμ)
 
-x̂_2,rbstats_2 = solve(rbsolver_2,rbop_2,μon)
-perf_2 = eval_performance(rbsolver_2,rbop_2,x,x̂_2,festats,rbstats_2)
+# a kernel-integral neural operator (Kovachki et al.): lifting -> one non-local
+# KernelNeuralLayer (graph-based GNO integral kernel) -> projection
+model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+X = assemle_matrix((u,v) -> ∫(∇(v)⋅∇(u))dΩ,trial,test)
+solver = NeuralSolver(fesolver,model;epochs=200,loss=EnergyLoss(X),print_every=50)
 
-@test all(isfinite,get_all_data(x̂_2))
+# offline phase: train the operator
+op = neural_operator(solver,input_space,output_space)
+
+# online phase: predict without ever assembling/solving the FE problem
+pred = solve(solver,op,input_space)
+
+# online phase, reconstructed as an actual FEFunction (dirichlet values come from
+# output_space's own fe space, which must be trial(μ), not test -- see OutputSpace)
+pred_uh = Algebra.solve(solver,op,input_space,output_space)
+
+#=
+problem statement: 
+
+given 
+domains Ω1,...,Ωn
+triangulations T1,...,Tn
+discrete spaces V1,...,Vn
+sets of parameters μ1,...,μn
+parameterized functions {a_i(μ),f_i(μ),g_i(μ),h_i(μ)}_{i=1}^n
+we want to find the map
+\mathcal{N}: (x*,a*(μ),f*(μ),g*(μ),h*(μ)) -> u*(μ)
+where x* is a point in the domain Ω*,a*(μ),f*(μ),g*(μ),h*(μ) are the parameterized functions defined on Ω*,
+and u*(μ) is the solution of the PDE defined on Ω* with parameters μ* and functions a*(μ),f*(μ),g*(μ),h*(μ).
+so i cannot pass feop; input space (x + bundles + param space) + discrete space (integration) -> output space (usually == discr space)
+neural solver should store the rest: neural model, data formatter, training-related things, 
+build_map(neural_solver,input_space,output_space,integration_space=output_space)
+=#

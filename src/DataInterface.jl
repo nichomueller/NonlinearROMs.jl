@@ -106,19 +106,39 @@ function _get_coords(x::AbstractVector{<:Point},K::Int)
 end
 
 function _get_features(a::FeatureBundle,x::AbstractVector{<:Point})
-  features,offsets = _init_data(a,x)
+  features,comp_offsets = _init_data(a,x)
   @inbounds for (j,aj) in enumerate(a.bundle)
     af = lazy_map(aj,x)
-    _set_data!(features,af,offsets[j])
+    _set_data!(features,af,comp_offsets[j])
   end
   return features
 end
 
 function _get_values(ah::ParamFEFunction,x::AbstractVector{<:Point})
-  values,offsets = _init_data(ah,x)
+  values,comp_offsets = _init_data(ah,x)
   a = lazy_map(ah,x)
-  _set_data!(values,a,first(offsets))
-  return values
+  _set_data!(values,a,first(comp_offsets))
+  return RangedInputData(values)
+end
+
+"""
+    _get_values(uh::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
+
+Evaluates each sub-field at the same shared coordinate list `x` -- valid only
+when every field lives on the same mesh *and* order, so
+`get_coordinates(::MultiFieldFESpace)` returns one shared point list rather than
+needing a `MultiGraphInducedSpace` -- and concatenates their per-point values
+channel-wise: `(D_1,N,K)`,`(D_2,N,K)`,... -> `(D_1+D_2+...,N,K)`. No padding is
+needed since every field is defined at every point.
+"""
+function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
+  values = map(ah) do ah
+    v,comp_offsets = _init_data(ah,x)
+    a = lazy_map(ah,x)
+    _set_data!(v,a,first(comp_offsets))
+    v
+  end
+  RangedInputData(values)
 end
 
 function _init_data(a,x)
@@ -164,9 +184,6 @@ function _set_data!(data,valsik::Point{D},o,i,k) where D
     data[o+d,i,k] = valsik.data[d]
   end
 end
-
-_unblock(a) = a
-_unblock(a::BlockArray) = Array(a)
 
 _merge_data(a,b) = @abstractmethod
 _merge_data(a::Nothing,b::Nothing) = nothing
