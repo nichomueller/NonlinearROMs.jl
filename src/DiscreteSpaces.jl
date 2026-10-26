@@ -15,61 +15,15 @@ function get_coordinates(f::SingleFieldFESpace)
   view(x,masks)
 end
 
-"""
-    get_coordinates(f::MultiFieldFESpace)
-
-The *union* of every field's own points (each field's own masked dof
-coordinates, see `get_coordinates(::SingleFieldFESpace)`) -- always, even when
-every field happens to share the exact same point set (same mesh, same order),
-in which case the union is simply that shared set. This is what lets a field be
-evaluated at a point it doesn't natively own (e.g. a Taylor-Hood pair, where the
-quadratic velocity space has more points than the linear pressure one): a
-`ParamFEFunction` can be evaluated at any point in its domain via ordinary FE
-interpolation (the same machinery `_get_values` already uses for a field's own
-masked dof coordinates), so `_get_values(::MultiFieldParamFEFunction,...)`
-(`DataInterface.jl`) can evaluate every field at this shared, dense point set
-directly and concatenate channel-wise -- no padding needed, since every field is
-now genuinely defined (albeit, at a non-native point, by interpolation rather
-than an exact dof) at every point.
-"""
 function get_coordinates(f::MultiFieldFESpace)
-  lcoords = map(get_coordinates,f)
-  first(_union_with_positions(lcoords))
-end
-
-"""
-    _union_with_positions(lcoords) -> (x,point_ranges)
-
-Builds the union `x` of the given per-field coordinate lists in a single pass,
-recording -- as a free byproduct of the very same pass that decides whether
-each point is new or already present -- the position each field's own points
-land at in `x`: `point_ranges[i][k]` is the position in `x` of `lcoords[i][k]`.
-Deliberately not `collect(∪(map(Set,lcoords)...))` + a separate `indexin` pass
-to recover `point_ranges` afterwards: that would redo, as a search against the
-already-built `x`, exactly the membership check this construction needs anyway.
-"""
-function _union_with_positions(lcoords)
-  T = eltype(first(lcoords))
-  dict = Dict{T,Int}()
-  x = T[]
-  point_ranges = map(lcoords) do lc
-    ids = zeros(Int,length(lc))
-    for (k,xi) in enumerate(lc)
-      ids[k] = get!(dict,xi) do
-        push!(x,xi)
-        length(x)
-      end
-    end
-    ids
-  end
-  return x,point_ranges
+  map(get_coordinates,f)
 end
 
 abstract type TrainingSpace <: DiscreteSpace end
 
 fetch_data(d::DataFormatter,f::TrainingSpace) = @abstractmethod
 
-struct InputSpace{A<:InputData,B<:InputData} <: TrainingSpace
+struct InputSpace{A<:AbstractInputData,B<:AbstractInputData} <: TrainingSpace
   coords::B
   features::A
 end
@@ -93,7 +47,7 @@ function fetch_data(d::DataFormatter,f::InputSpace)
   fetch_data(d,input)
 end
 
-struct OutputSpace{A,B<:RangedInputData} <: TrainingSpace
+struct OutputSpace{A,B<:InputData} <: TrainingSpace
   space::A
   values::B
 end
@@ -102,23 +56,6 @@ function OutputSpace(uh::ParamFEFunction)
   f = get_fe_space(uh)
   x = get_coordinates(f)
   values = _get_values(uh,x)
-  OutputSpace(f,values)
-end
-
-"""
-    OutputSpace(uh::MultiFieldParamFEFunction)
-
-Specialised over the generic `OutputSpace(uh::ParamFEFunction)` to avoid an
-unnecessary `indexin` search: `x` and each field's `point_ranges` are built
-together here, in the one pass that already knows them (`_union_with_positions`),
-and handed straight to `_get_values` -- instead of computing `x` alone and
-leaving `_get_values` to recover `point_ranges` from it afterwards.
-"""
-function OutputSpace(uh::MultiFieldParamFEFunction)
-  f = get_fe_space(uh)
-  lcoords = map(get_coordinates,f)
-  x,point_ranges = _union_with_positions(lcoords)
-  values = _get_values(uh,x,point_ranges)
   OutputSpace(f,values)
 end
 
@@ -131,36 +68,10 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
   fetch_data(d,output)
 end
 
-function to_element(f::OutputSpace,data::InputData)
+function to_element(f::OutputSpace,data::AbstractInputData)
   u = _free_values(f,data)
   pu = ConsecutiveParamArray(u)
   FEFunction(f.space,pu)
-end
-
-function _free_values(f::OutputSpace,data::InputData)
-  msg = "Data does not match the output space's dof count"
-  comps = get_free_dof_to_comp(f.space)
-  points = get_free_dof_to_point(f.space)
-  ids = findall(get_node_masks(f.space)) # representative dof ids
-  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
-  @check size(data,1)*size(data,2) == length(comps) msg
-  T = eltype2(get_dirichlet_dof_values(f.space))
-  u = zeros(T,length(comps),size(data,3))
-  @inbounds @views for dof in eachindex(comps)
-    pos = point_to_pos[points[dof]]
-    u[dof,:] .= data[comps[dof],pos,:]
-  end
-  u
-end
-
-function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::InputData)
-  ranges = f.values.ranges
-  point_ranges = f.values.point_ranges
-  us = ntuple(length(ranges)) do i
-    fi = OutputSpace(f.space[i],f.values)
-    _free_values(fi,view(data,ranges[i],point_ranges[i],:))
-  end
-  reduce(vcat,us)
 end
 
 struct FunctionSpace{A,B} <: DiscreteSpace
@@ -206,30 +117,19 @@ for f in (:gather_data,:scatter_data,:attention)
 end
 
 """
-    struct GraphInducedSpace{A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractMatrix} <: AbstractGraphInducedSpace
+    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
       graph::A
       coords::B
-      scatter_matrix::C
     end
 
-`scatter_matrix` is `scatter_data`'s dense incidence matrix (see `GraphsInterface.jl`),
-precomputed once here -- plain, untraced Julia, at space-construction time -- rather
-than rebuilt on every `scatter_data` call. That matters specifically because
-`scatter_data` normally gets called from deep inside an active Reactant/Enzyme
-training trace (via `_integration(::GraphMeasure)`); building the matrix there, even
-though its inputs don't depend on any traced value, still hits Reactant's "scalar
-indexing disallowed" (its overlay intercepts the whole nested call stack, not just
-operations that touch traced values).
+No precomputed/cached scatter structure needed (see `scatter_data` in
+`GraphsInterface.jl`): it's built on `NNlib.scatter`, which doesn't need to stay off
+an active Reactant/Enzyme trace's call stack the way the old `setindex!`-based dense
+incidence matrix did, so there's nothing left to precompute here at construction time.
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractMatrix} <: AbstractGraphInducedSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
   graph::A
   coords::B
-  scatter_matrix::C
-  function GraphInducedSpace(graph::A,coords::B) where {A<:Graphs.AbstractGraph,B<:AbstractVector{<:Point}}
-    @check nv(graph) == length(coords) "GraphInducedSpace needs exactly one coordinate per vertex"
-    S = _scatter_matrix(TData,graph)
-    new{A,B,typeof(S)}(graph,coords,S)
-  end
 end
 
 function GraphInducedSpace(space;kwargs...)
@@ -239,7 +139,6 @@ end
 
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
-scatter_data(vals::InputData,space::GraphInducedSpace) = _scatter_apply(vals,space.scatter_matrix)
 
 struct MultiGraphInducedSpace{N,A<:AbstractGraph,B<:AbstractVector{<:Point},C<:Table} <: AbstractGraphInducedSpace
   graph::A
@@ -396,4 +295,30 @@ function _coords_info(lcoords)
   coords = ∪(sets...)
   coord_to_lcoords = _coord_to_lcoords_map(coords,lcoords)
   return coords,coord_to_lcoords
+end
+
+function _free_values(f::OutputSpace,data::AbstractInputData)
+  msg = "Data does not match the output space's dof count"
+  comps = get_free_dof_to_comp(f.space)
+  points = get_free_dof_to_point(f.space)
+  ids = findall(get_node_masks(f.space)) # representative dof ids
+  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+  @check size(data,1)*size(data,2) == length(comps) msg
+  T = eltype2(get_dirichlet_dof_values(f.space))
+  u = zeros(T,length(comps),size(data,3))
+  @inbounds @views for dof in eachindex(comps)
+    pos = point_to_pos[points[dof]]
+    u[dof,:] .= data[comps[dof],pos,:]
+  end
+  u
+end
+
+function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::AbstractInputData)
+  ranges = f.values.ranges
+  point_ranges = f.values.point_ranges
+  us = ntuple(length(ranges)) do i
+    fi = OutputSpace(f.space[i],f.values)
+    _free_values(fi,view(data,ranges[i],point_ranges[i],:))
+  end
+  reduce(vcat,us)
 end

@@ -111,8 +111,8 @@ function rollout_data(
   ranges = rid1.ranges
   point_ranges = rid1.point_ranges
 
-  ins = Vector{InputData}(undef,Nt-1)
-  outs = Vector{InputData}(undef,Nt-1)
+  ins = Vector{AbstractInputData}(undef,Nt-1)
+  outs = Vector{AbstractInputData}(undef,Nt-1)
   for i in 1:Nt-1
     feat_i = _get_features(features_fn(times[i]),x)
     u_i = _get_values(states[i],x).data
@@ -129,12 +129,12 @@ function rollout_data(
   coords = _get_coords(x,size(input,3))
 
   input_space = InputSpace(coords,input)
-  output_space = OutputSpace(get_fe_space(states[1]),RangedInputData(output,ranges,point_ranges))
+  output_space = OutputSpace(get_fe_space(states[1]),InputData(output,ranges,point_ranges))
   return input_space,output_space
 end
 
 """
-    rollout(solver,op,fspace,features_fn::Function,times,u0) -> Vector{<:InputData}
+    rollout(solver,op,fspace,features_fn::Function,times,u0) -> Vector{<:AbstractInputData}
 
 Autoregressively applies the trained one-step operator `op` (predicting the
 *change* `u(t+dt)-u(t)`, see `rollout_data`) starting from `u0` -- either the
@@ -155,12 +155,12 @@ function rollout(
   fspace,
   features_fn::Function,
   times::AbstractVector,
-  u0::InputData
+  u0::AbstractInputData
   )
 
   x = get_coords(fspace)
   K = size(u0,3)
-  states = Vector{InputData}(undef,length(times))
+  states = Vector{AbstractInputData}(undef,length(times))
   states[1] = u0
   u = u0
   for i in 1:length(times)-1

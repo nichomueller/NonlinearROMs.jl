@@ -61,72 +61,77 @@ function format_eta(eta_seconds::Real)
   end  
 end
 
+# data utilities
+
+function tuple_of_arrays(a)
+  function first_and_tail(a)
+    x = map(first,a)
+    y = map(Base.tail,a)
+    x,y
+  end
+
+  function take(a,::Type{Tuple{T}} where T)
+    x = map(first,a)
+    (x,)
+  end
+
+  function take(a,::Type{Tuple{A,B}} where {A,B})
+    x,y = first_and_tail(a)
+    t1, = tuple_of_arrays(y)
+    (x,t1)
+  end
+
+  function take(a,::Type{Tuple{A,B,C}} where {A,B,C})
+    x,y = first_and_tail(a)
+    t1,t2 = tuple_of_arrays(y)
+    (x,t1,t2)
+  end
+  
+  function take(a,::Type)
+    x,y = first_and_tail(a)
+    (x,tuple_of_arrays(y)...)
+  end
+
+  take(a,eltype(a))
+end
+
 # input data type 
 
 const TData = Float32
-const InputData{T} = AbstractArray{T,3}
+const AbstractInputData{T} = AbstractArray{T,3}
 
-dimension(data::InputData) = size(data,1)
-num_coords(data::InputData) = size(data,2)
-num_samples(data::InputData) = size(data,3)
+dimension(data::AbstractInputData) = size(data,1)
+num_coords(data::AbstractInputData) = size(data,2)
+num_samples(data::AbstractInputData) = size(data,3)
 
-"""
-    struct RangedInputData{T,A<:InputData{T}} <: InputData{T}
-      data::A
-      ranges::Vector{UnitRange{Int}}
-      point_ranges::Vector{<:AbstractVector{Int}}
-    end
-
-A plain `InputData` array plus, for a multi-field `OutputSpace` (see
-`DataInterface.jl`'s `_get_values(::MultiFieldParamFEFunction,...)`), each
-field's own slice of `.data`'s first two axes: `ranges[i]` is field `i`'s
-channel range (a single field just gets `[1:size(data,1)]`), and
-`point_ranges[i]` is field `i`'s own native points' *positions within `.data`'s
-shared point axis* (every field is evaluated at the same shared point set, see
-`get_coordinates(::MultiFieldFESpace)`, but only owns a subset of it -- a
-single field just gets `[1:size(data,2)]`, i.e. all of them). Computing
-`point_ranges` once, where the field and the shared point set are both already
-in hand (`_get_values`), and storing it here is deliberate: recovering it later
-from `indexin(get_coordinates(field),shared_points)` would be an unnecessary
-second (re)computation of the exact same thing, and implicitly depends on that
-later recomputation reproducing the same shared point set and order.
-`OutputSpace.values` is always one of these; `to_element`/`_free_values` are the
-only places `.ranges`/`.point_ranges` are actually read (to carve the
-reconstructed free-dof vector back up per field). Everywhere else (training,
-normalisation) it's used exactly like the plain array it wraps --
-`size`/`getindex`/`setindex!` delegate straight to `.data` (declaring
-`IndexStyle`=`IndexLinear` so Julia's generic `AbstractArray` fallbacks route
-multi-dimensional indexing/views through them too), so no other code needs to
-know or care that it's there.
-"""
-struct RangedInputData{T,N,A<:InputData{T},B<:NTuple{N,AbstractVector},C<:NTuple{N,AbstractVector}} <: InputData{T}
+struct InputData{T,N,A<:AbstractInputData{T},B<:NTuple{3,BlockedOneTo}} <: AbstractInputData{T}
   data::A
-  ranges::B
-  point_ranges::C
+  axes::B
 end
 
-function RangedInputData(data::InputData)
-  ranges = (1:size(data,1),)
-  point_ranges = (1:size(data,2),)
-  RangedInputData(data,ranges,point_ranges)
+function InputData(data::AbstractInputData)
+  ax = map(x -> BlockedOneTo((x,)),size(data))
+  InputData(data,ax)
 end
 
-function RangedInputData(data::AbstractVector{<:InputData},point_ranges::NTuple)
-  @check length(data) == length(point_ranges) "Need one point range per field"
-  count = 0
-  ranges = ()
-  for d in data
-    D = size(d,1)
-    ranges = (ranges...,count+1:count+D)
-    count += D
+function InputData(data::AbstractVector{<:AbstractInputData{T}}) where T
+  D,N,K = map(size,x) |> tuple_of_arrays
+  @notimplementedif !all(k == K[1] for k in K) "All input data must have the same number of parameters (3rd axis)"
+  values = zeros(T,sum(D),sum(N),K[1])
+  @inbounds @views for (i,di) in enumerate(data)
+    od = i == 1 ? 0 : sum(D[1:i-1])
+    on = i == 1 ? 0 : sum(N[1:i-1])
+    values[od+1:od+D[i],on+1:on+N[i],:] = di
   end
-  RangedInputData(reduce(vcat,data),ranges,point_ranges)
+  axes = (BlockedOneTo(D),BlockedOneTo(N),BlockedOneTo(K))
+  InputData(values,axes)
 end
 
-Base.size(d::RangedInputData) = size(d.data)
-Base.IndexStyle(::Type{<:RangedInputData}) = IndexLinear()
-Base.getindex(d::RangedInputData,i::Int) = getindex(d.data,i)
-Base.setindex!(d::RangedInputData,v,i::Int) = setindex!(d.data,v,i)
+Base.size(d::InputData) = size(d.data)
+Base.axes(d::InputData) = d.axes
+Base.IndexStyle(::Type{<:InputData}) = IndexLinear()
+Base.getindex(d::InputData,i::Int) = getindex(d.data,i)
+Base.setindex!(d::InputData,v,i::Int) = setindex!(d.data,v,i)
 
 # normalisation handling
 
@@ -143,7 +148,7 @@ const NoMScore = MScore{Nothing}
 
 MScore(::Nothing;kwargs...) = MScore(nothing)
 
-function MScore(data::InputData;normalise=true)
+function MScore(data::AbstractInputData;normalise=true)
   max = maximum(abs,data)
   normalise && (data ./= max)
   MScore(max)
@@ -174,7 +179,7 @@ const NoZScore = ZScore{Nothing,Nothing}
 
 ZScore(::Nothing;kwargs...) = ZScore(nothing,nothing)
 
-function ZScore(data::InputData;normalise=true)
+function ZScore(data::AbstractInputData;normalise=true)
   if normalise
     stats = ZScore(data;normalise=false)
     normalise!(data,stats)
@@ -211,7 +216,7 @@ end
 
 for f in (:normalise!,:denormalise!)
   @eval begin
-    function $f(data::InputData,stats::ZScore)
+    function $f(data::AbstractInputData,stats::ZScore)
       @inbounds for m in eachslice(data,dims=3)
         $f(m,stats)
       end
@@ -264,7 +269,7 @@ for f in (:normalise!,:denormalise!)
       $f(inputs,stats.input_score)
     end
 
-    function $f(outputs::InputData,stats::Normalisation)
+    function $f(outputs::AbstractInputData,stats::Normalisation)
       $f(outputs,stats.output_score)
     end
   end

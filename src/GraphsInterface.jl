@@ -310,12 +310,22 @@ here would otherwise get unrolled into one set of MLIR ops per edge -- fine at
 boh.jl's ~200 edges, but a multi-field graph (e.g. Stokes' combined velocity+pressure
 point cloud) can have tens of thousands, enough to exhaust Reactant's internal
 MLIR symbol-naming budget.
+
+Each edge's output column is the source node's features stacked on top of the
+destination node's (channel axis doubles, `2*size(vals,1)`), not a separate output
+column per endpoint (`NNlib.gather`, unlike `scatter`, never accumulates, so there's
+no `op`/`dstsize` to combine src/dst into one pass -- two separate gathers are needed,
+one per endpoint, then `vcat`'d along the channel axis).
 """
-function gather_data(vals::InputData,g::AbstractGraph)
+function gather_data(vals::AbstractInputData,g::AbstractGraph)
   @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
-  idx_src = src.(edges(g))
-  idx_dst = dst.(edges(g))
-  vcat(vals[:,idx_src,:],vals[:,idx_dst,:])
+  ids_src = src.(edges(g))
+  ids_dst = dst.(edges(g))
+  v′ = permutedims(vals,(1,3,2))
+  src′ = NNlib.gather(v′,ids_src)
+  dst′ = NNlib.gather(v′,ids_dst)
+  out′ = vcat(src′,dst′)
+  permutedims(out′,(1,3,2))
 end
 
 """
@@ -329,71 +339,47 @@ behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph
 fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 
 Unlike `gather_data`, this genuinely needs to accumulate (several edges can share a
-destination vertex), so it's expressed as a dense `(nv,ne)` incidence-matrix matmul
-(`_scatter_apply`) rather than a per-edge loop: a loop here gets unrolled into one set
-of MLIR ops per edge -- fine at boh.jl's ~200 edges, but a multi-field graph (e.g.
-Stokes' combined velocity+pressure point cloud) can have tens of thousands, enough to
-exhaust Reactant's internal MLIR symbol-naming budget.
-
-This standalone method builds `S` (`_scatter_matrix`) fresh every call, which is only
-safe called *outside* an active Reactant/Enzyme trace: `S`'s own construction is a
-`setindex!`-based loop, and once nested inside an already-tracing call stack (as it
-would be if called from a model's forward pass during training), Reactant's overlay
-intercepts even allocations/writes that don't depend on any traced value, turning `S`
-into a traced array and hitting "scalar indexing disallowed". `GraphInducedSpace`
-instead precomputes `S` once at construction (plain, untraced Julia, see
-`DiscreteSpaces.jl`) and overrides `scatter_data` to reuse it -- that cached-matrix
-path is the one actually exercised during training.
+destination vertex), so a plain vectorised `getindex`-style gather doesn't suffice --
+`NNlib.scatter(+,...)` is used instead (the same primitive `GNNGraphs.jl` builds its
+own message passing on), rather than either a per-edge loop (gets unrolled into one
+set of MLIR ops per edge under a Reactant/Enzyme trace -- fine at boh.jl's ~200 edges,
+but a multi-field graph, e.g. Stokes' combined velocity+pressure point cloud, can have
+tens of thousands, enough to exhaust Reactant's internal MLIR symbol-naming budget) or
+the previous dense `(nv,ne)` incidence-matrix matmul (whose own construction was a
+`setindex!`-based loop with the same problem, needing a separate precomputed-and-cached
+path to stay off the traced call stack entirely). `NNlib.scatter`'s own edge axis is
+the array's *last* dimension, not `vals`'s second (see `InputData`'s `(D,N,K)`
+layout), hence the `permutedims` wrapping either side of the call.
 """
-function scatter_data(vals::InputData,g::AbstractGraph)
+function scatter_data(vals::AbstractInputData,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
-  S = _scatter_matrix(eltype(vals),g)
-  _scatter_apply(vals,S)
-end
-
-_scatter_matrix(::Type{T},g::AbstractGraph) where T = _scatter_matrix!(zeros(T,nv(g),ne(g)),g)
-
-function _scatter_matrix!(S::AbstractMatrix,g::AbstractGraph)
-  @inbounds for (i,e) in enumerate(edges(g))
-    S[dst(e),i] = one(eltype(S))
-  end
-  S
-end
-
-function _scatter_apply(vals::InputData,S::AbstractMatrix)
-  d,ne_,k = size(vals)
-  n = size(S,1)
-  v2 = reshape(permutedims(vals,(2,1,3)),ne_,d*k)
-  out2 = S*v2
-  permutedims(reshape(out2,n,d,k),(2,1,3))
+  d,_,k = size(vals)
+  ids_dst = dst.(edges(g))
+  v′ = permutedims(vals,(1,3,2))
+  out′ = NNlib.scatter(+,v′,ids_dst;dstsize=(d,k,nv(g)))
+  permutedims(out′,(1,3,2))
 end
 
 """
     attention(scores::AbstractVector,g::AbstractGraph) -> per-edge weights
 
-Normalizes `scores` (one per edge) into attention weights
+Normalizes `scores` (one per edge) into attention weights: a numerically-stable
+softmax over the scores of every edge sharing the same destination vertex (a
+per-vertex group, not a single global softmax over all edges).
+
+Same `NNlib.scatter` approach as `scatter_data`, applied to the two group
+reductions a segmented softmax needs (max-per-group, then sum-per-group of the
+shifted exponentials) instead of three sequential per-edge scalar loops, for the
+same Reactant/MLIR-scaling reason. `scores`/`dsts` are already 1-D (one entry per
+edge, no channel/sample axes), so no `permutedims` wrapping is needed here, unlike
+`gather_data`/`scatter_data`.
 """
 function attention(scores::AbstractVector{T},g::AbstractGraph) where T
   @check length(scores) == ne(g) "The number of scores must match the number of graph edges"
-  dsts = zeros(Int,length(edges(g)))
-  for (k,e) in enumerate(edges(g))
-    dsts[k] = dst(e)
-  end
-
-  maxs = fill(T(-Inf),nv(g))
-  for (k,d) in enumerate(dsts)
-    maxs[d] = max(maxs[d],scores[k])
-  end
-
-  α = similar(scores)
-  sums = zeros(T,nv(g))
-  for (k,d) in enumerate(dsts)
-    α[k] = exp(scores[k]-maxs[d])
-    sums[d] += α[k]
-  end
-  for (k,d) in enumerate(dsts)
-    α[k] /= sums[d]
-  end
-
+  dsts = dst.(edges(g))
+  maxs = NNlib.scatter(max,scores,dsts;dstsize=(nv(g),),init=T(-Inf))
+  α = exp.(scores .- maxs[dsts])
+  sums = NNlib.scatter(+,α,dsts;dstsize=(nv(g),))
+  α ./= sums[dsts]
   return α
 end

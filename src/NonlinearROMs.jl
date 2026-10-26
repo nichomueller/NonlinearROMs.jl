@@ -50,6 +50,7 @@ using Graphs
 using LinearAlgebra
 using Lux
 using MLUtils
+using NNlib
 using NearestNeighbors
 using Optimisers
 using Random

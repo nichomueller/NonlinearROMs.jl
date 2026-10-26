@@ -52,7 +52,7 @@ get_weights(meas::InducedMeasure) = meas.weights
 
 get_graph(meas::GraphMeasure) = get_graph(get_space(meas))
 
-function integration(a::InputData,meas::InducedMeasure)
+function integration(a::AbstractInputData,meas::InducedMeasure)
   msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(dimension(get_space(meas))); got size $(size(a))"
   @check size(a,2) == dimension(get_space(meas)) msg
   _integration(a,meas)
@@ -64,12 +64,12 @@ function _integration(a::AbstractArray,meas::InducedMeasure)
   @notimplemented
 end
 
-function _integration(a::InputData,meas::FESpaceMeasure)
+function _integration(a::AbstractInputData,meas::FESpaceMeasure)
   M = get_weights(meas)
   _mat_mul_data(M,a)
 end
 
-function _integration(a::InputData,meas::GraphMeasure)
+function _integration(a::AbstractInputData,meas::GraphMeasure)
   w = get_weights(meas)
   space = get_space(meas)
   out = scatter_data(a,space)
@@ -79,7 +79,7 @@ function _integration(a::InputData,meas::GraphMeasure)
   return out
 end
 
-function _mat_mul_data(A::AbstractMatrix,x::InputData)
+function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
   D,N,K = size(x)
   x2 = reshape(permutedims(x,(2,1,3)),N,D*K)
   b2 = A*x2

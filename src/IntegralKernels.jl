@@ -264,7 +264,7 @@ end
 
 # reconstructs the (dout x din) matrix flattened into k's first axis and applies
 # it to v, batched over the (N,K) = (num_points,num_params) trailing axes
-function _kv(k::InputData,v::InputData)
+function _kv(k::AbstractInputData,v::AbstractInputData)
   din,N,nbatch = size(v)
   dout = div(size(k,1),din)
   k_r = reshape(k,din,dout,N,nbatch)

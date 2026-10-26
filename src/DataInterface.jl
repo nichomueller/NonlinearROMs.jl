@@ -4,7 +4,7 @@ end
 
 Sampler() = Sampler(:)
 
-sample(s::Sampler,data::InputData) = view(data,:,s.strategy,:)
+sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
@@ -71,7 +71,7 @@ function fetch_data(d::DataFormatter{true,true},(coords,features)::NamedTuple)
 end
 
 # output 
-function fetch_data(d::DataFormatter,values::InputData)
+function fetch_data(d::DataFormatter,values::AbstractInputData)
   sample(d.sampler,values)
 end
 
@@ -118,46 +118,17 @@ function _get_values(ah::ParamFEFunction,x::AbstractVector{<:Point})
   values,comp_offsets = _init_data(ah,x)
   a = lazy_map(ah,x)
   _set_data!(values,a,first(comp_offsets))
-  return RangedInputData(values)
+  InputData(values)
 end
 
-"""
-    _get_values(uh::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
-    _get_values(uh::MultiFieldParamFEFunction,x::AbstractVector{<:Point},point_ranges)
-
-Evaluates each sub-field at the same shared coordinate list `x` -- generally
-the *union* of every field's own points (see `get_coordinates(::MultiFieldFESpace)`),
-though `x` can be any point set a caller supplies (e.g. `Rollout.jl` evaluating
-every step at a fixed, externally-chosen `x`) -- via ordinary FE interpolation
-where a field doesn't natively own a point, and concatenates their per-point
-values channel-wise: `(D_1,N,K)`,`(D_2,N,K)`,... -> `(D_1+D_2+...,N,K)`. No
-padding is needed since every field is now defined (exactly at its own dofs, by
-interpolation everywhere else) at every point.
-
-The resulting `RangedInputData` also needs, for each field, the positions
-within `x` of its own native points, as `point_ranges`. When the caller already
-knows them -- `OutputSpace(uh::MultiFieldParamFEFunction)` builds `x` as the
-union via `_union_with_positions`, which produces them as a free byproduct --
-pass them in directly (3-arg method). The 2-arg method is the general fallback
-for a caller that only has `x`: it recovers `point_ranges` by matching each
-field's own points against `x` (`indexin`), which is an unavoidable search in
-that case since nothing guarantees `x` was built from these exact fields.
-"""
-function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
-  point_ranges = map(ah) do ahi
-    indexin(get_coordinates(get_fe_space(ahi)),x)
+function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:AbstractVector{<:Point}})
+  values = map(ah,x) do ahi,xi
+    vi,comp_offsets = _init_data(ahi,xi)
+    ai = lazy_map(ahi,xi)
+    _set_data!(vi,ai,first(comp_offsets))
+    vi
   end
-  _get_values(ah,x,point_ranges)
-end
-
-function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:Point},point_ranges)
-  values = map(ah) do ahi
-    v,comp_offsets = _init_data(ahi,x)
-    a = lazy_map(ahi,x)
-    _set_data!(v,a,first(comp_offsets))
-    v
-  end
-  RangedInputData(values,point_ranges)
+  InputData(values)
 end
 
 function _init_data(a,x)
@@ -208,7 +179,7 @@ _merge_data(a,b) = @abstractmethod
 _merge_data(a::Nothing,b::Nothing) = nothing
 _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
-_merge_data(a::InputData,b::InputData) = cat(a,b;dims=1)
+_merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
 
 # data formatter:
 # 1) x
