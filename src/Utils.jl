@@ -74,30 +74,45 @@ num_samples(data::InputData) = size(data,3)
     struct RangedInputData{T,A<:InputData{T}} <: InputData{T}
       data::A
       ranges::Vector{UnitRange{Int}}
+      point_ranges::Vector{<:AbstractVector{Int}}
     end
 
 A plain `InputData` array plus, for a multi-field `OutputSpace` (see
 `DataInterface.jl`'s `_get_values(::MultiFieldParamFEFunction,...)`), each
-field's channel range within `.data`'s first axis -- a single field just gets
-`[1:size(data,1)]`. `OutputSpace.values` is always one of these; `to_element` is
-the only place `.ranges` is actually read (to carve the reconstructed free-dof
-vector back up per field). Everywhere else (training, normalisation) it's used
-exactly like the plain array it wraps -- `size`/`getindex`/`setindex!` delegate
-straight to `.data` (declaring `IndexStyle`=`IndexLinear` so Julia's generic
-`AbstractArray` fallbacks route multi-dimensional indexing/views through them
-too), so no other code needs to know or care that it's there.
+field's own slice of `.data`'s first two axes: `ranges[i]` is field `i`'s
+channel range (a single field just gets `[1:size(data,1)]`), and
+`point_ranges[i]` is field `i`'s own native points' *positions within `.data`'s
+shared point axis* (every field is evaluated at the same shared point set, see
+`get_coordinates(::MultiFieldFESpace)`, but only owns a subset of it -- a
+single field just gets `[1:size(data,2)]`, i.e. all of them). Computing
+`point_ranges` once, where the field and the shared point set are both already
+in hand (`_get_values`), and storing it here is deliberate: recovering it later
+from `indexin(get_coordinates(field),shared_points)` would be an unnecessary
+second (re)computation of the exact same thing, and implicitly depends on that
+later recomputation reproducing the same shared point set and order.
+`OutputSpace.values` is always one of these; `to_element`/`_free_values` are the
+only places `.ranges`/`.point_ranges` are actually read (to carve the
+reconstructed free-dof vector back up per field). Everywhere else (training,
+normalisation) it's used exactly like the plain array it wraps --
+`size`/`getindex`/`setindex!` delegate straight to `.data` (declaring
+`IndexStyle`=`IndexLinear` so Julia's generic `AbstractArray` fallbacks route
+multi-dimensional indexing/views through them too), so no other code needs to
+know or care that it's there.
 """
-struct RangedInputData{T,N,A<:InputData{T},B<:NTuple{N,AbstractVector}} <: InputData{T}
+struct RangedInputData{T,N,A<:InputData{T},B<:NTuple{N,AbstractVector},C<:NTuple{N,AbstractVector}} <: InputData{T}
   data::A
   ranges::B
+  point_ranges::C
 end
 
 function RangedInputData(data::InputData)
   ranges = (1:size(data,1),)
-  RangedInputData(data,ranges)
+  point_ranges = (1:size(data,2),)
+  RangedInputData(data,ranges,point_ranges)
 end
 
-function RangedInputData(data::AbstractVector{<:InputData})
+function RangedInputData(data::AbstractVector{<:InputData},point_ranges::NTuple)
+  @check length(data) == length(point_ranges) "Need one point range per field"
   count = 0
   ranges = ()
   for d in data
@@ -105,7 +120,7 @@ function RangedInputData(data::AbstractVector{<:InputData})
     ranges = (ranges...,count+1:count+D)
     count += D
   end
-  RangedInputData(reduce(vcat,data),ranges)
+  RangedInputData(reduce(vcat,data),ranges,point_ranges)
 end
 
 Base.size(d::RangedInputData) = size(d.data)
@@ -120,18 +135,18 @@ abstract type AbstractScore end
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
 
-struct MScore{A} <: AbstractScore
+struct MScore{A<:Union{Nothing,Number}} <: AbstractScore
   max::A
 end
 
 const NoMScore = MScore{Nothing}
 
-MScore(::Nothing;kwargs...) = MScore{Nothing}(nothing)
+MScore(::Nothing;kwargs...) = MScore(nothing)
 
 function MScore(data::InputData;normalise=true)
   max = maximum(abs,data)
   normalise && (data ./= max)
-  MScore{typeof(max)}(max)
+  MScore(max)
 end
 
 function normalise!(data,score::NoMScore)
@@ -261,8 +276,8 @@ struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
   X::A
 end
 
-function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
-  Xŷ = loss.X * ŷ
-  Xy = loss.X * y
+function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
+  Xŷ = _mat_mul_data(loss.X,ŷ)
+  Xy = _mat_mul_data(loss.X,y)
   return Lux.unsafe_apply_loss(Lux.MSELoss(mean),Xŷ,Xy)
 end

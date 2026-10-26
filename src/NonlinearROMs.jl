@@ -29,9 +29,9 @@ into its own repository, and plugs back into them via multiple dispatch:
   `RBTransient`'s space-time hyper-reduction machinery analogously.
 
 - **Mesh graph utilities** (`GraphsInterface.jl`/`WeightedSimpleDiGraphs.jl`) —
-  `MeshGraph`/`DistanceGraph`/`build_graph` turn a `FESpace`'s dof adjacency (or
-  a coordinate-based nearest-neighbour graph) into a `WeightedSimpleDiGraph`,
-  for graph-based neural architectures.
+  `build_graph(coords;radius)` turns a point set into a radius-neighbourhood
+  `WeightedSimpleDiGraph` (edge weights = Euclidean distance), wrapped in a
+  [`GraphInducedSpace`](@ref), for graph-based neural architectures.
 
 Usage: construct a `NNHyperReduction`/`NNRegression` (or their `Transient*`
 counterparts) and pass it to `RBSolver` wherever a steady/transient
@@ -64,6 +64,7 @@ using Gridap.CellData
 using Gridap.FESpaces
 using Gridap.Geometry
 using Gridap.Helpers
+using Gridap.MultiField
 using Gridap.Polynomials
 using Gridap.ReferenceFEs
 using Gridap.TensorValues
@@ -105,6 +106,7 @@ export NystromSubgraph
 export gather_data
 export scatter_data
 export attention
+export build_graph
 include("GraphsInterface.jl")
 
 export DiscreteSpace

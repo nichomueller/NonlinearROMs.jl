@@ -123,22 +123,41 @@ end
 
 """
     _get_values(uh::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
+    _get_values(uh::MultiFieldParamFEFunction,x::AbstractVector{<:Point},point_ranges)
 
-Evaluates each sub-field at the same shared coordinate list `x` -- valid only
-when every field lives on the same mesh *and* order, so
-`get_coordinates(::MultiFieldFESpace)` returns one shared point list rather than
-needing a `MultiGraphInducedSpace` -- and concatenates their per-point values
-channel-wise: `(D_1,N,K)`,`(D_2,N,K)`,... -> `(D_1+D_2+...,N,K)`. No padding is
-needed since every field is defined at every point.
+Evaluates each sub-field at the same shared coordinate list `x` -- generally
+the *union* of every field's own points (see `get_coordinates(::MultiFieldFESpace)`),
+though `x` can be any point set a caller supplies (e.g. `Rollout.jl` evaluating
+every step at a fixed, externally-chosen `x`) -- via ordinary FE interpolation
+where a field doesn't natively own a point, and concatenates their per-point
+values channel-wise: `(D_1,N,K)`,`(D_2,N,K)`,... -> `(D_1+D_2+...,N,K)`. No
+padding is needed since every field is now defined (exactly at its own dofs, by
+interpolation everywhere else) at every point.
+
+The resulting `RangedInputData` also needs, for each field, the positions
+within `x` of its own native points, as `point_ranges`. When the caller already
+knows them -- `OutputSpace(uh::MultiFieldParamFEFunction)` builds `x` as the
+union via `_union_with_positions`, which produces them as a free byproduct --
+pass them in directly (3-arg method). The 2-arg method is the general fallback
+for a caller that only has `x`: it recovers `point_ranges` by matching each
+field's own points against `x` (`indexin`), which is an unavoidable search in
+that case since nothing guarantees `x` was built from these exact fields.
 """
 function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:Point})
-  values = map(ah) do ah
-    v,comp_offsets = _init_data(ah,x)
-    a = lazy_map(ah,x)
+  point_ranges = map(ah) do ahi
+    indexin(get_coordinates(get_fe_space(ahi)),x)
+  end
+  _get_values(ah,x,point_ranges)
+end
+
+function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:Point},point_ranges)
+  values = map(ah) do ahi
+    v,comp_offsets = _init_data(ahi,x)
+    a = lazy_map(ahi,x)
     _set_data!(v,a,first(comp_offsets))
     v
   end
-  RangedInputData(values)
+  RangedInputData(values,point_ranges)
 end
 
 function _init_data(a,x)

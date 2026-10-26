@@ -18,23 +18,51 @@ end
 """
     get_coordinates(f::MultiFieldFESpace)
 
-When every field shares the exact same point set (same mesh, same order), this
-is just `get_coordinates(first(f))`. Otherwise (e.g. a Taylor-Hood pair, where
-the quadratic velocity space has more points than the linear pressure one), it's
-the *union* of every field's own points: a `ParamFEFunction` can be evaluated at
-any point in its domain, not only its own dofs (ordinary FE interpolation, the
-same machinery `_get_values` already uses for a field's own masked dof
-coordinates), so `_get_values(::MultiFieldParamFEFunction,...)` (`DataInterface.jl`)
-can evaluate every field at this shared, dense point set directly and
-concatenate channel-wise -- no padding needed, since every field is now
-genuinely defined (albeit, at a non-native point, by interpolation rather than
-an exact dof) at every point.
+The *union* of every field's own points (each field's own masked dof
+coordinates, see `get_coordinates(::SingleFieldFESpace)`) -- always, even when
+every field happens to share the exact same point set (same mesh, same order),
+in which case the union is simply that shared set. This is what lets a field be
+evaluated at a point it doesn't natively own (e.g. a Taylor-Hood pair, where the
+quadratic velocity space has more points than the linear pressure one): a
+`ParamFEFunction` can be evaluated at any point in its domain via ordinary FE
+interpolation (the same machinery `_get_values` already uses for a field's own
+masked dof coordinates), so `_get_values(::MultiFieldParamFEFunction,...)`
+(`DataInterface.jl`) can evaluate every field at this shared, dense point set
+directly and concatenate channel-wise -- no padding needed, since every field is
+now genuinely defined (albeit, at a non-native point, by interpolation rather
+than an exact dof) at every point.
 """
 function get_coordinates(f::MultiFieldFESpace)
   lcoords = map(get_coordinates,f)
-  x = first(lcoords)
-  all(==(x),lcoords) && return x
-  collect(∪(map(Set,lcoords)...))
+  first(_union_with_positions(lcoords))
+end
+
+"""
+    _union_with_positions(lcoords) -> (x,point_ranges)
+
+Builds the union `x` of the given per-field coordinate lists in a single pass,
+recording -- as a free byproduct of the very same pass that decides whether
+each point is new or already present -- the position each field's own points
+land at in `x`: `point_ranges[i][k]` is the position in `x` of `lcoords[i][k]`.
+Deliberately not `collect(∪(map(Set,lcoords)...))` + a separate `indexin` pass
+to recover `point_ranges` afterwards: that would redo, as a search against the
+already-built `x`, exactly the membership check this construction needs anyway.
+"""
+function _union_with_positions(lcoords)
+  T = eltype(first(lcoords))
+  dict = Dict{T,Int}()
+  x = T[]
+  point_ranges = map(lcoords) do lc
+    ids = zeros(Int,length(lc))
+    for (k,xi) in enumerate(lc)
+      ids[k] = get!(dict,xi) do
+        push!(x,xi)
+        length(x)
+      end
+    end
+    ids
+  end
+  return x,point_ranges
 end
 
 abstract type TrainingSpace <: DiscreteSpace end
@@ -65,7 +93,7 @@ function fetch_data(d::DataFormatter,f::InputSpace)
   fetch_data(d,input)
 end
 
-struct OutputSpace{A,B<:InputData} <: TrainingSpace
+struct OutputSpace{A,B<:RangedInputData} <: TrainingSpace
   space::A
   values::B
 end
@@ -74,6 +102,23 @@ function OutputSpace(uh::ParamFEFunction)
   f = get_fe_space(uh)
   x = get_coordinates(f)
   values = _get_values(uh,x)
+  OutputSpace(f,values)
+end
+
+"""
+    OutputSpace(uh::MultiFieldParamFEFunction)
+
+Specialised over the generic `OutputSpace(uh::ParamFEFunction)` to avoid an
+unnecessary `indexin` search: `x` and each field's `point_ranges` are built
+together here, in the one pass that already knows them (`_union_with_positions`),
+and handed straight to `_get_values` -- instead of computing `x` alone and
+leaving `_get_values` to recover `point_ranges` from it afterwards.
+"""
+function OutputSpace(uh::MultiFieldParamFEFunction)
+  f = get_fe_space(uh)
+  lcoords = map(get_coordinates,f)
+  x,point_ranges = _union_with_positions(lcoords)
+  values = _get_values(uh,x,point_ranges)
   OutputSpace(f,values)
 end
 
@@ -87,27 +132,19 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
 end
 
 function to_element(f::OutputSpace,data::InputData)
-  space = f.space
-  u = _free_values(space,data,f.values.ranges)
+  u = _free_values(f,data)
   pu = ConsecutiveParamArray(u)
-  FEFunction(space,pu)
+  FEFunction(f.space,pu)
 end
 
-# `ranges` (from the OutputSpace's own RangedInputData, not from `data`: `data` here
-# is typically a plain prediction fresh out of the model, not itself sized) is only
-# meaningful for a MultiFieldFESpace, so a single field just ignores it.
-_free_values(space,data::InputData,ranges) = _free_values(space,data)
-
-function _free_values(space,data::InputData)
-  comps = get_free_dof_to_comp(space)
-  points = get_free_dof_to_point(space)
-  # `data`'s 2nd axis is indexed in "one representative dof per point" order (see
-  # get_coordinates' masking), not by raw point id, so we need the point ->
-  # position-in-that-order map
-  rep_dofs = findall(get_node_masks(space))
-  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(rep_dofs))
-  @check size(data,1)*size(data,2) == length(comps) "Data does not match the output space's dof count"
-  T = eltype2(get_dirichlet_dof_values(space))
+function _free_values(f::OutputSpace,data::InputData)
+  msg = "Data does not match the output space's dof count"
+  comps = get_free_dof_to_comp(f.space)
+  points = get_free_dof_to_point(f.space)
+  ids = findall(get_node_masks(f.space)) # representative dof ids
+  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+  @check size(data,1)*size(data,2) == length(comps) msg
+  T = eltype2(get_dirichlet_dof_values(f.space))
   u = zeros(T,length(comps),size(data,3))
   @inbounds @views for dof in eachindex(comps)
     pos = point_to_pos[points[dof]]
@@ -116,23 +153,12 @@ function _free_values(space,data::InputData)
   u
 end
 
-"""
-    _free_values(space::MultiFieldFESpace,data::InputData,ranges::NTuple{N,AbstractVector})
-
-`data`'s point axis is indexed by `get_coordinates(space)` -- when fields don't
-share points, that's their *union* (see `get_coordinates(::MultiFieldFESpace)`),
-not any single field's own points, so field `i`'s own masked points are only a
-subset of it, in some order (`indexin`, matching by coordinate value, the same
-way `_coords_info` does for `MultiGraphInducedSpace`): the generic single-field
-reconstruction expects its data's point axis to correspond 1:1 (in its own
-order) to `get_coordinates(space.spaces[i])`, so that subset needs to be pulled
-out first.
-"""
-function _free_values(space::MultiFieldFESpace,data::InputData,ranges::NTuple{N,AbstractVector}) where N
-  combined = get_coordinates(space)
-  us = ntuple(N) do i
-    idx = indexin(get_coordinates(space.spaces[i]),combined)
-    _free_values(space.spaces[i],view(data,ranges[i],idx,:))
+function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::InputData)
+  ranges = f.values.ranges
+  point_ranges = f.values.point_ranges
+  us = ntuple(length(ranges)) do i
+    fi = OutputSpace(f.space[i],f.values)
+    _free_values(fi,view(data,ranges[i],point_ranges[i],:))
   end
   reduce(vcat,us)
 end
@@ -253,7 +279,18 @@ isn't well-defined once higher-order dofs, e.g. edge midpoints, are involved),
 free dofs are grouped directly by their (exact) physical coordinate -- dofs at
 the same point (e.g. one per vector component) necessarily share one.
 """
-get_node_masks(f) = _first_dof_per_point(get_free_dof_to_point(f))
+function get_node_masks(f)
+  points = get_free_dof_to_point(f)
+  touched = falses(maximum(points,init=0))
+  mask = falses(length(points))
+  @inbounds for (dof,p) in enumerate(points)
+    if !touched[p]
+      touched[p] = true
+      mask[dof] = true
+    end
+  end
+  mask
+end
 
 function get_free_dof_to_comp(f)
   @notimplementedif !hasfield(typeof(f),:space)
@@ -276,6 +313,31 @@ function get_free_dof_to_comp(f::UnconstrainedFESpace)
   comps
 end
 
+"""
+    get_free_dof_to_comp(f::MultiFieldFESpace)
+    get_free_dof_to_point(f::MultiFieldFESpace)
+
+Field-by-field concatenation of each field's own [`get_free_dof_to_comp`](@ref)/
+[`get_free_dof_to_point`](@ref), using Gridap's own per-field dof offsets
+(`compute_field_offsets`, valid for both `ConsecutiveMultiFieldStyle` and
+`BlockMultiFieldStyle`) to place each field's dofs at their actual position in
+the whole space's free-dof numbering. `get_free_dof_to_comp` keeps each dof's
+component index local to its own field (not merged across fields -- a field's
+component numbering is meaningless outside of it). `get_free_dof_to_point`
+necessarily looks up every dof's coordinate against `get_coordinates(f)` -- the
+*union* of every field's own points, since two different fields generally don't
+share the same point set -- rather than against any single field's own points.
+"""
+function get_free_dof_to_comp(f::MultiFieldFESpace)
+  comps = zeros(Int16,num_free_dofs(f))
+  offsets = compute_field_offsets(f)
+  for (i,space_i) in enumerate(f.spaces)
+    comps_i = get_free_dof_to_comp(space_i)
+    comps[offsets[i]+1:offsets[i]+length(comps_i)] .= comps_i
+  end
+  comps
+end
+
 function get_free_dof_to_point(f)
   @notimplementedif !hasfield(typeof(f),:space)
   get_free_dof_to_point(getfield(f,:space))
@@ -286,27 +348,29 @@ function get_free_dof_to_point(f::UnconstrainedFESpace)
   dict = Dict{eltype(x),Int32}()
   point = zeros(Int32,length(x))
   count = Int32(0)
-  @inbounds for dof in eachindex(x)
-    xi = x[dof]
+  @inbounds for (i,xi) in enumerate(x)
     if !haskey(dict,xi)
       count += Int32(1)
       dict[xi] = count
     end
-    point[dof] = dict[xi]
+    point[i] = dict[xi]
   end
   point
 end
 
-function _first_dof_per_point(points::AbstractVector{<:Integer})
-  touched = falses(maximum(points,init=0))
-  mask = falses(length(points))
-  @inbounds for (dof,p) in enumerate(points)
-    if !touched[p]
-      touched[p] = true
-      mask[dof] = true
+function get_free_dof_to_point(f::MultiFieldFESpace)
+  x = get_coordinates(f)
+  dict = Dict(xi => Int32(i) for (i,xi) in enumerate(x))
+  point = zeros(Int32,num_free_dofs(f))
+  offsets = compute_field_offsets(f)
+  for (i,space_i) in enumerate(f.spaces)
+    x_i = get_free_dof_coordinates(space_i)
+    off = offsets[i]
+    @inbounds for dof in eachindex(x_i)
+      point[off+dof] = dict[x_i[dof]]
     end
   end
-  mask
+  point
 end
 
 function _a_to_b(a,b)

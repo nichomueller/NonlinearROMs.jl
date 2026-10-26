@@ -107,7 +107,9 @@ function rollout_data(
   @check Nt > 1 "Need at least 2 time steps to form a consecutive pair"
 
   x = get_coords(fspace)
-  ranges = _get_values(states[1],x).ranges
+  rid1 = _get_values(states[1],x)
+  ranges = rid1.ranges
+  point_ranges = rid1.point_ranges
 
   ins = Vector{InputData}(undef,Nt-1)
   outs = Vector{InputData}(undef,Nt-1)
@@ -127,7 +129,7 @@ function rollout_data(
   coords = _get_coords(x,size(input,3))
 
   input_space = InputSpace(coords,input)
-  output_space = OutputSpace(get_fe_space(states[1]),RangedInputData(output,ranges))
+  output_space = OutputSpace(get_fe_space(states[1]),RangedInputData(output,ranges,point_ranges))
   return input_space,output_space
 end
 
