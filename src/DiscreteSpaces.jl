@@ -113,7 +113,7 @@ abstract type AbstractGraphInducedSpace <: DiscreteSpace end
 get_graph(space::AbstractGraphInducedSpace) = @abstractmethod
 
 for f in (:gather_data,:scatter_data,:attention)
-  @eval $f(vals::AbstractArray,space::AbstractGraphInducedSpace) = $f(vals,get_graph(space))
+  @eval $f(vals::AbstractInputData,space::AbstractGraphInducedSpace) = $f(vals,get_graph(space))
 end
 
 """
@@ -140,41 +140,60 @@ end
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 
-struct MultiGraphInducedSpace{N,A<:AbstractGraph,B<:AbstractVector{<:Point},C<:Table} <: AbstractGraphInducedSpace
-  graph::A
-  graphs::NTuple{N,A}
+struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractVector{<:Point},C<:Table} <: AbstractGraphInducedSpace
+  lspaces::NTuple{N,A}
   coords::B
-  node_to_lnode::C
+  l_to_lcoord_to_coords::C
+  l_to_coord_to_lcoords::C
 end
 
 function MultiGraphInducedSpace(spaces...;kwargs...)
-  lcoords = map(get_coords,spaces)
-  lgraphs = map(x -> build_graph(x;kwargs...),lcoords)
-  coords,node_to_lnode = _coords_info(lcoords)
-  graph = build_graph(coords;kwargs...)
-  MultiGraphInducedSpace(graph,lgraphs,coords,node_to_lnode)
+  lspaces = map(GraphInducedSpace,spaces)
+  lcoords = map(get_coords,lspaces)
+  sets = map(Set,lcoords)
+  coords = ∪(sets...)
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
+  l_to_coord_to_lcoords = _coord_to_lcoords_map(coords,lcoords)
+  MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords,l_to_coord_to_lcoords)
 end
 
 get_graph(space::MultiGraphInducedSpace) = space.graph
 get_coords(space::MultiGraphInducedSpace) = space.coords
 
-function Base.iterate(space::MultiGraphInducedSpace)
-  space,space_it = iterate(get_space(meas))
-  weights,weights_it = iterate(get_weights(meas))
-  if isnothing(space_it) || isnothing(weights_it)
-    return nothing
-  end
-  (InducedMeasure(space,weights),(space_it,weights_it))
+Base.length(space::MultiGraphInducedSpace) = length(space.lspaces)
+Base.getindex(space::MultiGraphInducedSpace,i::Int) = space.lspaces[i]
+Base.iterate(space::MultiGraphInducedSpace,state...) = iterate(space.lspaces,state...)
+
+function expand_data(
+  spaces::MultiGraphInducedSpace,
+  ldata::AbstractInputData,
+  block::Int=1
+  )
+  
+  D,_,K = size(ldata)
+  N = num_coords(spaces)
+  gdata = zeros(eltype(ldata),D,N,K)
+  lcoord_to_coords = spaces.l_to_lcoord_to_coords[block]
+  @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
+    gdata[:,c,:] .= ldata[:,lc,:]
+  end 
+  return gdata
 end
 
-function Base.iterate(space::MultiGraphInducedSpace,state)
-  space_it,weights_it = state
-  space,space_it = iterate(get_space(meas),space_it)
-  weights,weights_it = iterate(get_weights(meas),weights_it)
-  if isnothing(space_it) || isnothing(weights_it)
-    return nothing
-  end
-  (InducedMeasure(space,weights),(space_it,weights_it))
+function restrict_data(
+  spaces::MultiGraphInducedSpace,
+  gdata::AbstractInputData,
+  block::Int=1
+  )
+  
+  D,_,K = size(gdata)
+  N = num_coords(spaces[block])
+  ldata = zeros(eltype(gdata),D,N,K)
+  lcoord_to_coords = spaces.l_to_lcoord_to_coords[block]
+  @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
+    ldata[:,c,:] .= gdata[:,lc,:]
+  end 
+  return ldata
 end
 
 # utils
@@ -299,6 +318,16 @@ function _a_to_b(a,b)
   a2b
 end
 
+function _lcoord_to_coords_map(lcoords,coords)
+  data = zeros(Int,length(lcoords)*length(coords))
+  ptrs = ones(Int32,length(lcoords)+1)
+  for (i,lc) in enumerate(lcoords)
+    ptrs[i+1] = ptrs[i] + length(lc)
+    @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(lc,coords)
+  end
+  Table(data,ptrs)
+end
+
 function _coord_to_lcoords_map(coords,lcoords)
   data = zeros(Int,sum(map(length,lcoords)))
   ptrs = ones(Int32,length(lcoords)+1)
@@ -307,13 +336,6 @@ function _coord_to_lcoords_map(coords,lcoords)
     @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(coords,lc)
   end
   Table(data,ptrs)
-end
-
-function _coords_info(lcoords)
-  sets = map(Set,lcoords)
-  coords = ∪(sets...)
-  coord_to_lcoords = _coord_to_lcoords_map(coords,lcoords)
-  return coords,coord_to_lcoords
 end
 
 function _free_values(f::OutputSpace,data::AbstractInputData)

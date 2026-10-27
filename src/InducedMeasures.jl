@@ -22,14 +22,12 @@ function compute_weights(f::GraphInducedSpace)
   return w
 end
 
-function compute_weights(f::MultiGraphInducedSpace{N}) where N
-  ntuple(Val{N}()) do i
-    w = zeros(Int,nv(f.graphs[i]))
-    for e in edges(f.graphs[i])
-      w[dst(e)] += 1
-    end
-    w
+function compute_weights(f::MultiGraphInducedSpace)
+  w = ()
+  for fi in f
+    w = (w...,compute_weights(fi))
   end
+  return w
 end
 
 struct InducedMeasure{A<:DiscreteSpace,B}
