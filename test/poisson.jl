@@ -67,19 +67,20 @@ output_space = OutputSpace(uhμ)
 
 # a kernel-integral neural operator (Kovachki et al.): lifting -> one non-local
 # KernelNeuralLayer (graph-based GNO integral kernel) -> projection
-model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-X = assemle_matrix((u,v) -> ∫(∇(v)⋅∇(u))dΩ,trial,test)
+model = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+X = assemble_matrix((u,v) -> ∫(∇(v)⋅∇(u))dΩ,trial,test)
 solver = NeuralSolver(fesolver,model;epochs=200,loss=EnergyLoss(X),print_every=50)
 
 # offline phase: train the operator
 op = neural_operator(solver,input_space,output_space)
 
-# online phase: predict without ever assembling/solving the FE problem
-pred = solve(solver,op,input_space)
-
 # online phase, reconstructed as an actual FEFunction (dirichlet values come from
 # output_space's own fe space, which must be trial(μ), not test -- see OutputSpace)
-pred_uh = Algebra.solve(solver,op,input_space,output_space)
+α = realisation(pspace;nparams=1)
+uhα = solve(fesolver,feop,α)
+online_features = FeatureBundle((aμ(α),fμ(α),gμ(α),hμ(α)))
+online_input_space = InputSpace(fspace,online_features)
+pred_uhα = solve(solver,op,online_input_space)
 
 #=
 problem statement: 

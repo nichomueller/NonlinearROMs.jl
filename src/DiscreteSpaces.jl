@@ -9,14 +9,14 @@ abstract type DiscreteSpace end
 get_coords(f::DiscreteSpace) = @abstractmethod
 num_coords(f::DiscreteSpace) = length(get_coords(f))
 
-function get_coordinates(f::SingleFieldFESpace)
+function get_coords(f::SingleFieldFESpace)
   x = get_free_dof_coordinates(f)
   masks = get_node_masks(f)
   view(x,masks)
 end
 
-function get_coordinates(f::MultiFieldFESpace)
-  map(get_coordinates,f)
+function get_coords(f::MultiFieldFESpace)
+  map(get_coords,f)
 end
 
 abstract type TrainingSpace <: DiscreteSpace end
@@ -54,7 +54,7 @@ end
 
 function OutputSpace(uh::ParamFEFunction)
   f = get_fe_space(uh)
-  x = get_coordinates(f)
+  x = get_coords(f)
   values = _get_values(uh,x)
   OutputSpace(f,values)
 end
@@ -80,18 +80,18 @@ struct FunctionSpace{A,B} <: DiscreteSpace
 end
 
 function FunctionSpace(space)
-  coords = get_coordinates(space)
+  coords = get_coords(space)
   FunctionSpace(space,coords)
 end
 
 function FunctionSpace(space::MultiFieldFESpace)
   trian = get_triangulation(first(space))
   if !all(s -> trian === get_triangulation(s),space)
-    lcoords = map(get_coordinates,space)
+    lcoords = map(get_coords,space)
     sets = map(Set,lcoords)
     !isempty(∩(sets...)) && return FunctionSpace(space...)
   end
-  coords = get_coordinates(space)
+  coords = get_coords(space)
   FunctionSpace(space,coords)
 end
 
@@ -158,6 +158,25 @@ end
 get_graph(space::MultiGraphInducedSpace) = space.graph
 get_coords(space::MultiGraphInducedSpace) = space.coords
 
+function Base.iterate(space::MultiGraphInducedSpace)
+  space,space_it = iterate(get_space(meas))
+  weights,weights_it = iterate(get_weights(meas))
+  if isnothing(space_it) || isnothing(weights_it)
+    return nothing
+  end
+  (InducedMeasure(space,weights),(space_it,weights_it))
+end
+
+function Base.iterate(space::MultiGraphInducedSpace,state)
+  space_it,weights_it = state
+  space,space_it = iterate(get_space(meas),space_it)
+  weights,weights_it = iterate(get_weights(meas),weights_it)
+  if isnothing(space_it) || isnothing(weights_it)
+    return nothing
+  end
+  (InducedMeasure(space,weights),(space_it,weights_it))
+end
+
 # utils
 
 """
@@ -223,7 +242,7 @@ Field-by-field concatenation of each field's own [`get_free_dof_to_comp`](@ref)/
 the whole space's free-dof numbering. `get_free_dof_to_comp` keeps each dof's
 component index local to its own field (not merged across fields -- a field's
 component numbering is meaningless outside of it). `get_free_dof_to_point`
-necessarily looks up every dof's coordinate against `get_coordinates(f)` -- the
+necessarily looks up every dof's coordinate against `get_coords(f)` -- the
 *union* of every field's own points, since two different fields generally don't
 share the same point set -- rather than against any single field's own points.
 """
@@ -258,7 +277,7 @@ function get_free_dof_to_point(f::UnconstrainedFESpace)
 end
 
 function get_free_dof_to_point(f::MultiFieldFESpace)
-  x = get_coordinates(f)
+  x = get_coords(f)
   dict = Dict(xi => Int32(i) for (i,xi) in enumerate(x))
   point = zeros(Int32,num_free_dofs(f))
   offsets = compute_field_offsets(f)
@@ -282,7 +301,7 @@ end
 
 function _coord_to_lcoords_map(coords,lcoords)
   data = zeros(Int,sum(map(length,lcoords)))
-  ptrs = ones(TData,length(lcoords)+1)
+  ptrs = ones(Int32,length(lcoords)+1)
   for (i,lc) in enumerate(lcoords)
     ptrs[i+1] = ptrs[i] + length(lc)
     @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(coords,lc)
@@ -304,7 +323,7 @@ function _free_values(f::OutputSpace,data::AbstractInputData)
   ids = findall(get_node_masks(f.space)) # representative dof ids
   point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
   @check size(data,1)*size(data,2) == length(comps) msg
-  T = eltype2(get_dirichlet_dof_values(f.space))
+  T = eltype2(get_vector_type(f.space))
   u = zeros(T,length(comps),size(data,3))
   @inbounds @views for dof in eachindex(comps)
     pos = point_to_pos[points[dof]]
@@ -314,11 +333,16 @@ function _free_values(f::OutputSpace,data::AbstractInputData)
 end
 
 function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::AbstractInputData)
-  ranges = f.values.ranges
-  point_ranges = f.values.point_ranges
-  us = ntuple(length(ranges)) do i
+  caxis,paxis = _block_axes(f)
+  us = ntuple(length(f.space)) do i
     fi = OutputSpace(f.space[i],f.values)
-    _free_values(fi,view(data,ranges[i],point_ranges[i],:))
+    vi = view(data,caxis[i]:caxis[i+1]-1,paxis[i]:paxis[i+1]-1,:)
+    _free_values(fi,vi)
   end
   reduce(vcat,us)
+end
+
+function _block_axes(f::OutputSpace{<:MultiFieldFESpace})
+  caxis,paxis, = f.values.axes
+  return caxis,paxis
 end

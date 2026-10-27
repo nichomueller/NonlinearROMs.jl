@@ -89,6 +89,7 @@ import StaticArrays: MVector,SVector
 export TrainingLog
 export ZScore
 export EnergyLoss
+export visualise
 include("Utils.jl")
 
 export LRScheduler
@@ -120,6 +121,7 @@ export MultiGraphInducedSpace
 export get_coords
 export get_features
 export get_graph
+export to_element
 include("DiscreteSpaces.jl")
 
 export InducedMeasure

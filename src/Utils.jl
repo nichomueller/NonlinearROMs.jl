@@ -104,7 +104,7 @@ dimension(data::AbstractInputData) = size(data,1)
 num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
 
-struct InputData{T,N,A<:AbstractInputData{T},B<:NTuple{3,BlockedOneTo}} <: AbstractInputData{T}
+struct InputData{T,A<:AbstractInputData{T},B<:NTuple{3,BlockedOneTo}} <: AbstractInputData{T}
   data::A
   axes::B
 end
@@ -115,7 +115,7 @@ function InputData(data::AbstractInputData)
 end
 
 function InputData(data::AbstractVector{<:AbstractInputData{T}}) where T
-  D,N,K = map(size,x) |> tuple_of_arrays
+  D,N,K = map(size,data) |> tuple_of_arrays
   @notimplementedif !all(k == K[1] for k in K) "All input data must have the same number of parameters (3rd axis)"
   values = zeros(T,sum(D),sum(N),K[1])
   @inbounds @views for (i,di) in enumerate(data)
@@ -128,7 +128,6 @@ function InputData(data::AbstractVector{<:AbstractInputData{T}}) where T
 end
 
 Base.size(d::InputData) = size(d.data)
-Base.axes(d::InputData) = d.axes
 Base.IndexStyle(::Type{<:InputData}) = IndexLinear()
 Base.getindex(d::InputData,i::Int) = getindex(d.data,i)
 Base.setindex!(d::InputData,v,i::Int) = setindex!(d.data,v,i)
@@ -284,5 +283,29 @@ end
 function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
   Xŷ = _mat_mul_data(loss.X,ŷ)
   Xy = _mat_mul_data(loss.X,y)
-  return Lux.unsafe_apply_loss(Lux.MSELoss(mean),Xŷ,Xy)
+  return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
+end
+
+# visualisation
+
+function visualise(
+  dir,uh,ûh;
+  trian=get_triangulation(get_fe_space(uh)),
+  dir_name="plot",variable_name="uh",
+  )
+
+  dir = joinpath(dir,dir_name)
+  isdir(dir) && rm(dir;recursive=true)
+  mkpath(dir)
+
+  fields = Pair{String}[]
+  for ip in param_eachindex(uh)
+    uhip = param_getindex(uh,ip)
+    ûhip = param_getindex(ûh,ip)
+    ehip = uhip - ûhip
+    push!(fields,"$(variable_name)_param_$(ip)" => uhip)
+    push!(fields,"approx_$(variable_name)_param_$(ip)" => ûhip)
+    push!(fields,"err_$(variable_name)_param_$(ip)" => ehip)
+  end
+  writevtk(trian,joinpath(dir,variable_name),cellfields=fields)
 end
