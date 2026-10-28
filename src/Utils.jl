@@ -104,34 +104,6 @@ dimension(data::AbstractInputData) = size(data,1)
 num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
 
-struct InputData{T,A<:AbstractInputData{T},B<:NTuple{3,BlockedOneTo}} <: AbstractInputData{T}
-  data::A
-  axes::B
-end
-
-function InputData(data::AbstractInputData)
-  ax = map(x -> BlockedOneTo((x,)),size(data))
-  InputData(data,ax)
-end
-
-function InputData(data::AbstractVector{<:AbstractInputData{T}}) where T
-  D,N,K = map(size,data) |> tuple_of_arrays
-  @notimplementedif !all(k == K[1] for k in K) "All input data must have the same number of parameters (3rd axis)"
-  values = zeros(T,sum(D),sum(N),K[1])
-  @inbounds @views for (i,di) in enumerate(data)
-    od = i == 1 ? 0 : sum(D[1:i-1])
-    on = i == 1 ? 0 : sum(N[1:i-1])
-    values[od+1:od+D[i],on+1:on+N[i],:] = di
-  end
-  axes = (BlockedOneTo(D),BlockedOneTo(N),BlockedOneTo(K))
-  InputData(values,axes)
-end
-
-Base.size(d::InputData) = size(d.data)
-Base.IndexStyle(::Type{<:InputData}) = IndexLinear()
-Base.getindex(d::InputData,i::Int) = getindex(d.data,i)
-Base.setindex!(d::InputData,v,i::Int) = setindex!(d.data,v,i)
-
 # normalisation handling
 
 abstract type AbstractScore end
@@ -295,17 +267,25 @@ function visualise(
   )
 
   dir = joinpath(dir,dir_name)
-  isdir(dir) && rm(dir;recursive=true)
   mkpath(dir)
-
   fields = Pair{String}[]
   for ip in param_eachindex(uh)
     uhip = param_getindex(uh,ip)
     ûhip = param_getindex(ûh,ip)
-    ehip = uhip - ûhip
-    push!(fields,"$(variable_name)_param_$(ip)" => uhip)
-    push!(fields,"approx_$(variable_name)_param_$(ip)" => ûhip)
-    push!(fields,"err_$(variable_name)_param_$(ip)" => ehip)
+    _push_fields!(fields,uhip,ûhip,"$(variable_name)_param_$(ip)")
   end
   writevtk(trian,joinpath(dir,variable_name),cellfields=fields)
+end
+
+function _push_fields!(fields,uhip,ûhip,name)
+  ehip = uhip - ûhip
+  push!(fields,name => uhip)
+  push!(fields,"approx_"*name => ûhip)
+  push!(fields,"err_"*name => ehip)
+end
+
+function _push_fields!(fields,uhip::MultiFieldFEFunction,ûhip::MultiFieldFEFunction,name)
+  for i in 1:num_fields(uhip)
+    _push_fields!(fields,uhip[i],ûhip[i],"$(name)_field$(i)")
+  end
 end

@@ -41,7 +41,6 @@ counterparts) and pass it to `RBSolver` wherever a steady/transient
 """
 module NonlinearROMs
 
-using BlockArrays
 using Enzyme
 using FFTW
 using FillArrays

@@ -1,5 +1,13 @@
 using Documenter
+using Literate
 using NonlinearROMs
+
+Literate.markdown(
+  joinpath(@__DIR__,"literate","poisson.jl"),
+  joinpath(@__DIR__,"src");
+  name="example",
+  documenter=true,
+)
 
 makedocs(;
   modules=[NonlinearROMs],
@@ -8,6 +16,9 @@ makedocs(;
     "Home" => "index.md",
     "Description" => [
       "Neural Operators" => "neurals.md",
+    ],
+    "Tutorials" => [
+      "Poisson equation" => "example.md",
     ],
   ],
   sitename="NonlinearROMs.jl",

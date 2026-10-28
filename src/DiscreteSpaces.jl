@@ -16,7 +16,8 @@ function get_coords(f::SingleFieldFESpace)
 end
 
 function get_coords(f::MultiFieldFESpace)
-  map(get_coords,f)
+  lcoords = map(get_coords,f)
+  ∪(lcoords...)
 end
 
 abstract type TrainingSpace <: DiscreteSpace end
@@ -47,20 +48,54 @@ function fetch_data(d::DataFormatter,f::InputSpace)
   fetch_data(d,input)
 end
 
-struct OutputSpace{A,B<:InputData} <: TrainingSpace
+struct OutputSpace{A,B<:AbstractInputData} <: TrainingSpace
   space::A
   values::B
 end
 
-function OutputSpace(uh::ParamFEFunction)
+function OutputSpace(uh::SingleFieldParamFEFunction)
   f = get_fe_space(uh)
   x = get_coords(f)
   values = _get_values(uh,x)
   OutputSpace(f,values)
 end
 
+function OutputSpace(uh::MultiFieldParamFEFunction)
+  spaces = map(OutputSpace,uh)
+  join_spaces(spaces...)
+end
+
 function OutputSpace(space)
   OutputSpace(zero(space))
+end
+
+"""
+    join_spaces(spaces::OutputSpace...) -> OutputSpace{<:MultiFieldFESpace}
+
+Combines several single-field `OutputSpace`s -- sharing a triangulation, but not
+necessarily their own point set (e.g. a Taylor-Hood velocity/pressure pair: the
+lower-order field's points are a subset of the higher-order one's) -- into one
+`OutputSpace` over their `MultiFieldFESpace`, with `values` laid out on the shared
+*union* of every field's points ([`get_coords`](@ref), consistent with how
+[`FunctionSpace`](@ref)/[`GraphInducedSpace`](@ref) build their measure/graph for
+the same multi-field space), channels concatenated field-by-field. A point only
+one field reaches is zero-filled in every other field's channels.
+"""
+function join_spaces(spaces::OutputSpace...)
+  space = MultiFieldFESpace([s.space for s in spaces])
+  x = get_coords(space)
+  K = num_samples(first(spaces).values)
+  D = sum(s -> size(s.values,1),spaces)
+  values = zeros(TData,D,length(x),K)
+  off = 0
+  @inbounds @views for s in spaces
+    xi = get_coords(s.space)
+    pos = indexin(xi,x)
+    d = size(s.values,1)
+    values[off+1:off+d,pos,:] .= s.values
+    off += d
+  end
+  OutputSpace(space,values)
 end
 
 function fetch_data(d::DataFormatter,f::OutputSpace)
@@ -144,7 +179,6 @@ struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractVector{<:Point},
   lspaces::NTuple{N,A}
   coords::B
   l_to_lcoord_to_coords::C
-  l_to_coord_to_lcoords::C
 end
 
 function MultiGraphInducedSpace(spaces...;kwargs...)
@@ -153,8 +187,7 @@ function MultiGraphInducedSpace(spaces...;kwargs...)
   sets = map(Set,lcoords)
   coords = ∪(sets...)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
-  l_to_coord_to_lcoords = _coord_to_lcoords_map(coords,lcoords)
-  MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords,l_to_coord_to_lcoords)
+  MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords)
 end
 
 get_graph(space::MultiGraphInducedSpace) = space.graph
@@ -328,16 +361,6 @@ function _lcoord_to_coords_map(lcoords,coords)
   Table(data,ptrs)
 end
 
-function _coord_to_lcoords_map(coords,lcoords)
-  data = zeros(Int,sum(map(length,lcoords)))
-  ptrs = ones(Int32,length(lcoords)+1)
-  for (i,lc) in enumerate(lcoords)
-    ptrs[i+1] = ptrs[i] + length(lc)
-    @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(coords,lc)
-  end
-  Table(data,ptrs)
-end
-
 function _free_values(f::OutputSpace,data::AbstractInputData)
   msg = "Data does not match the output space's dof count"
   comps = get_free_dof_to_comp(f.space)
@@ -355,16 +378,17 @@ function _free_values(f::OutputSpace,data::AbstractInputData)
 end
 
 function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::AbstractInputData)
-  caxis,paxis = _block_axes(f)
+  x = get_coords(f.space)
+  off = 0
   us = ntuple(length(f.space)) do i
-    fi = OutputSpace(f.space[i],f.values)
-    vi = view(data,caxis[i]:caxis[i+1]-1,paxis[i]:paxis[i+1]-1,:)
+    space_i = f.space[i]
+    d = maximum(get_free_dof_to_comp(space_i))
+    fi = OutputSpace(space_i,f.values)
+    xi = get_coords(space_i)
+    pos = indexin(xi,x)
+    vi = view(data,off+1:off+d,pos,:)
+    off += d
     _free_values(fi,vi)
   end
   reduce(vcat,us)
-end
-
-function _block_axes(f::OutputSpace{<:MultiFieldFESpace})
-  caxis,paxis, = f.values.axes
-  return caxis,paxis
 end

@@ -319,8 +319,9 @@ one per endpoint, then `vcat`'d along the channel axis).
 """
 function gather_data(vals::AbstractInputData,g::AbstractGraph)
   @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
-  ids_src = src.(edges(g))
-  ids_dst = dst.(edges(g))
+  ids_src,ids_dst = map(edges(g)) do e
+    (src(e),dst(e))
+  end |> tuple_of_arrays
   v′ = permutedims(vals,(1,3,2))
   src′ = NNlib.gather(v′,ids_src)
   dst′ = NNlib.gather(v′,ids_dst)
@@ -348,8 +349,8 @@ tens of thousands, enough to exhaust Reactant's internal MLIR symbol-naming budg
 the previous dense `(nv,ne)` incidence-matrix matmul (whose own construction was a
 `setindex!`-based loop with the same problem, needing a separate precomputed-and-cached
 path to stay off the traced call stack entirely). `NNlib.scatter`'s own edge axis is
-the array's *last* dimension, not `vals`'s second (see `InputData`'s `(D,N,K)`
-layout), hence the `permutedims` wrapping either side of the call.
+the array's *last* dimension, not `vals`'s second (see `AbstractInputData`'s
+`(D,N,K)` layout), hence the `permutedims` wrapping either side of the call.
 """
 function scatter_data(vals::AbstractInputData,g::AbstractGraph)
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"

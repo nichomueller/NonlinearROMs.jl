@@ -118,17 +118,7 @@ function _get_values(ah::ParamFEFunction,x::AbstractVector{<:Point})
   values,comp_offsets = _init_data(ah,x)
   a = lazy_map(ah,x)
   _set_data!(values,a,first(comp_offsets))
-  InputData(values)
-end
-
-function _get_values(ah::MultiFieldParamFEFunction,x::AbstractVector{<:AbstractVector{<:Point}})
-  values = map(ah,x) do ahi,xi
-    vi,comp_offsets = _init_data(ahi,xi)
-    ai = lazy_map(ahi,xi)
-    _set_data!(vi,ai,first(comp_offsets))
-    vi
-  end
-  InputData(values)
+  values
 end
 
 function _init_data(a,x)

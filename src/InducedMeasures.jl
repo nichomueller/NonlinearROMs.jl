@@ -75,6 +75,19 @@ function Base.iterate(meas::MultiGraphMeasure,state)
   (InducedMeasure(space,weights),(space_it,weights_it))
 end
 
+function integration(a::AbstractInputData,meas::MultiGraphMeasure)
+  space = get_space(meas)
+  D,_,K = size(a)
+  N = num_coords(space)
+  out = zeros(eltype(ldata),D,N,K)
+  for (i,m) in enumerate(meas)
+    ar = restrict_data(a,space,i)
+    outr = integration(ar,m)
+    out += expand_data(outr,space,i)
+  end
+  return out
+end
+
 # utils
 
 function _integration(a::AbstractArray,meas::InducedMeasure)
@@ -94,12 +107,6 @@ function _integration(a::AbstractInputData,meas::GraphMeasure)
     !iszero(w[i]) && (out[:,i,:] ./= w[i])
   end
   return out
-end
-
-function _integration(a::AbstractInputData,meas::MultiGraphMeasure)
-  for m in meas
-    a = _integration(a,m)
-  end
 end
 
 function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)

@@ -1,6 +1,8 @@
-using Gridap 
+using DrWatson
+using Gridap
 using GridapROMs
 using GridapROMs.RBSteady
+using Lux
 using NonlinearROMs
 
 pdomain = (1,10,-1,5,1,2)
@@ -39,23 +41,48 @@ trial = MultiFieldFESpace([trial_u,trial_p])
 feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test)
 fesolver = LinearFESolver(LUSolver())
 
-μ = realisation(pspace;nparams=50)
+# FE quantities (snapshots)
+
+μ_train = realisation(pspace;nparams=50)
+uhμ_train = solve(fesolver,feop,μ_train)
+
+μ = realisation(pspace;nparams=1)
 uhμ = solve(fesolver,feop,μ)
 
-using GridapROMs.ParamDataStructures
-using Gridap.Algebra
+# NO setup
 
-features = FeatureBundle((aμ(μ),gμ(μ)))
+dir = datadir("stokes")
+
+x = get_coords(test)
+features(μ) = FeatureBundle((aμ(μ),gμ(μ)))
+input_space(μ) = InputSpace(x,features(μ))
+output_space = OutputSpace(uhμ_train)
+
+# EnergyLoss's matrix multiplies along the model's *point* axis, shared across
+# every channel -- it only happens to line up with a plain `assemble_matrix`
+# Gram matrix for a scalar, order-1 field, where dof count == point count (see
+# poisson.jl). Here velocity is vector-valued and the two fields have
+# different polynomial orders, so dof count != point count and a dof-level
+# Gram matrix can't be reused as-is; a plain MSE loss is used instead.
+loss = Lux.MSELoss()
+
+# test 1: Gridap-based spaces
+
 fspace = FunctionSpace(test)
-gspace = GraphInducedSpace(fspace;radius=0.3)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(fesolver,fmodel;epochs=200,loss=loss,print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-input_space = InputSpace(fspace,features)
-output_space = OutputSpace(uhμ)
+# test 2: GNOs
 
-model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-X = assemble_matrix(((u,p),(v,q)) -> ∫(∇(v)⊙∇(u) + q*p)dΩ,trial,test)
-solver = NeuralSolver(fesolver,model;epochs=200,loss=EnergyLoss(X),print_every=50)
-
-op = neural_operator(solver,input_space,output_space)
-pred = solve(solver,op,input_space)
-pred_uh = Algebra.solve(solver,op,input_space,output_space)
+mesh_size = 1/8
+gspace = GraphInducedSpace(test;radius=2.4*mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(fesolver,gmodel;epochs=200,loss=loss,print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
