@@ -34,9 +34,8 @@ using NonlinearROMs
 
 # ## 1. The parameter space
 #
-# Every parametric quantity in `GridapROMs.jl` is indexed by a `ParamSpace`:
-# a box ``[\mu_1^-,\mu_1^+]\times\cdots\times[\mu_n^-,\mu_n^+]`` together with
-# a sampling strategy (Halton quasi-random by default). Here ``\mu\in\mathbb
+# Every parametric quantity is indexed by a [`ParamSpace`](@ref): a box
+# sampled by a Halton quasi-random strategy by default. Here ``\mu\in\mathbb
 # R^3`` ranges over ``[1,10]\times[1,10]\times[1,10]``.
 
 pdomain = (1,10,1,10,1,10)
@@ -64,14 +63,10 @@ dΓn = Measure(Γn,degree)
 
 # ## 3. Parameterised coefficients: `ParamFunction`/`parameterise`
 #
-# Every coefficient of the PDE is written as a plain Julia closure of the
-# *parameter*, `μ -> (x -> value)`, and lifted to a [`GridapROMs.ParamDataStructures.ParamFunction`](@ref)
-# via [`parameterise`](@ref). `aμ(μ)`, evaluated on a `Realisation` (a batch
-# of sampled parameter vectors, see §4), behaves like a single `Function` of
-# `x` that Gridap can integrate -- but internally it holds *one spatial
-# function per sampled parameter*, batched together. This is what lets a
-# single weak form below be assembled, once, for an entire batch of
-# parameters instead of one at a time.
+# Every coefficient is a closure of the parameter, `μ -> (x -> value)`,
+# lifted to a batched [`ParamFunction`](@ref) via [`parameterise`](@ref) so
+# Gridap can assemble the weak form once for an entire batch of parameters
+# instead of one at a time.
 
 a(μ) = x -> exp(-x[1]/sum(μ))
 aμ(μ) = parameterise(a,μ)
@@ -87,18 +82,13 @@ hμ(μ) = parameterise(h,μ)
 
 # ## 4. The parametric weak form and FE operator
 #
-# `stiffness`/`rhs` are the usual Gridap bilinear/linear forms, except every
-# coefficient is now parameterised. `FEDomains` records which triangulations
-# each of the residual/Jacobian integrals live on (here: the Jacobian only
-# needs the bulk `Ω`, while the residual/right-hand side also needs the
-# Neumann boundary `Γn`) -- this bookkeeping is what lets `GridapROMs.jl`
-# later hyper-reduce each triangulation's contribution independently, even
-# though it plays no direct role in this tutorial.
-#
-# [`LinearParamFEOperator`](@ref) differs from the more general
-# `ParamFEOperator` in taking a right-hand side `rhs(μ,v)` directly instead of
-# a residual `res(μ,u,v)`: a genuinely linear problem has no state `u` to
-# evaluate a residual at.
+# `stiffness`/`rhs` are the usual Gridap weak forms with every coefficient
+# now parameterised. [`FEDomains`](@ref) just records which triangulation
+# each residual/Jacobian integral lives on -- bookkeeping `GridapROMs.jl`
+# uses for hyper-reduction elsewhere, not needed in this tutorial itself.
+# [`LinearParamFEOperator`](@ref) takes a right-hand side `rhs(μ,v)` instead
+# of a residual, since a genuinely linear problem has no state `u` to
+# evaluate one at.
 
 stiffness(μ,u,v) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
 rhs(μ,v) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
@@ -116,14 +106,13 @@ fesolver = LinearFESolver(LUSolver())
 
 # ## 5. Generating FE snapshots
 #
-# [`realisation`](@ref) draws `nparams` samples from `pspace` as one
-# `Realisation` object; `solve(fesolver,feop,μ)` assembles and factorises the
-# linear system *once per sample*, returning a single `ParamFEFunction` that
-# bundles every solution together (not a `Vector` of ordinary
+# [`realisation`](@ref) draws `nparams` samples as one `Realisation`, and
+# `solve(fesolver,feop,μ)` returns a single batched `ParamFEFunction`
+# bundling every sample's solution (not a `Vector` of ordinary
 # `FEFunction`s). Two disjoint sets are drawn: `μ_train`/`uhμ_train` (50
-# samples) become the neural network's training data in §8-9; `μ`/`uhμ` (a
-# single, held-out sample) is used in §10 to visually check the trained
-# surrogate against the true FE solution it was never trained on.
+# samples) become the network's training data in §7-9; `μ`/`uhμ` (one
+# held-out sample) checks the trained surrogate in §10 against a solution it
+# never saw.
 
 μ_train = realisation(pspace;nparams=50)
 uhμ_train = solve(fesolver,feop,μ_train)
@@ -131,7 +120,30 @@ uhμ_train = solve(fesolver,feop,μ_train)
 μ = realisation(pspace;nparams=1)
 uhμ = solve(fesolver,feop,μ)
 
-# ## 6. From FE snapshots to training tensors
+# ## 6. Neural operators
+#
+# `NonlinearROMs.jl` learns ``\mu\mapsto u_h(\mu)`` as a *neural operator*: a
+# network trained directly between function spaces rather than between the
+# coordinates of one fixed grid. Concretely, it maps an input space
+# ``V_{\text{in}}=\text{span}\{x,a(\mu),f(\mu),g(\mu),h(\mu)\}`` of
+# coordinates and PDE coefficients to an output space
+# ``V_{\text{out}}=\text{span}\{u_h(\mu)\}`` of FE solutions -- exactly the
+# one input/output pair §7 builds below.
+#
+# Nothing in that picture actually requires a *single* input/output pair,
+# though. More generally, training can reconcile several such spaces at
+# once, ``(V_{\text{in}}^1,\ldots,V_{\text{in}}^m)\to(V_{\text{out}}^1,\ldots,V_{\text{out}}^m)``,
+# each potentially living on its own mesh or its own point set. This is
+# exactly what [`join_spaces`](@ref) does across a `MultiFieldFESpace`'s
+# fields in the [Stokes tutorial](@ref "Tutorial: a Neural Operator surrogate for parametric Stokes flow")
+# (velocity/pressure, one mesh, different point sets), and what
+# [`MultiGraphInducedSpace`](@ref) does across genuinely *different* meshes
+# in the [moving-geometry Poisson tutorial](@ref "Tutorial: towards a Neural Operator on a *moving* geometry (work in progress)")
+# -- both reduce back to the single-space picture above once their point
+# sets are reconciled onto one shared axis. This tutorial only ever needs
+# the simplest case, one mesh and one space, built next.
+
+# ## 7. From FE snapshots to training tensors
 #
 # `NonlinearROMs.jl` represents every per-point quantity -- spatial
 # coordinates, PDE coefficients, solution fields -- as a dense
@@ -162,23 +174,22 @@ features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
 input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
-# ## 7. The training loss: an energy norm
+# ## 8. The training loss: an energy norm
 #
-# [`EnergyLoss`](@ref) wraps a Gram matrix `X` and computes the MSE of
-# `X`-weighted predictions/targets, i.e. a (squared) `X`-induced norm of the
-# error rather than a plain pointwise MSE. Here `X` is the ``H^1_0``
-# stiffness matrix, so the network is trained in the energy norm natural to
-# this elliptic problem. This only works because this problem's FE space is
-# *scalar and order-1*, so the number of free dofs equals the number of
-# `get_coords` points one-to-one; `EnergyLoss`'s matrix multiplies along the
-# model's *point* axis, so for a vector-valued or multi-field problem (see
-# the `stokes.jl` tutorial) this equivalence breaks down and a plain
-# `Lux.MSELoss()` is used instead.
+# [`EnergyLoss`](@ref) wraps a Gram matrix `X` and trains in the (squared)
+# `X`-induced norm of the error, rather than a plain pointwise MSE.
+# [`H1Loss`](@ref) builds `X` from `fspace`'s own `(D,N,K)` point layout (a
+# masked, FE-assembled stiffness form) instead of the raw FE dof numbering --
+# the same mechanism the Stokes tutorial's `H1L2Loss` needs for its
+# multi-field, vector-valued problem (see its §3), used here too so loss
+# construction stays consistent across tutorials. For this scalar, order-1
+# field the two numberings coincide one-to-one, so `H1Loss(fspace)` is simply
+# the ``H^1_0`` stiffness energy natural to this elliptic problem.
 
-norm_matrix = assemble_matrix((u,v) -> ∫(∇(v)⋅∇(u))dΩ,trial,test)
-loss = EnergyLoss(norm_matrix)
+fspace = FunctionSpace(test)
+loss = H1Loss(fspace)
 
-# ## 8. Test 1 -- a Kernel Neural Operator discretised on the FE mesh
+# ## 9. Test 1 -- a Kernel Neural Operator discretised on the FE mesh
 #
 # A [`KernelNeuralModel`](@ref) implements the iterative kernel-integral
 # architecture of Kovachki et al.,
@@ -191,8 +202,7 @@ loss = EnergyLoss(norm_matrix)
 #    hidden width,
 # 2. one [`KernelNeuralLayer`](@ref) *per interior transition* of
 #    `hidden_layers` (here `hidden_layers=(16,16)` has only one such
-#    transition, so there is exactly **one** non-local layer -- see the note
-#    on receptive field below),
+#    transition, so there is exactly **one** non-local layer),
 # 3. a pointwise **Project** (`Dense`) down to the output dimension.
 #
 # What makes a layer "non-local" is how the integral ``(K_t v)(x)`` is
@@ -220,11 +230,10 @@ loss = EnergyLoss(norm_matrix)
 # `solve(solver,op,input_space(μ))` is the **online phase**: a single forward
 # pass of the trained network on the held-out parameter `μ`.
 # [`to_element`](@ref) converts the raw `(D,N,K)` prediction tensor back into
-# a genuine Gridap `FEFunction` (undoing §6's tensorisation), and
+# a genuine Gridap `FEFunction` (undoing §7's tensorisation), and
 # [`visualise`](@ref) writes the true/predicted/error fields to a `.vtu` file
 # for inspection in ParaView.
 
-fspace = FunctionSpace(test)
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(fesolver,fmodel;epochs=200,loss=loss,print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
@@ -232,7 +241,7 @@ pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-# ## 9. Test 2 -- the same architecture on a radius graph (GNO)
+# ## 10. Test 2 -- the same architecture on a radius graph (GNO)
 #
 # [`GraphInducedSpace`](@ref) discretises the exact same `KernelNeuralModel`
 # recipe differently: it builds a [`WeightedSimpleDiGraph`](@ref) by
@@ -242,12 +251,12 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 # features ([`gather_data`](@ref)), apply `κ_θ`, and sum ("integrate") into
 # each destination vertex ([`scatter_data`](@ref)), normalised by in-degree.
 # This is the classic Graph Neural Operator (GNO) formulation: unlike the FE
-# mass-matrix measure of §8, it needs no underlying FE space at all, only a
-# point cloud and a radius -- the same machinery works for e.g. the
-# scattered sensor data of §11's note.
+# mass-matrix measure of §9, it needs no underlying FE space at all, only a
+# point cloud and a radius, which is why the same machinery scales to the
+# multi-mesh case of §6/the moving-geometry Poisson tutorial.
 #
 # Everything else -- the loss, the training loop, the online solve, the
-# visualisation -- is identical to §8, swapping only `fspace` for `gspace`.
+# visualisation -- is identical to §9, swapping only `fspace` for `gspace`.
 # This symmetry (model/solver code oblivious to *which* `InducedMeasure`
 # backs the kernel) is the point of the `KernelStyle`/`InducedMeasure`
 # abstraction.
@@ -261,43 +270,12 @@ pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 
-# ## 10. Inspecting the result
+# ## 11. Inspecting the result
 #
 # Opening `datadir("poisson")/plot/uh_gridap.vtu` (or `uh_gno.vtu`) in
 # ParaView shows three fields per parameter sample: the true FE solution
 # (`uh_gridap_param_1`), the network's prediction (`approx_uh_gridap_param_1`),
-# and their difference (`err_uh_gridap_param_1`).
+# and their difference (`err_uh_gridap_param_1`). Rendered directly from that
+# `.vtu` file, on a shared colour scale:
 #
-# ## 11. Why is the prediction so far off?
-#
-# Running this exact script, the predicted field is visibly wrong: it is
-# close to spatially constant everywhere except a narrow band near the
-# Dirichlet/Neumann boundary at ``x_1=0``, instead of resembling the smooth,
-# domain-spanning diffusion solution it should. This is not a bug to fix in
-# the library -- it is a genuine architectural capacity problem with *this
-# particular* configuration, worth understanding before scaling up:
-#
-# - **Receptive field.** `hidden_layers=(16,16)` yields exactly **one**
-#   `KernelNeuralLayer` (see §8). Each non-local layer propagates
-#   information exactly one hop: one FE-mass-matrix multiply (§8), or one
-#   radius-neighbourhood message pass with `radius=2*mesh_size` (§9) -- a
-#   couple of grid cells, out of 50. Everything else in the chain (Lift,
-#   Project) is pointwise. A single elliptic PDE like this one has solutions
-#   that depend *globally* on the data (its Green's function has unbounded
-#   support), so a network whose total receptive field spans only ~2 grid
-#   cells structurally cannot reproduce it away from where boundary data
-#   happens to reach within that one hop -- which is exactly the
-#   boundary-hugging, near-constant-elsewhere pattern observed.
-# - **Fix:** increase the *number* of non-local layers (lengthen
-#   `hidden_layers`, e.g. `(16,16,16,16)` for 3 kernel layers), increase the
-#   neighbourhood `radius` so a single hop already reaches further, or
-#   switch `style` to `FourierStyle` -- an FFT-based kernel is global by
-#   construction (every Fourier mode sees the whole domain), so even a
-#   single `FourierKernel` layer does not have this locality problem.
-# - **Secondary factors**, worth ruling out once the architecture itself can
-#   express the solution: `hidden_layers=(16,16)` and `epochs=200` are both
-#   fairly small for a 3-parameter PDE map with non-trivial functional
-#   coefficients; the training loss (printed every 50 epochs) is still
-#   dropping noticeably at epoch 200, so more epochs and/or a wider network
-#   are also likely to help once the receptive-field issue above is
-#   addressed.
+# ![FE solution vs. Neural Operator prediction](assets/poisson/poisson_comparison.png)

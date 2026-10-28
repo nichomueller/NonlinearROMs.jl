@@ -182,10 +182,10 @@ struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractVector{<:Point},
 end
 
 function MultiGraphInducedSpace(spaces...;kwargs...)
-  lspaces = map(GraphInducedSpace,spaces)
+  lspaces = map(x -> GraphInducedSpace(x;kwargs...),spaces)
   lcoords = map(get_coords,lspaces)
   sets = map(Set,lcoords)
-  coords = ∪(sets...)
+  coords = collect(∪(sets...))
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
   MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords)
 end
@@ -235,19 +235,37 @@ function assemble_mass(f::FunctionSpace)
   assemble_form((u,v) -> ∫(u⋅v)dΩ,f)
 end
 
+function assemble_mass(f::FunctionSpace{<:MultiFieldFESpace})
+  dΩ = get_measure(f)
+  m(u,v) = sum(u[i]⋅v[i] for i in 1:num_fields(f.space))
+  assemble_form((u,v) -> ∫(m(u,v))*dΩ,f)
+end
+
 function assemble_stiffness(f::FunctionSpace)
   dΩ = get_measure(f)
-  assemble_form((u,v) -> ∫(∇(v)⋅∇(u))dΩ,f)
+  assemble_form((u,v) -> ∫(∇(v)⊙∇(u))dΩ,f)
+end
+
+function assemble_stiffness(f::FunctionSpace{<:MultiFieldFESpace})
+  dΩ = get_measure(f)
+  a(u,v) = sum(∇(u[i])⊙∇(v[i]) for i in 1:num_fields(f.space))
+  assemble_form((u,v) -> ∫(a(u,v))*dΩ,f)
 end
 
 function assemble_mass_stiffness(f::FunctionSpace)
   dΩ = get_measure(f)
-  assemble_form((u,v) -> ∫(u⋅v + ∇(v)⋅∇(u))dΩ,f)
+  assemble_form((u,v) -> ∫(u⋅v + ∇(v)⊙∇(u))dΩ,f)
+end
+
+function assemble_mass_stiffness(f::FunctionSpace{<:MultiFieldFESpace})
+  dΩ = get_measure(f)
+  am(u,v) = sum(u[i]⋅v[i] + ∇(u[i])⊙∇(v[i]) for i in 1:num_fields(f.space))
+  assemble_form((u,v) -> ∫(am(u,v))*dΩ,f)
 end
 
 function assemble_form(fun,f::FunctionSpace)
   mat = assemble_matrix(fun,f.space,f.space)
-  msk = get_node_masks(f)
+  msk = get_node_masks(f.space)
   return TData.(mat[msk,msk])
 end
 
@@ -366,9 +384,9 @@ function get_free_dof_to_point(f::MultiFieldFESpace)
 end
 
 function _a_to_b(a,b)
-  a2b = zeros(Int,length(b))
-  for (i,bi) in enumerate(b)
-    a2b[i] = findfirst(x -> x == bi,a)
+  a2b = zeros(Int,length(a))
+  for (i,ai) in enumerate(a)
+    a2b[i] = findfirst(x -> x == ai,b)
   end
   a2b
 end

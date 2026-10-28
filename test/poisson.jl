@@ -73,16 +73,8 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 mesh_size = 1/50
 gspace = GraphInducedSpace(test;radius=2*mesh_size)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fesolver,gmodel;epochs=200,loss=loss,print_every=50)
+solver = NeuralSolver(fesolver,gmodel;epochs=200,loss=H1Loss(fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
-
-#= notes:
-1) julia> op = neural_operator(solver,input_space(μ_train),output_space)
-[ Info: Starting KernelNeuralModel Training on Reactant Device (First epoch compiles XLA...)
-ERROR: Generating a constant of 408040000 bytes, which larger than the 104857600 bytes threshold
-Stacktrace:
-2) terrible results: see the attached screenshot
-=#

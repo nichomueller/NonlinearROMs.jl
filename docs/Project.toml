@@ -1,11 +1,18 @@
 [deps]
+DrWatson = "634d3b9d-ee7a-5ddf-bec9-22491ea816e1"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Gridap = "56d4f2e9-7ea1-5844-9cf6-b9c51ca7ce8e"
 GridapROMs = "9ec1d169-1b02-4ed6-9618-ff21f43ad569"
 Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
+Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 NonlinearROMs = "dcd789dd-871c-4daf-91a9-c07bc3379936"
 
 [sources]
 NonlinearROMs = {path = "/home/nmueller/git_repos/NonlinearROMs.jl"}
+GridapROMs = {path = "/home/nmueller/git_repos/GridapROMs.jl/"}
 
 [compat]
+DrWatson = "2.19.1"
 Documenter = "1.8"
+Gridap = "0.20"
+Lux = "1.31.4"

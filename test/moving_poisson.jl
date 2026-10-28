@@ -57,6 +57,8 @@ function pde(R,x0)
   return (test,trial,feop)
 end
 
+fesolver = LinearFESolver(LUSolver())
+
 # PDE 1
 test1,trial1,feop1 = pde(0.1,Point(0.5,1.5))
 μ_train1 = realisation(pspace;nparams=25)
@@ -74,7 +76,7 @@ uhμ = solve(fesolver,feop,μ)
 
 # on variable meshes, we need a graph-based approach
 
-gspace = GraphInducedSpace(test1,test2;radius=2*hd)
+gspace = MultiGraphInducedSpace(test1,test2;radius=2*hd)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(fesolver,gmodel;epochs=200,loss=loss,print_every=50)
 input_space = InputSpace((x,features(μ)))
@@ -83,3 +85,29 @@ op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
+
+using Gridap.FESpaces
+using Gridap.ReferenceFEs
+using Gridap.Arrays
+using Gridap.CellData
+
+fs = test1
+cell_dof_basis = get_fe_dof_basis(fs)
+cell_dof_bases = get_data(cell_dof_basis)
+@notimplementedif !(testitem(cell_dof_bases) isa LagrangianDofBasis)
+
+# Map reference DOF nodes to physical space via the cell geometric map.
+# change_domain handles both ReferenceDomain and PhysicalDomain dof bases.
+cell_points     = change_domain(get_cell_points(cell_dof_basis), PhysicalDomain())
+cell_phys_nodes = get_data(cell_points)  # lazy array of Vector{Point}, node-indexed per cell
+
+# Reindex from node-indexed to dof-indexed (required for multi-component spaces
+# where several dofs share the same node).
+cell_dof_to_node = lazy_map(get_dof_to_node, cell_dof_bases)
+cell_dof_coords  = lazy_map((nodes, d2n) -> nodes[d2n], cell_phys_nodes, cell_dof_to_node)
+
+P           = eltype(testitem(cell_phys_nodes))
+free_coords = Vector{P}(undef, num_free_dofs(fs))
+dir_coords  = Vector{P}(undef, num_dirichlet_dofs(fs))
+# gather_free_and_dirichlet_values!(free_coords, dir_coords, fs, cell_dof_coords)
+fdof_to_val,ddof_to_val = FESpaces.gather_free_and_dirichlet_values(fs.space,cell_dof_coords)
