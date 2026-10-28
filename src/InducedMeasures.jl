@@ -56,34 +56,21 @@ function integration(a::AbstractInputData,meas::InducedMeasure)
   _integration(a,meas)
 end
 
-function Base.iterate(meas::MultiGraphMeasure)
-  space,space_it = iterate(get_space(meas))
-  weights,weights_it = iterate(get_weights(meas))
-  if isnothing(space_it) || isnothing(weights_it)
-    return nothing
-  end
-  (InducedMeasure(space,weights),(space_it,weights_it))
-end
-
-function Base.iterate(meas::MultiGraphMeasure,state)
-  space_it,weights_it = state
-  space,space_it = iterate(get_space(meas),space_it)
-  weights,weights_it = iterate(get_weights(meas),weights_it)
-  if isnothing(space_it) || isnothing(weights_it)
-    return nothing
-  end
-  (InducedMeasure(space,weights),(space_it,weights_it))
+function Base.iterate(meas::MultiGraphMeasure,i::Int=1)
+  space = get_space(meas)
+  i > length(space) && return nothing
+  (InducedMeasure(space[i],get_weights(meas)[i]),i+1)
 end
 
 function integration(a::AbstractInputData,meas::MultiGraphMeasure)
   space = get_space(meas)
   D,_,K = size(a)
   N = num_coords(space)
-  out = zeros(eltype(ldata),D,N,K)
+  out = zeros(eltype(a),D,N,K)
   for (i,m) in enumerate(meas)
-    ar = restrict_data(a,space,i)
+    ar = restrict_data(space,a,i)
     outr = integration(ar,m)
-    out += expand_data(outr,space,i)
+    out += expand_data(space,outr,i)
   end
   return out
 end

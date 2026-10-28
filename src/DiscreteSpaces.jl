@@ -190,7 +190,6 @@ function MultiGraphInducedSpace(spaces...;kwargs...)
   MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords)
 end
 
-get_graph(space::MultiGraphInducedSpace) = space.graph
 get_coords(space::MultiGraphInducedSpace) = space.coords
 
 Base.length(space::MultiGraphInducedSpace) = length(space.lspaces)
@@ -227,6 +226,29 @@ function restrict_data(
     ldata[:,c,:] .= gdata[:,lc,:]
   end 
   return ldata
+end
+
+# norms
+
+function assemble_mass(f::FunctionSpace)
+  dΩ = get_measure(f)
+  assemble_form((u,v) -> ∫(u⋅v)dΩ,f)
+end
+
+function assemble_stiffness(f::FunctionSpace)
+  dΩ = get_measure(f)
+  assemble_form((u,v) -> ∫(∇(v)⋅∇(u))dΩ,f)
+end
+
+function assemble_mass_stiffness(f::FunctionSpace)
+  dΩ = get_measure(f)
+  assemble_form((u,v) -> ∫(u⋅v + ∇(v)⋅∇(u))dΩ,f)
+end
+
+function assemble_form(fun,f::FunctionSpace)
+  mat = assemble_matrix(fun,f.space,f.space)
+  msk = get_node_masks(f)
+  return TData.(mat[msk,msk])
 end
 
 # utils

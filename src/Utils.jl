@@ -248,6 +248,14 @@ end
 
 # losses
 
+assemble_mass(args...) = @abstractmethod
+assemble_stiffness(args...) = @abstractmethod
+assemble_mass_stiffness(args...) = @abstractmethod
+
+L2Loss(args...) = EnergyLoss(assemble_mass(args...))
+H1Loss(args...) = EnergyLoss(assemble_stiffness(args...))
+H1L2Loss(args...) = EnergyLoss(assemble_mass_stiffness(args...))
+
 struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
   X::A
 end

@@ -88,6 +88,9 @@ import StaticArrays: MVector,SVector
 export TrainingLog
 export ZScore
 export EnergyLoss
+export L2Loss
+export H1Loss
+export H1L2Loss
 export visualise
 include("Utils.jl")
 

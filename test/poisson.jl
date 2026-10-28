@@ -58,14 +58,11 @@ features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
 input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
-norm_matrix = assemble_matrix((u,v) -> ∫(∇(v)⋅∇(u))dΩ,trial,test)
-loss = EnergyLoss(norm_matrix)
-
 # test 1: Gridap-based spaces
 
 fspace = FunctionSpace(test)
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fesolver,fmodel;epochs=200,loss=loss,print_every=50)
+solver = NeuralSolver(fesolver,fmodel;epochs=200,loss=H1Loss(fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
