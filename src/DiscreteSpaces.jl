@@ -70,22 +70,8 @@ function OutputSpace(uh::MultiFieldParamFEFunction)
 end
 
 function OutputSpace(uhs::ParamFEFunction...)
-  spaces = map(get_fe_space,uhs)
-  space = MultiGraphInducedSpace(spaces...)
-  x = get_coords(space)
-  vals = map(uh -> _get_values(uh,x),uhs)
-  D = size(vals[1],1)
-  @check all(size(v,1)==D for v in vals) "All output spaces must have the same number of channels"
-  N = num_coords(space)
-  K = sum(s -> size(s,3) for s in vals)
-  values = zeros(TData,D,N,K)
-  off = 0
-  @inbounds @views for v in vals
-    k = size(v,3)
-    values[:,:,off+1:off+k] .= v
-    off += k
-  end
-  OutputSpace(space,values)
+  spaces = map(OutputSpace,uhs)
+  merge_spaces(spaces...)
 end
 
 function OutputSpace(space)
@@ -117,6 +103,24 @@ function join_spaces(spaces::OutputSpace...)
     d = size(s.values,1)
     values[off+1:off+d,pos,:] .= s.values
     off += d
+  end
+  OutputSpace(space,values)
+end
+
+function merge_spaces(spaces::OutputSpace...)
+  D = size(first(spaces).values,1)
+  @check all(size(s.values,1)==D for s in spaces) "All output spaces must have the same number of channels"
+  space = MultiGraphInducedSpace(map(s -> s.space,spaces)...)
+  N = num_coords(space)
+  K = sum(s -> size(s.values,3),spaces)
+  values = zeros(TData,D,N,K)
+  off = 0
+  @inbounds @views for (s,lcoord_to_coords) in zip(spaces,space.l_to_lcoord_to_coords)
+    k = size(s.values,3)
+    for (lc,c) in enumerate(lcoord_to_coords)
+      values[:,c,off+1:off+k] .= s.values[:,lc,:]
+    end
+    off += k
   end
   OutputSpace(space,values)
 end
@@ -192,16 +196,18 @@ end
 
 function GraphInducedSpace(space;kwargs...)
   coords = get_coords(space)
-  build_graph(coords;kwargs...)
+  graph = build_graph(coords;kwargs...)
+  GraphInducedSpace(graph,coords)
 end
 
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 
-struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractVector{<:Point},C<:Table} <: AbstractGraphInducedSpace
+struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
   lspaces::NTuple{N,A}
-  coords::B
-  l_to_lcoord_to_coords::C
+  graph::B
+  coords::C
+  l_to_lcoord_to_coords::D
 end
 
 function MultiGraphInducedSpace(spaces...;kwargs...)
@@ -209,47 +215,17 @@ function MultiGraphInducedSpace(spaces...;kwargs...)
   lcoords = map(get_coords,lspaces)
   sets = map(Set,lcoords)
   coords = collect(∪(sets...))
+  graph = build_graph(coords;kwargs...)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
-  MultiGraphInducedSpace(lspaces,coords,l_to_lcoord_to_coords)
+  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords)
 end
 
 get_coords(space::MultiGraphInducedSpace) = space.coords
+get_graph(space::MultiGraphInducedSpace) = space.graph
 
 Base.length(space::MultiGraphInducedSpace) = length(space.lspaces)
 Base.getindex(space::MultiGraphInducedSpace,i::Int) = space.lspaces[i]
 Base.iterate(space::MultiGraphInducedSpace,state...) = iterate(space.lspaces,state...)
-
-function expand_data(
-  space::MultiGraphInducedSpace,
-  ldata::AbstractInputData,
-  block::Int=1
-  )
-  
-  D,_,K = size(ldata)
-  N = num_coords(space)
-  gdata = zeros(eltype(ldata),D,N,K)
-  lcoord_to_coords = space.l_to_lcoord_to_coords[block]
-  @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
-    gdata[:,c,:] .= ldata[:,lc,:]
-  end 
-  return gdata
-end
-
-function restrict_data(
-  space::MultiGraphInducedSpace,
-  gdata::AbstractInputData,
-  block::Int=1
-  )
-  
-  D,_,K = size(gdata)
-  N = num_coords(space[block])
-  ldata = zeros(eltype(gdata),D,N,K)
-  lcoord_to_coords = space.l_to_lcoord_to_coords[block]
-  @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
-    ldata[:,c,:] .= gdata[:,lc,:]
-  end 
-  return ldata
-end
 
 # norms
 

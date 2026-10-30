@@ -83,13 +83,9 @@ gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(fesolver,gmodel;epochs=200,print_every=50)
 input_space = InputSpace(get_coords(gspace),features(μ_train1),features(μ_train2))
 output_space = OutputSpace(uhμ_train1,uhμ_train2)
-
 op = neural_operator(solver,input_space,output_space)
-pred_uμ = solve(solver,op,input_space(μ))
+
+input_space = InputSpace(get_coords(test),features(μ))
+pred_uμ = solve(solver,op,input_space)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
-
-using Gridap.FESpaces
-using Gridap.ReferenceFEs
-using Gridap.Arrays
-using Gridap.CellData

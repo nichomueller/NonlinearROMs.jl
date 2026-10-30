@@ -1,15 +1,13 @@
 """
-    struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
-      fesolver::B
+    struct NeuralSolver{A<:NeuralModel} <: ROMSolver
       reduction::NeuralReduction{A}
     end
 
-    NeuralSolver(fesolver::GridapType,reduction::NeuralReduction)
+    NeuralSolver(reduction::NeuralReduction)
 
 Initializes the Reduced Basis Solver for Neural Operators.
 
 # Arguments
-- `fesolver`: The high-fidelity standard Gridap solver (e.g., `LUSolver()`). In the context of Reduced Order Models, the neural operator acts as a surrogate for this specific full-order solver. This reference defines the underlying high-fidelity model being approximated.
 - `reduction::NeuralReduction`: The configured neural reduction strategy (e.g., `DeepONetReduction` or `NOMADReduction`).
 
 # Examples
@@ -30,14 +28,13 @@ reduction = NeuralReduction(
 solver = NeuralSolver(ThetaMethod(LUSolver(),dt,θ),reduction)
 ```
 """
-struct NeuralSolver{A<:NeuralModel,B} <: ROMSolver
-  fesolver::B
+struct NeuralSolver{A<:NeuralModel} <: ROMSolver
   reduction::NeuralReduction{A}
 end
 
-function NeuralSolver(fesolver::GridapType,model::NeuralModel;kwargs...)
+function NeuralSolver(model::NeuralModel;kwargs...)
   reduction = NeuralReduction(model;kwargs...)
-  NeuralSolver(fesolver,reduction)
+  NeuralSolver(reduction)
 end
 
 get_reduction(s::NeuralSolver) = s.reduction

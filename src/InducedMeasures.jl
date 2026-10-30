@@ -64,15 +64,57 @@ end
 
 function integration(a::AbstractInputData,meas::MultiGraphMeasure)
   space = get_space(meas)
-  D,_,K = size(a)
-  N = num_coords(space)
-  out = zeros(eltype(a),D,N,K)
+  out = fill!(similar(a),zero(eltype(a)))
   for (i,m) in enumerate(meas)
-    ar = restrict_data(space,a,i)
+    ar = restrict_edge_data(space,a,i)
     outr = integration(ar,m)
-    out += expand_data(space,outr,i)
+    out += expand_vertex_data(space,outr,i)
   end
   return out
+end
+
+function restrict_edge_data(
+  space::MultiGraphInducedSpace,
+  gdata::AbstractInputData,
+  l::Int=1
+  )
+  
+  lspace = space[l]
+  lgraph = get_graph(lspace)
+  lcoord_to_coords = space.l_to_lcoord_to_coords[l]
+
+  D,_,K = size(gdata)
+  Ne = ne(lgraph)
+  ldata = zeros(eltype(gdata),D,Ne,K)
+  @inbounds @views for e in edges(lgraph)
+    lc = src(e)
+    c = lcoord_to_coords[lc]
+    ldata[:,lc,:] .= gdata[:,c,:]
+  end
+  
+  return ldata
+end
+
+function expand_vertex_data(
+  space::MultiGraphInducedSpace,
+  ldata::AbstractInputData,
+  l::Int=1
+  )
+
+  lspace = space[l]
+  ggraph = get_graph(space)
+  lgraph = get_graph(lspace)
+  lcoord_to_coords = space.l_to_lcoord_to_coords[l]
+
+  D,_,K = size(ldata)
+  Nv = nv(ggraph)
+  gdata = zeros(eltype(ldata),D,Nv,K)
+  @inbounds @views for lc in 1:nv(lgraph)
+    c = lcoord_to_coords[lc]
+    gdata[:,c,:] .= ldata[:,lc,:]
+  end
+  
+  return gdata
 end
 
 # utils
