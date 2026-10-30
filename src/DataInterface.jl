@@ -8,17 +8,28 @@ sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
-  function FeatureBundle(bundle::T) where {N,T<:NTuple{N,AbstractParamFunction}}
-    p = get_params(first(bundle))
-    @check all(get_params(a)==p for a in bundle) "All param functions must share the same parameters"
-    new{N,T}(bundle)
-  end
 end
 
-ParamDataStructures.get_params(a::FeatureBundle) = get_params(first(a.bundle))
-ParamDataStructures.get_times(a::FeatureBundle) = get_times(first(a.bundle))
-ParamDataStructures.num_params(a::FeatureBundle) = num_params(first(a.bundle))
-ParamDataStructures.num_times(a::FeatureBundle) = num_times(first(a.bundle))
+function merge_bundles(a::FeatureBundle,b::FeatureBundle)
+  FeatureBundle((a.bundle...,b.bundle...))
+end
+
+function merge_bundles(a::FeatureBundle,b::FeatureBundle,args::FeatureBundle...)
+  merge_bundles(merge_bundles(a,b),args...)
+end
+
+function ParamDataStructures.num_params(a::FeatureBundle)
+  dict = OrderedDict{UInt64,AbstractRealisation}()
+  for f in a.bundle
+    μ = get_params(f)
+    dict[objectid(μ)] = μ
+  end
+  np = 0
+  for μ in values(dict)
+    np += num_params(μ)
+  end
+  return np
+end
 
 ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
 
@@ -170,10 +181,3 @@ _merge_data(a::Nothing,b::Nothing) = nothing
 _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
-
-# data formatter:
-# 1) x
-# 2) x, (a(x),...,f(x))
-# 3) x, vₜ(x)
-# 4) x, (a(x),...,f(x)), vₜ(x)
-# 5) DeepONet, NOMAD: branch: μ, trunk: x

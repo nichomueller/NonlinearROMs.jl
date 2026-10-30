@@ -79,9 +79,10 @@ using GridapROMs.RBSteady
 using GridapROMs.RBTransient
 using GridapROMs.Utils
 
-import Lux: AbstractLuxLayer
+import DataStructures: OrderedDict
 import Gridap.Fields: GenericField
 import GridapROMs.RBSteady: get_interpolation,allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
+import Lux: AbstractLuxLayer
 import Random: AbstractRNG
 import StaticArrays: MVector,SVector
 

@@ -35,7 +35,11 @@ function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
   InputSpace(coords,features)
 end
 
-function InputSpace(space,a::FeatureBundle)
+function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle...)
+  InputSpace(x,merge_bundles(a...))
+end
+
+function InputSpace(space,args...)
   x = get_coords(space)
   InputSpace(x,a)
 end
@@ -63,6 +67,25 @@ end
 function OutputSpace(uh::MultiFieldParamFEFunction)
   spaces = map(OutputSpace,uh)
   join_spaces(spaces...)
+end
+
+function OutputSpace(uhs::ParamFEFunction...)
+  spaces = map(get_fe_space,uhs)
+  space = MultiGraphInducedSpace(spaces...)
+  x = get_coords(space)
+  vals = map(uh -> _get_values(uh,x),uhs)
+  D = size(vals[1],1)
+  @check all(size(v,1)==D for v in vals) "All output spaces must have the same number of channels"
+  N = num_coords(space)
+  K = sum(s -> size(s,3) for s in vals)
+  values = zeros(TData,D,N,K)
+  off = 0
+  @inbounds @views for v in vals
+    k = size(v,3)
+    values[:,:,off+1:off+k] .= v
+    off += k
+  end
+  OutputSpace(space,values)
 end
 
 function OutputSpace(space)
@@ -197,15 +220,15 @@ Base.getindex(space::MultiGraphInducedSpace,i::Int) = space.lspaces[i]
 Base.iterate(space::MultiGraphInducedSpace,state...) = iterate(space.lspaces,state...)
 
 function expand_data(
-  spaces::MultiGraphInducedSpace,
+  space::MultiGraphInducedSpace,
   ldata::AbstractInputData,
   block::Int=1
   )
   
   D,_,K = size(ldata)
-  N = num_coords(spaces)
+  N = num_coords(space)
   gdata = zeros(eltype(ldata),D,N,K)
-  lcoord_to_coords = spaces.l_to_lcoord_to_coords[block]
+  lcoord_to_coords = space.l_to_lcoord_to_coords[block]
   @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
     gdata[:,c,:] .= ldata[:,lc,:]
   end 
@@ -213,15 +236,15 @@ function expand_data(
 end
 
 function restrict_data(
-  spaces::MultiGraphInducedSpace,
+  space::MultiGraphInducedSpace,
   gdata::AbstractInputData,
   block::Int=1
   )
   
   D,_,K = size(gdata)
-  N = num_coords(spaces[block])
+  N = num_coords(space[block])
   ldata = zeros(eltype(gdata),D,N,K)
-  lcoord_to_coords = spaces.l_to_lcoord_to_coords[block]
+  lcoord_to_coords = space.l_to_lcoord_to_coords[block]
   @inbounds @views for (lc,c) in enumerate(lcoord_to_coords)
     ldata[:,c,:] .= gdata[:,lc,:]
   end 
@@ -302,11 +325,6 @@ function get_node_masks(f)
   mask
 end
 
-function get_free_dof_to_comp(f)
-  @notimplementedif !hasfield(typeof(f),:space)
-  get_free_dof_to_comp(getfield(f,:space))
-end
-
 function get_free_dof_to_comp(f::UnconstrainedFESpace)
   cell_dof_ids = get_cell_dof_ids(f)
   cell_dof_to_comp = lazy_map(get_dof_to_comp,get_data(get_fe_dof_basis(f)))
@@ -348,9 +366,13 @@ function get_free_dof_to_comp(f::MultiFieldFESpace)
   comps
 end
 
-function get_free_dof_to_point(f)
-  @notimplementedif !hasfield(typeof(f),:space)
-  get_free_dof_to_point(getfield(f,:space))
+for F in (:get_free_dof_to_comp,:get_free_dof_to_point)
+  @eval begin
+    function $F(f)
+      @notimplementedif !hasfield(typeof(f),:space)
+      $F(getfield(f,:space))
+    end
+  end
 end
 
 function get_free_dof_to_point(f::UnconstrainedFESpace)
@@ -431,4 +453,53 @@ function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::AbstractInputDat
     _free_values(fi,vi)
   end
   reduce(vcat,us)
+end
+
+# agfem compatibility
+
+
+function FESpaces.gather_free_and_dirichlet_values!(
+  fmdof_to_val::AbstractVector{T},
+  dmdof_to_val::AbstractVector{T},
+  f::FESpaceWithLinearConstraints,
+  cell_to_ludof_to_val
+  ) where T
+
+  fdof_to_val = Vector{T}(undef,num_free_dofs(f.space))
+  ddof_to_val = Vector{T}(undef,num_dirichlet_dofs(f.space))
+  gather_free_and_dirichlet_values!(fdof_to_val,ddof_to_val,f.space,cell_to_ludof_to_val)
+  FESpaces._setup_mdof_to_val!(
+    fmdof_to_val,
+    dmdof_to_val,
+    fdof_to_val,
+    ddof_to_val,
+    f.mDOF_to_DOF,
+    f.n_fdofs,
+    f.n_fmdofs)
+  fmdof_to_val,dmdof_to_val
+end
+
+function get_mfdof_to_fdof(f::FESpaceWithLinearConstraints)
+  T = eltype(f.mDOF_to_DOF)
+  mfdof_to_fdof = zeros(T,num_free_dofs(f))
+  for mDOF in 1:length(f.mDOF_to_DOF)
+    DOF = f.mDOF_to_DOF[mDOF]
+    mdof = FESpaces._DOF_to_dof(mDOF,f.n_fmdofs)
+    dof = FESpaces._DOF_to_dof(DOF,f.n_fdofs)
+    if mdof > 0
+      @check dof > 0
+      mfdof_to_fdof[mdof] = dof
+    end
+  end
+  return mfdof_to_fdof
+end
+
+for F in (:get_free_dof_to_comp,:get_free_dof_to_point)
+  @eval begin
+    function $F(f::FESpaceWithLinearConstraints)
+      mfdof_to_fdof = get_mfdof_to_fdof(f)
+      fdof_to_q = $F(f.space)
+      view(fdof_to_q,mfdof_to_fdof)
+    end
+  end
 end
