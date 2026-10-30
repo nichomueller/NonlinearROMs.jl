@@ -35,13 +35,13 @@ function update!(log::TrainingLog,epoch::Int,current_loss::Real)
     time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
     eta_seconds = time_per_epoch * (log.max_epochs - epoch)
 
-    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(Float32(current_loss)) \t ETA: $(format_eta(eta_seconds))"
+    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $(format_eta(eta_seconds))"
     println(msg)
   end
   return nothing
 end
 
-function finalize!(log::TrainingLog)
+function finalise!(log::TrainingLog)
   !log.verbose && return nothing
 
   total_mins = round((time() - log.t_start) / 60,digits=2)
@@ -54,179 +54,246 @@ function format_eta(eta_seconds::Real)
   h = div(eta_sec,3600)
   m = div(rem(eta_sec,3600),60)
   s = rem(eta_sec,60)
-  return h > 0 ? "$(lpad(h,2,'0')):$(lpad(m,2,'0')):$(lpad(s,2,'0'))" :
-         "$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  if h > 0
+    "$(lpad(h,2,'0')):$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  else
+    "$(lpad(m,2,'0')):$(lpad(s,2,'0'))"
+  end  
 end
 
-# normalisation handling 
+# data utilities
 
-struct ZScore{A<:AbstractVector,B<:AbstractVector}
+function tuple_of_arrays(a)
+  function first_and_tail(a)
+    x = map(first,a)
+    y = map(Base.tail,a)
+    x,y
+  end
+
+  function take(a,::Type{Tuple{T}} where T)
+    x = map(first,a)
+    (x,)
+  end
+
+  function take(a,::Type{Tuple{A,B}} where {A,B})
+    x,y = first_and_tail(a)
+    t1, = tuple_of_arrays(y)
+    (x,t1)
+  end
+
+  function take(a,::Type{Tuple{A,B,C}} where {A,B,C})
+    x,y = first_and_tail(a)
+    t1,t2 = tuple_of_arrays(y)
+    (x,t1,t2)
+  end
+  
+  function take(a,::Type)
+    x,y = first_and_tail(a)
+    (x,tuple_of_arrays(y)...)
+  end
+
+  take(a,eltype(a))
+end
+
+# input data type 
+
+const TData = Float32
+const AbstractInputData{T} = AbstractArray{T,3}
+
+dimension(data::AbstractInputData) = size(data,1)
+num_coords(data::AbstractInputData) = size(data,2)
+num_samples(data::AbstractInputData) = size(data,3)
+
+# normalisation handling
+
+abstract type AbstractScore end
+
+normalise!(data,score::AbstractScore) = @abstractmethod
+denormalise!(data,score::AbstractScore) = @abstractmethod
+
+struct MScore{A<:Union{Nothing,Number}} <: AbstractScore
+  max::A
+end
+
+const NoMScore = MScore{Nothing}
+
+MScore(::Nothing;kwargs...) = MScore(nothing)
+
+function MScore(data::AbstractInputData;normalise=true)
+  max = maximum(abs,data)
+  normalise && (data ./= max)
+  MScore(max)
+end
+
+function normalise!(data,score::NoMScore)
+  data
+end
+
+function normalise!(data,score::MScore)
+  rdiv!(data,score.max)
+end
+
+function denormalise!(data,score::NoMScore)
+  data
+end
+
+function denormalise!(data,score::MScore)
+  rmul!(data,score.max)
+end
+
+struct ZScore{A,B} <: AbstractScore
   μ::A
   σ::B
 end
 
-function ZScore(data::AbstractMatrix;normalise=false)
+const NoZScore = ZScore{Nothing,Nothing}
+
+ZScore(::Nothing;kwargs...) = ZScore(nothing,nothing)
+
+function ZScore(data::AbstractInputData;normalise=true)
   if normalise
     stats = ZScore(data;normalise=false)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=2),dims=2)
-  σ = dropdims(std(data,dims=2),dims=2)
+  μ = dropdims(mean(data,dims=3),dims=3)
+  σ = dropdims(std(data,dims=3),dims=3)
   # Avoid dividing by zero if a feature is constant
-  for i in eachindex(σ)
+  @inbounds for i in eachindex(σ)
     iszero(σ[i]) && (σ[i] = one(eltype(σ)))
   end
   return ZScore(μ,σ)
 end
 
-struct Normalisation{T<:Real,A<:ZScore,B<:ZScore}
-  dmax::T
-  pscore::A 
-  xscore::B
+function normalise!(data::AbstractMatrix,score::NoZScore)
+  data
 end
 
-function Normalisation(data,params,coords;normalise=false)
-  dmax = maximum(abs,data)
-  normalise && (data ./= dmax)
-  input = ZScore(params;normalise)
-  output = ZScore(coords;normalise)
-  Normalisation(dmax,input,output)
-end
-
-normalise!(args...) = @abstractmethod
-normalise!(data,::typeof(identity)) = data
-
-function normalise!(data::AbstractVector,stats::ZScore)
+function normalise!(data::AbstractMatrix,stats::ZScore)
   data .-= stats.μ
   data ./= stats.σ
   data
 end
 
-function normalise!(data::AbstractMatrix,stats::ZScore)
-  @inbounds for v in eachcol(data)
-    normalise!(v,stats)
-  end
+function denormalise!(data::AbstractMatrix,score::NoZScore)
   data
 end
 
-function normalise!(inout::NTuple{2,AbstractArray},stats::Normalisation)
-  a,b = inout
-  normalise!(a,stats.pscore)
-  normalise!(b,stats.xscore)
-end
-
-function normalise!(inout::NTuple{3,AbstractArray},stats::Normalisation)
-  a,b,c = inout
-  a ./= stats.dmax
-  normalise!(b,stats.pscore)
-  normalise!(c,stats.xscore)
-end
-
-rescale!(args...) = @abstractmethod
-rescale!(data,::typeof(identity)) = data
-
-function rescale!(data::AbstractArray,stats::Normalisation)
-  data .*= stats.dmax
+function denormalise!(data::AbstractMatrix,stats::ZScore)
+  data .*= stats.σ
+  data .+= stats.μ
   data
 end
 
-# Gridap
-
-function FESpaces.get_free_dof_coordinates(V::MultiFieldFESpace)
-  map(get_free_dof_coordinates,V.spaces)
-end
-
-# Data types
-
-struct FeaturesBundle{A<:Tuple}
-  bundle::A
-end
-
-FeaturesBundle(args::Function...) = FeaturesBundle(args)
-
-function get_features(f::FeaturesBundle,op::ParamOperator,r::Realisation)
-  trial = get_trial(op)(r)
-  features = zeros(num_free_dofs(trial),length(f.bundle),num_params(r))
-  @inbounds @views for (j,f) in enumerate(f.bundle)
-    fh = interpolate(f,trial)
-    fv = get_free_dof_values(fh)
-    for k in param_eachindex(fv)
-      features[:,j,k] = param_getindex(fv,k)
-    end
-  end
-  return features
-end
-
-# utils
-
-function get_formatted_data(::Type{T},values,times) where T
-  d = T.(matrix_of_values(values))
-  nx = size(d,1)
-  nt = length(times)
-  np = Int(size(d,2)/nt)
-  reshape(permutedims(reshape(d,nx,np,nt),(1,3,2)),:,np)
-end
-
-dimension(μ::Realisation) = length(first(μ))
-dimension(μ::TransientRealisation) = dimension(get_params(μ))
-
-matrix_of_values(a::AbstractMatrix) = a
-matrix_of_values(a::AbstractArray) = reshape(a,size(a,1),:)
-matrix_of_values(x::AbstractParamArray) = matrix_of_values(get_all_data(x))
-
-function matrix_of_params(r::AbstractRealisation)
-  params = zeros(dimension(r),num_params(r))
-  matrix_of_params!(params,r)
-end
-
-function matrix_of_params!(params,r::AbstractRealisation)
-  @check size(params,2) == num_params(r)
-  μ = get_params(r)
-  @inbounds @views for i in axes(params,2)
-    params[:,i] = μ.params[i]
-  end
-  params
-end
-
-function matrix_of_coords(coords::AbstractVector{Point{D,T}}) where {D,T}
-  coords_mat = zeros(T,D,length(coords))
-  for (i,coord) in enumerate(coords)
-    for d in 1:D 
-      coords_mat[d,i] = coord.data[d]
-    end
-  end
-  return coords_mat
-end
-
-function matrix_of_coords(coords::AbstractVector{Point{D,T}},times::AbstractVector{S}) where {D,T,S}
-  TS = promote_type(T,S)
-  coords_mat = zeros(TS,D+1,length(coords)*length(times))
-  col = 0
-  for t in times,coord in coords
-    col += 1
-    for d in 1:D
-      coords_mat[d,col] = coord.data[d]
-    end
-    coords_mat[D+1,col] = t
-  end
-  return coords_mat
-end
-
-function tensor_of_coords(coords::AbstractMatrix{T},params::AbstractMatrix{S}) where {T,S}
-  TS = promote_type(T,S)
-  D,nx = size(coords)
-  P,np = size(params)
-  tensor = zeros(TS,D+P,nx,np)
-  for (i,x) in enumerate(eachcol(coords))
-    for (j,μ) in enumerate(eachcol(params))
-      for d in 1:D
-        tensor[d,i,j] = x[d]
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::AbstractInputData,stats::ZScore)
+      @inbounds for m in eachslice(data,dims=3)
+        $f(m,stats)
       end
-      for p in 1:P
-        tensor[D+p,i,j] = μ[p]
-      end
+      data
     end
   end
-  return tensor
+end
+
+struct Scores{A} <: AbstractScore
+  scores::A
+end
+
+for f in (:MScore,:ZScore)
+  @eval begin
+    function $f(data::NamedTuple;kwargs...)
+      scores = NamedTuple()
+      for (k,v) in pairs(data)
+        scores = merge(scores,NamedTuple{(k,)}(($f(v;kwargs...),)))
+      end
+      return Scores(scores)
+    end
+  end
+end
+
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::NamedTuple,stats::Scores{<:NamedTuple})
+      @inbounds for k in keys(stats.scores)
+        $f(data[k],stats.scores[k])
+      end
+      data
+    end
+  end
+end
+
+struct Normalisation{A<:AbstractScore,B<:AbstractScore}
+  input_score::A
+  output_score::B
+end
+
+function Normalisation((input,output);kwargs...)
+  input_score = ZScore(input;kwargs...)
+  output_score = MScore(output;kwargs...)
+  Normalisation(input_score,output_score)
+end
+
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(inputs::NamedTuple,stats::Normalisation)
+      $f(inputs,stats.input_score)
+    end
+
+    function $f(outputs::AbstractInputData,stats::Normalisation)
+      $f(outputs,stats.output_score)
+    end
+  end
+end
+
+# losses
+
+assemble_mass(args...) = @abstractmethod
+assemble_stiffness(args...) = @abstractmethod
+assemble_mass_stiffness(args...) = @abstractmethod
+
+L2Loss(args...) = EnergyLoss(assemble_mass(args...))
+H1Loss(args...) = EnergyLoss(assemble_stiffness(args...))
+H1L2Loss(args...) = EnergyLoss(assemble_mass_stiffness(args...))
+
+struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+  X::A
+end
+
+function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
+  Xŷ = _mat_mul_data(loss.X,ŷ)
+  Xy = _mat_mul_data(loss.X,y)
+  return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
+end
+
+# visualisation
+
+function visualise(
+  dir,uh,ûh;
+  trian=get_triangulation(get_fe_space(uh)),
+  dir_name="plot",variable_name="uh",
+  )
+
+  dir = joinpath(dir,dir_name)
+  mkpath(dir)
+  fields = Pair{String}[]
+  for ip in param_eachindex(uh)
+    uhip = param_getindex(uh,ip)
+    ûhip = param_getindex(ûh,ip)
+    _push_fields!(fields,uhip,ûhip,"$(variable_name)_param_$(ip)")
+  end
+  writevtk(trian,joinpath(dir,variable_name),cellfields=fields)
+end
+
+function _push_fields!(fields,uhip,ûhip,name)
+  ehip = uhip - ûhip
+  push!(fields,name => uhip)
+  push!(fields,"approx_"*name => ûhip)
+  push!(fields,"err_"*name => ehip)
+end
+
+function _push_fields!(fields,uhip::MultiFieldFEFunction,ûhip::MultiFieldFEFunction,name)
+  for i in 1:num_fields(uhip)
+    _push_fields!(fields,uhip[i],ûhip[i],"$(name)_field$(i)")
+  end
 end

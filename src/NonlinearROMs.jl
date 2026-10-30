@@ -10,14 +10,14 @@ into its own repository, and plugs back into them via multiple dispatch:
 - **Neural network models** (`NeuralModels.jl`/`NeuralLayers.jl`) — `DeepONet`,
   `NOMAD`, `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`,
   `AutoDecoder`, `KernelNeuralModel`; all trained through the same
-  Lux/Reactant/Enzyme pipeline (`NeuralReduction`, `train_model!`).
+  Lux/Reactant/Enzyme pipeline (`NeuralSolver`, `train_model!`).
 
 - **Direct neural surrogates** — [`NeuralSolver`](@ref)/[`NeuralOperator`](@ref)
-  train a [`NeuralReduction`](@ref)'s model (through its `DeepONetReduction`/
-  `NOMADReduction`/`KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/
-  `VAEReduction`/`MLPReduction` alias) to map parameters directly to the
-  full-order solution, bypassing FE assembly entirely; `reduced_operator`
-  plugs this into the same offline/online API as `GridapROMs`' RB solvers.
+  train a model (through its `DeepONetReduction`/`NOMADReduction`/
+  `KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/`VAEReduction`/
+  `MLPReduction` alias) to map parameters directly to the full-order solution,
+  bypassing FE assembly entirely; `reduced_operator` plugs this into the same
+  offline/online API as `GridapROMs`' RB solvers.
 
 - **Steady hyper-reduction** — `NNRegression` (operator regression),
   `NNHyperReduction` (NN-predicted EIM coefficients), `NNRegressor`,
@@ -29,9 +29,9 @@ into its own repository, and plugs back into them via multiple dispatch:
   `RBTransient`'s space-time hyper-reduction machinery analogously.
 
 - **Mesh graph utilities** (`GraphsInterface.jl`/`WeightedSimpleDiGraphs.jl`) —
-  `MeshGraph`/`DistanceGraph`/`build_graph` turn a `FESpace`'s dof adjacency (or
-  a coordinate-based nearest-neighbour graph) into a `WeightedSimpleDiGraph`,
-  for graph-based neural architectures.
+  `build_graph(coords;radius)` turns a point set into a radius-neighbourhood
+  `WeightedSimpleDiGraph` (edge weights = Euclidean distance), wrapped in a
+  [`GraphInducedSpace`](@ref), for graph-based neural architectures.
 
 Usage: construct a `NNHyperReduction`/`NNRegression` (or their `Transient*`
 counterparts) and pass it to `RBSolver` wherever a steady/transient
@@ -42,12 +42,14 @@ counterparts) and pass it to `RBSolver` wherever a steady/transient
 module NonlinearROMs
 
 using Enzyme
+using FFTW
 using FillArrays
 using ForwardDiff
 using Graphs
 using LinearAlgebra
 using Lux
 using MLUtils
+using NNlib
 using NearestNeighbors
 using Optimisers
 using Random
@@ -62,117 +64,121 @@ using Gridap.CellData
 using Gridap.FESpaces
 using Gridap.Geometry
 using Gridap.Helpers
+using Gridap.MultiField
 using Gridap.Polynomials
 using Gridap.ReferenceFEs
+using Gridap.TensorValues
 
 using GridapROMs
 using GridapROMs.DofMaps
 using GridapROMs.ParamDataStructures
+using GridapROMs.ParamFESpaces
 using GridapROMs.ParamODEs
 using GridapROMs.ParamSteady
 using GridapROMs.RBSteady
 using GridapROMs.RBTransient
 using GridapROMs.Utils
 
-import GridapROMs.RBSteady:
-  ROMSolver,GlobalRBSolver,GlobalContext,get_reduction,get_state_reduction,get_interpolation,
-  allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
-import StaticArrays: SVector
+import DataStructures: OrderedDict
+import Gridap.Fields: GenericField
+import GridapROMs.RBSteady: get_interpolation,allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
+import Lux: AbstractLuxLayer
+import Random: AbstractRNG
+import StaticArrays: MVector,SVector
 
 export TrainingLog
 export ZScore
-export normalise!
-export get_formatted_data
+export EnergyLoss
+export L2Loss
+export H1Loss
+export H1L2Loss
+export visualise
 include("Utils.jl")
 
 export LRScheduler
 export CosineAnnealing
 export ReduceLROnPlateau
 export Optimiser
-export step_scheduler!
-export get_lr
 include("LRSchedulers.jl")
 
+export FeatureBundle
+export DataFormatter
 export Sampler
-export MultiSampler
-export sample
-export get_ids
-export get_param_ids
-export get_time_ids
-include("Samplers.jl")
+include("DataInterface.jl")
 
-export MeshGraph
-export DistanceGraph
+export WeightedSimpleDiGraph
+export NystromSubgraph
+export gather_data
+export scatter_data
+export attention
 export build_graph
 export get_edge_tensors
 include("GraphsInterface.jl")
 
-export LatentCodeLayer
-export VAELayer
+export DiscreteSpace
+export TrainingSpace
+export InputSpace
+export OutputSpace
+export FunctionSpace
+export GraphInducedSpace
+export MultiGraphInducedSpace
+export get_coords
+export get_features
+export get_graph
+export to_element
+include("DiscreteSpaces.jl")
+
+export InducedMeasure
+export FESpaceMeasure
+export GraphMeasure
+export get_space
+export integration
+include("InducedMeasures.jl")
+
+export AbstractIntegralKernel
+export IntegralKernel
+export FourierKernel
+export AttentionKernel
+export MultipleAttentionKernel
 export KernelNeuralLayer
+export Lift
+export Project
+include("IntegralKernels.jl")
+
+export RoPELayer
 include("NeuralLayers.jl")
 
 export NeuralModel
-export FiniteDimensionalModel
-export CoordinateNeuralModel
-export IntegralKernel
-export DeepONet
+export KernelStyle
+export IntegralStyle
+export FourierStyle
+export KernelNeuralModel
 export NOMAD
 export MultiLayerPerceptron
-export AutoEncoder
-export VariationalAutoEncoder
-export AutoDecoder
-export build_model
-export AbstractKernelModel
-export KernelNeuralModel
-export GNO
 include("NeuralModels.jl")
+
+export NeuralSolver
+export NeuralOperator
+export neural_operator
+include("NeuralOperators.jl")
 
 export NNRegression
 export NNHyperReduction
 export TransientNNRegression
 export TransientNNHyperReduction
-export NeuralReduction
-export DeepONetReduction
 export NOMADReduction
-export AutoEncoderReduction
-export AutoDecoderReduction
-export VAEReduction
 export KernelReduction
 export AbstractKernelReduction
 export GNOReduction
 include("NeuralReductions.jl")
 
-export TrainedNeuralModel
-export TrainedAutoEncoder
-export TrainedAutoDecoder
-export TrainedVAE
-export train_model!
-export infer_latent
-export encode
-export decode
-export XDEV
-export CDEV
-include("NeuralModelsTraining.jl")
-
-export NeuralSolver
-export NeuralOperator
-include("NeuralSolvers.jl")
+export collect_trajectory
+export rollout_data
+export rollout
+include("Rollout.jl")
 
 export train
 export resolve_batch_size
 include("NeuralTraining.jl")
-
-export NNRegressor
-export NNContribution
-export TransientNNRegressor
-export TransientNNContribution
-export TransientNNContributionTuple
-include("HyperReductions.jl")
-
-export NNInterpolation
-include("Interpolations.jl")
-
-include("RBOperators.jl")
 
 end # module

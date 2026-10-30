@@ -1,117 +1,86 @@
 """
-    abstract type NeuralModel <: Map end
+    abstract type NeuralModel end
 
 Abstract supertype for neural network models. Any concrete subtype must
 implement `(a::T)(x::AbstractMatrix) -> AbstractMatrix` where `x` is a
 `(param_dim × batch_size)` matrix of parameters and the output is a
 `(output_dim × batch_size)` matrix of predictions.
 """
-abstract type NeuralModel <: Map end
+abstract type NeuralModel end
+
+DataFormatter(::NeuralModel) = DataFormatter()
+
+abstract type KernelStyle end
+
+DataFormatter(::KernelStyle) = DataFormatter()
+
+struct IntegralStyle{A<:InducedMeasure} <: KernelStyle 
+  measure::A
+end
+
+struct FourierStyle <: KernelStyle 
+  truncation::Int
+end
+
+function DataFormatter(style::FourierStyle)
+  DataFormatter(pass_coords=Val{false}(),pass_features=Val{false}(),pass_new_data=Val{true}())
+end
 
 """
-    abstract type CoordinateNeuralModel <: NeuralModel end
-
-Abstract supertype for neural models that evaluate the solution point-by-point using continuous physical coordinates.
-"""
-abstract type CoordinateNeuralModel <: NeuralModel end
-
-"""
-    struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
-      lifting::A
-      kernel_layers::NTuple{N,B}
-      projection::C
-      activation::D
+    struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+      style::A
+      hidden_layers::NTuple{N,Int}
+      activation::B
+      formatter::C
     end
 
-Generic architecture for kernel-based neural models.
-It maps an input function to an output function through three main stages:
-1. Lifting (P): A local operator mapping input features to a higher-dimensional hidden representation.
-2. Iterative Kernel Integration: A sequence of `KernelNeuralLayer`s representing the non-local processing.
-3. Projection (Q): A local operator mapping the final hidden representation to the target output dimension.
+Recipe for a kernel-based neural operator (Kovachki et al.), in the same spirit as
+[`NOMAD`](@ref)/[`MultiLayerPerceptron`](@ref): `hidden_layers` only holds the
+hidden widths, with the input/output dimensions inferred from the training data
+at `build_model` time. `style` picks the non-local discretisation shared by every
+hidden layer (`IntegralStyle` for a graph/FE-quadrature [`InducedMeasure`](@ref),
+`FourierStyle` for an FNO-style spectral kernel); `formatter` is the single
+[`DataFormatter`](@ref) that both decides what the model's fixed per-sample input
+is made of (`x`/`a(x)`) and, inside every hidden layer, whether the running hidden
+state `v` gets folded into that kernel's own input.
+
+`build_model` turns this recipe into an actual `Lux.Chain`:
+1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
+2. Iterative Kernel Integration: a stack of `KernelNeuralLayer`s (one per interior
+   hidden-width transition) performing the non-local processing.
+3. Projection (Q): a local `Dense` layer mapping the final hidden state to the output dimension.
 """
-struct KernelNeuralModel{N,A,B,C,D} <: NeuralModel
-  lifting::A
-  kernel_layers::NTuple{N,B}
-  projection::C
-  activation::D
+struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+  style::A
+  hidden_layers::NTuple{N,Int}
+  activation::B
+  formatter::C
 end
 
-function KernelNeuralModel(;
-  lifting_layers,
-  kernel_configs,
-  projection_layers,
-  activation=tanh
-)
-  KernelNeuralModel(
-    Tuple(lifting_layers),
-    Tuple(kernel_configs),
-    Tuple(projection_layers),
-    activation
-  )
-end
-
-struct GNO{K<:KernelNeuralModel,R<:Real} <: AbstractKernelModel
-    kernel_model::K
-    radius::R
-end
-
-GNO(kernel_model::KernelNeuralModel;radius=1.0) = GNO(kernel_model,radius)
-
-"""
-    struct DeepONet{N,A} <: CoordinateNeuralModel
-      branch_layers::NTuple{N,Int}
-      trunk_layers::NTuple{N,Int}
-      activation::A
-    end
-
-Explicit architectural configuration for a Deep Operator Model (DeepONet).
-A DeepONet consists of two sub-networks:
-1. **Branch Net**: Processes the input parameters/sensors \$u\$.
-2. **Trunk Net**: Processes the spatial/spatiotemporal continuous coordinates \$y\$.
-
-The final output is computed via the dot product of their feature vectors:
-\$\$G(u)(y) = \\sum_{k=1}^{p} b_k(u) t_k(y)\$\$
-
-The last layer of both `branch_layers` and `trunk_layers` must have the exact same dimension \$p\$.
-
-# Examples
-The layers are defined as standard Julia tuples.
-```julia
-# Branch Net: 2 inputs -> 64 hidden -> 32 output (latent dimension p=32)
-# Trunk Net: 3 inputs (e.g., 2D space + time) -> 64 hidden -> 32 output
-model = DeepONet(
-  branch_layers = (2,64,32),
-  trunk_layers = (3,64,32),
-  activation = relu
-  )
-```
-"""
-struct DeepONet{N,A} <: CoordinateNeuralModel
-  branch_layers::NTuple{N,Int}
-  trunk_layers::NTuple{N,Int}
-  activation::A
-end
-
-function DeepONet(;branch_layers,trunk_layers,activation=tanh)
-  DeepONet(Tuple(branch_layers),Tuple(trunk_layers),activation)
-end
-
-function DeepONet(
-  nbranch_in::Int,
-  ntrunk_in::Int;
-  width::Int=64,
-  depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  branch_layers=(nbranch_in,hidden...,width),
-  trunk_layers=(ntrunk_in,hidden...,width),
-  activation=tanh
+function KernelNeuralModel(
+  style::KernelStyle;
+  hidden_layers=(16,16),
+  activation=tanh,
+  formatter=DataFormatter(style)
   )
 
-  DeepONet(Tuple(branch_layers),Tuple(trunk_layers),activation)
+  KernelNeuralModel(style,hidden_layers,activation,formatter)
 end
 
+function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)
+  style = IntegralStyle(InducedMeasure(f))
+  KernelNeuralModel(style,args...;kwargs...)
+end
+
+function KernelNeuralModel(args...;truncation=16,kwargs...)
+  style = FourierStyle(truncation)
+  KernelNeuralModel(style,args...;kwargs...)
+end
+
+DataFormatter(model::KernelNeuralModel) = model.formatter
+
 """
-    struct NOMAD{N,A} <: CoordinateNeuralModel
+    struct NOMAD{N,A} <: NeuralModel
       approximator_layers::NTuple{N,Int}
       decoder_layers::NTuple{N,Int}
       activation::A
@@ -132,7 +101,7 @@ model = NOMAD(
   )
 ```
 """
-struct NOMAD{N,A} <: CoordinateNeuralModel
+struct NOMAD{N,A} <: NeuralModel
   approximator_layers::NTuple{N,Int}
   decoder_layers::NTuple{N,Int}
   activation::A
@@ -147,24 +116,17 @@ function NOMAD(
   ncoords_in::Int;
   width::Int=64,
   depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  approximator_layers=(nsensors_in,hidden...,width),
-  decoder_layers=(width+ncoords_in,hidden...,1),
   activation=tanh
   )
 
-  NOMAD(Tuple(approximator_layers),Tuple(decoder_layers),activation)
+  hidden = ntuple(_ -> width,depth)
+  approximator_layers = (nsensors_in,hidden...,width)
+  decoder_layers = (width+ncoords_in,hidden...,1)
+  NOMAD(approximator_layers,decoder_layers,activation)
 end
 
 """
-    abstract type FiniteDimensionalModel <: NeuralModel end
-
-Abstract supertype for standard neural networks mapping between finite-dimensional Euclidean spaces (Vector -> Vector).
-"""
-abstract type FiniteDimensionalModel <: NeuralModel end
-
-"""
-    struct MultiLayerPerceptron{N,A} <: FiniteDimensionalModel
+    struct MultiLayerPerceptron{N,A} <: NeuralModel
       hidden_layers::NTuple{N,Int}
       activation::A
     end
@@ -173,10 +135,10 @@ Recipe for a dense feed-forward network used for scalar/vector regression (e.g.
 predicting EIM/reduced-basis coefficients from parameter values). `hidden_layers`
 holds only the hidden widths (e.g. `(64,64)`); the input/output dimensions are
 inferred from the training data at [`train_neural_coefficient`](@ref) call time, since
-one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralReduction`](@ref))
+one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralSolver`](@ref))
 to train many differently-shaped networks (one per triangulation/reduced quantity).
 """
-struct MultiLayerPerceptron{N,A} <: FiniteDimensionalModel
+struct MultiLayerPerceptron{N,A} <: NeuralModel
   hidden_layers::NTuple{N,Int}
   activation::A
 end
@@ -184,212 +146,9 @@ end
 function MultiLayerPerceptron(;
   width::Int=64,
   depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
+  hidden_layers=ntuple(_ -> width,depth),
   activation=tanh
   )
 
-  MultiLayerPerceptron(Tuple(hidden),activation)
-end
-
-"""
-    struct AutoEncoder{N,A} <: FiniteDimensionalModel
-      hidden_layers::NTuple{N,Int}
-      activation::A
-    end
-
-Recipe for an encoder-decoder pair for unsupervised dimensionality reduction.
-`hidden_layers = (h₁,…,h_{L-1},latent_dim)`: the encoder hidden widths are
-`(h₁,…,h_{L-1})` and the decoder mirrors them symmetrically; the input dimension
-is inferred from the training data.
-"""
-struct AutoEncoder{N,A} <: FiniteDimensionalModel
-  hidden_layers::NTuple{N,Int}
-  activation::A
-end
-
-function AutoEncoder(
-  width::Int=64,
-  depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  activation=tanh
-  )
-
-  AutoEncoder(Tuple(hidden),activation)
-end
-
-"""
-    struct VariationalAutoEncoder{N,A,B} <: FiniteDimensionalModel
-      hidden_layers::NTuple{N,Int}
-      activation::A
-      β::Float64
-    end
-
-Recipe for a VAE with the reparameterisation trick. `hidden_layers = (h₁,…,h_{L-1},latent_dim)`,
-interpreted as for [`AutoEncoder`](@ref); `β` weighs the KL term against the
-reconstruction loss.
-"""
-struct VariationalAutoEncoder{N,A,B} <: FiniteDimensionalModel
-  hidden_layers::NTuple{N,Int}
-  activation::A
-  β::B
-end
-
-function VariationalAutoEncoder(
-  width::Int=64,
-  depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  activation=tanh,
-  β=1.0
-  )
-
-  VariationalAutoEncoder(Tuple(hidden),activation,Float64(β))
-end
-
-"""
-    struct AutoDecoder{N,A} <: FiniteDimensionalModel
-      hidden_layers::NTuple{N,Int}
-      activation::A
-    end
-
-Recipe for a decoder-only model (Park et al., 2019). Per-sample latent codes are
-optimised jointly with the decoder parameters. `hidden_layers = (h₁,…,latent_dim)`;
-the decoder is built from last to first, i.e. `(latent_dim,reverse(h₁,…,h_{L-1})…,n_h)`.
-"""
-struct AutoDecoder{N,A} <: FiniteDimensionalModel
-  hidden_layers::NTuple{N,Int}
-  activation::A
-end
-
-function AutoDecoder(width::Int=64,
-  depth::Int=3,
-  hidden=ntuple(_ -> width,depth),
-  activation=tanh
-  )
-
-  AutoDecoder(Tuple(hidden),activation)
-end
-
-# Build model
-
-build_model(::NeuralModel,args...) = @abstractmethod
-
-function build_lux_chain(layers::Tuple,activation)
-  l = ()
-  for i in 2:(length(layers)-1)
-    l = (l...,Lux.Dense(layers[i-1] => layers[i],activation))
-  end
-  Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
-end
-
-function build_model(model::GNO,args...)
-  arch = model.kernel_model
-  
-  # Lifting
-  lifting_net = build_lux_chain(arch.lifting_layers,arch.activation)
-  lifting_layers = Lux.Chain(
-    Lux.WrappedFunction(g -> (get_features(g),g.edge_index,g.edge_weights)),
-    Lux.Parallel(
-        GraphData,            # Aggregation function
-        lifting_net,        # v
-        Lux.NoOpLayer(),    # edge_index
-        Lux.NoOpLayer()     # edge_weights
-        )
-  )
-  
-  # Kernel iterations
-  hidden_dim = arch.lifting_layers[end]
-  num_kernel_layers = length(arch.kernel_configs)
-  
-  kernel_layers = [
-    NeuralLayer(
-        GNOKernel(Lux.Dense(2 * hidden_dim + 1 => hidden_dim)),
-        Lux.Dense(hidden_dim => hidden_dim),
-        (hidden_dim,1,1),
-        arch.activation
-    )
-    for _ in 1:num_kernel_layers
-  ]
-  
-  # Projection
-  projection_net = build_lux_chain(arch.projection_layers,arch.activation)
-  projection_layers = Lux.Chain(
-    Lux.WrappedFunction(get_features),
-    projection_net
-  )
-  
-  Lux.Chain(lifting_layers,kernel_layers...,projection_layers)
-end
-
-# Create a DeepONet layers
-function LuxDeepONet(branch_net,trunk_net)
-  Lux.Chain(
-    # Process inputs (u,y) independently, then matrix-multiply them
-    Lux.Parallel(
-      *;
-      # Branch: process 'u' -> shape (Features,Batch)
-      # then transpose (adjoint) -> shape (Batch,Features)
-      branch = Lux.Chain(branch_net,Lux.WrappedFunction(adjoint)),
-
-      # Trunk: process 'y' -> shape (Features,Points)
-      trunk = trunk_net
-    ),
-    # The '*' gives (Batch,Points).
-    # Final transpose (adjoint) -> target shape: (Points,Batch)
-    Lux.WrappedFunction(adjoint)
-  )
-end
-
-function build_model(model::DeepONet,args...)
-  branch_net = build_lux_chain(model.branch_layers,model.activation)
-  trunk_net = build_lux_chain(model.trunk_layers,model.activation)
-  LuxDeepONet(branch_net,trunk_net)
-end
-
-function LuxNOMAD(approximator_net,decoder_net)
-  Lux.Chain(
-    # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
-    Lux.Parallel(
-      vcat;
-      approximator = approximator_net,
-      y_pass_through = Lux.NoOpLayer()
-    ),
-    # Pass the concatenated vector [approximator(u); y] to the decoder
-    decoder_net
-  )
-end
-
-function build_model(model::NOMAD,args...)
-  approximator_net = build_lux_chain(model.approximator_layers,model.activation)
-  decoder_net = build_lux_chain(model.decoder_layers,model.activation)
-  LuxNOMAD(approximator_net,decoder_net)
-end
-
-function build_model(model::AutoEncoder,(values,coords,params))
-  n = size(values,1)
-  encoder = build_lux_chain((n,model.hidden_layers...),model.activation)
-  decoder = build_lux_chain((reverse(model.hidden_layers)...,n),model.activation)
-  Lux.Chain(encoder,decoder)
-end
-
-function build_model(model::AutoDecoder,(values,coords,params))
-  n,ntrain = size(values,1),size(values,2)
-  latent_dim = last(model.hidden_layers)
-  decoder = build_lux_chain((reverse(model.hidden_layers)...,n),model.activation)
-  Z0 = randn(Float32,latent_dim,ntrain) .* 0.01f0
-  Lux.Chain(LatentCodeLayer(Z0),decoder)
-end
-
-function build_model(model::VariationalAutoEncoder,(values,coords,params))
-  n = size(values,1)
-  hidden = model.hidden_layers[1:end-1]
-  latent_dim = last(model.hidden_layers)
-  encoder = build_lux_chain((n,hidden...,2*latent_dim),model.activation)
-  decoder = build_lux_chain((latent_dim,reverse(hidden)...,n),model.activation)
-  VAELayer(encoder,decoder,latent_dim)
-end
-
-function build_model(model::MultiLayerPerceptron,(values,coords,params))
-  m = size(params,1)
-  n = size(values,1)
-  build_lux_chain((m,model.hidden_layers...,n),model.activation)
+  MultiLayerPerceptron(hidden_layers,activation)
 end

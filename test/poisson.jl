@@ -1,27 +1,17 @@
-using Gridap
+using DrWatson
+using Gridap 
 using GridapROMs
-
 using GridapROMs.RBSteady
-using GridapROMs.ParamDataStructures
 using NonlinearROMs
-using Test
-
-method=:pod
-compression=:global
-tol=1e-4
-nparams=50
-nparams_res=floor(Int,nparams/3)
-nparams_jac=floor(Int,nparams/4)
-ncentroids=2
 
 pdomain = (1,10,1,10,1,10)
 pspace = ParamSpace(pdomain)
 
 domain = (0,1,0,1)
-partition = (10,10)
+partition = (50,50)
 model = CartesianDiscreteModel(domain,partition)
 
-order = 2
+order = 1
 degree = 2*order
 
 Ω = Triangulation(model)
@@ -41,44 +31,50 @@ gμ(μ) = parameterise(g,μ)
 h(μ) = x -> abs(cos(μ[3]*x[2]))
 hμ(μ) = parameterise(h,μ)
 
-stiffness(μ,u,v,dΩ) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
-rhs(μ,v,dΩ,dΓn) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
-res(μ,u,v,dΩ,dΓn) = stiffness(μ,u,v,dΩ) - rhs(μ,v,dΩ,dΓn)
-
-trian_res = (Ω,Γn)
-trian_stiffness = (Ω,)
-domains = FEDomains(trian_res,trian_stiffness)
+stiffness(μ,u,v) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
+rhs(μ,v) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
 
 reffe = ReferenceFE(lagrangian,Float64,order)
-test = LexicographicFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
+test = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
 trial = ParamTrialFESpace(test,gμ)
 
-fesolver = LUSolver()
-state_reduction = Reduction(tol,H1();nparams,compression)
-res_reduction = NNHyperReduction(tol;nparams_res,compression)
-jac_reduction = NNHyperReduction(tol;nparams_jac,compression)
-rbsolver = RBSolver(fesolver,state_reduction,res_reduction,jac_reduction)
+feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test)
+fesolver = LinearFESolver(LUSolver())
 
-feop = LinearParamOperator(res,stiffness,pspace,trial,test,domains)
-fesnaps,= solution_snapshots(rbsolver,feop)
-rbop = reduced_operator(rbsolver,feop,fesnaps)
+# FE quantities (snapshots)
 
-μon = realisation(feop;nparams=10,sampling=:uniform)
-x̂,rbstats = solve(rbsolver,rbop,μon)
-x,festats = solution_snapshots(rbsolver,feop,μon)
-perf = eval_performance(rbsolver,rbop,x,x̂,festats,rbstats)
+μ_train = realisation(pspace;nparams=50)
+uhμ_train = solve(fesolver,feop,μ_train)
 
-@test all(isfinite,get_all_data(x̂))
+μ = realisation(pspace;nparams=1)
+uhμ = solve(fesolver,feop,μ)
 
-# operator regression (NNRegression)
+# NO setup
 
-res_reduction_2 = NNRegression(tol;nparams=nparams_res)
-jac_reduction_2 = NNRegression(tol;nparams=nparams_jac)
-rbsolver_2 = RBSolver(fesolver,state_reduction,res_reduction_2,jac_reduction_2)
+dir = datadir("poisson")
 
-rbop_2 = reduced_operator(rbsolver_2,feop,fesnaps)
+x = get_coords(test)
+features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
+input_space(μ) = InputSpace(x,features(μ))
+output_space = OutputSpace(uhμ_train)
 
-x̂_2,rbstats_2 = solve(rbsolver_2,rbop_2,μon)
-perf_2 = eval_performance(rbsolver_2,rbop_2,x,x̂_2,festats,rbstats_2)
+# test 1: Gridap-based spaces
 
-@test all(isfinite,get_all_data(x̂_2))
+fspace = FunctionSpace(test)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(fmodel;epochs=200,loss=H1Loss(fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
+
+# test 2: GNOs
+
+mesh_size = 1/50
+gspace = GraphInducedSpace(test;radius=2*mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(gmodel;epochs=200,loss=H1Loss(fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")

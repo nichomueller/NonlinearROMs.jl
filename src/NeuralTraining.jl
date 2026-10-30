@@ -1,197 +1,157 @@
-function train!(red::KernelReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  function to_device_batch((x_batch,y_batch))
-    n_dofs,n_samples = size(y_batch)
-    # Dynamically compute the number of physical variables
-    out_channels = n_dofs ÷ n_nodes
-    y_reshaped = reshape(y_batch,out_channels,n_nodes,n_samples)
-    return (x_batch |> XDEV,y_reshaped |> XDEV)
+const CDEV = Lux.cpu_device()
+const XDEV = Lux.reactant_device(;force=true)
+
+function build_lux_chain(layers::Tuple,activation)
+  l = ()
+  for i in 2:(length(layers)-1)
+    l = (l...,Lux.Dense(layers[i-1] => layers[i],activation))
   end
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+  Lux.Chain(l...,Lux.Dense(layers[end-1] => layers[end]))
 end
 
-function train!(red::GNOReduction,train_state,dataloader,stats,edge_index,edge_weights)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  edge_index_dev = edge_index |> XDEV
-  edge_weights_dev = edge_weights |> XDEV
-  function to_device_batch((x_batch,y_batch))
-    n_nodes = size(x_batch,2)
-    n_dofs,n_samples = size(y_batch)
-    # Dynamically compute the number of physical variables
-    out_channels = n_dofs ÷ n_nodes
-    y_reshaped = reshape(y_batch,out_channels,n_nodes,n_samples)
-    return (GraphData(x_batch |> XDEV,edge_index_dev,edge_weights_dev),y_reshaped |> XDEV)
-  end
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+build_model(::NeuralModel,args...) = @abstractmethod
+
+function build_kernel_neural_layer(
+  style::IntegralStyle,
+  formatter::DataFormatter,
+  fixed_dims::Int,in_dims::Int,out_dims::Int,
+  activation
+  )
+
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
+  inner = Lux.Dense(inner_dims => out_dims*in_dims)
+  kernel = IntegralKernel(inner,style.measure,formatter)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
-function train!(red::DeepONetReduction,train_state,dataloader,stats,x_data_dev)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((f_batch,u_batch)) = ((f_batch |> XDEV,x_data_dev),u_batch |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+function build_kernel_neural_layer(
+  style::FourierStyle,
+  formatter::DataFormatter,
+  fixed_dims::Int,in_dims::Int,out_dims::Int,
+  activation
+  )
+
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
+  kernel = FourierKernel(inner_dims,out_dims,style.truncation)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
-function train!(red::NOMADReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch(((u_batch,y_batch),v_batch)) = ((u_batch |> XDEV,y_batch |> XDEV),v_batch |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+function build_model(model::KernelNeuralModel,(inputs,outputs))
+  in_dims = size(inputs,1)
+  out_dims = size(outputs,1)
+  widths = (in_dims,model.hidden_layers...,out_dims)
+  lift = Lux.Dense(widths[1] => widths[2],model.activation)
+  klayers = ntuple(
+    i -> build_kernel_neural_layer(
+      model.style,
+      model.formatter,
+      in_dims,
+      widths[i+1],
+      widths[i+2],
+      model.activation
+    ),
+    length(widths)-3
+  )
+  project = Lux.Dense(widths[end-1] => widths[end])
+  Lux.Chain(Lift(lift),klayers...,Project(project))
 end
 
-function train!(red::DeepONetReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+function build_model(model::NOMAD,(inputs,outputs))
+  Lux.Chain(
+    # Apply approximator to 'u', pass 'y' untouched, and concatenate them (vcat)
+    Lux.Parallel(
+      vcat;
+      approximator = build_lux_chain(model.approximator_layers,model.activation),
+      y_pass_through = Lux.NoOpLayer()
+    ),
+    # Pass the concatenated vector [approximator(u); y] to the decoder
+    build_lux_chain(model.decoder_layers,model.activation)
+  )
 end
 
-function train!(red::AutoEncoderReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((xb,yb)) = (xb |> XDEV,yb |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
+function build_model(model::MultiLayerPerceptron,(inputs,outputs))
+  in_dims = size(inputs,1)
+  out_dims = size(outputs,1)
+  build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
-function train!(red::VAEReduction,train_state,dataloader,stats)
-  red = get_reduction(red)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  β = red.model.β
-  loss(model,ps,st,x) = vae_loss(model,ps,st,x;β)
-  to_device_batch(xb) = xb |> XDEV
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;loss,logger)
+function train!(solver::NeuralSolver,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  loss = get_loss(solver)
+  logger = get_logger(solver)
+  to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
+  train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
 end
 
-function train!(red::MultiLayerPerceptron,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  logger = get_logger(red)
-  to_device_batch((x,y)) = (x |> XDEV,y |> XDEV)
-  train_model!(train_state,dataloader,stats,lr_scheduler,to_device_batch;logger)
-end
-
-function get_train_state(red::NeuralReduction,inputs;rng=Random.default_rng(),seed=1234)
+function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(red.model,inputs...)
-  opt = get_optimiser(red)
+  model = build_model(solver,data)
+  opt = get_optimiser(solver)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(red::NeuralReduction,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,inputs)
-  data = prepare_data(red,inputs)
+function get_data_loader(solver::NeuralSolver,data;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(solver,data)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function get_data_loader(red::GNOReduction,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,inputs)
-  data = prepare_data(red,inputs)
-  dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
-  
-  _,coords,_ = inputs
-  graph = build_graph(DistanceGraph(red.model.radius),coords)
-  edge_index,edge_weights = get_edge_tensors(graph)
-
-  (dataloader,edge_index,edge_weights)
+function train(solver::NeuralSolver,data,stats;kwargs...)
+  train_state = get_train_state(solver,data;kwargs...)
+  dataloader = get_data_loader(solver,data;shuffle=true,partial=false)
+  train!(solver,train_state,dataloader,stats)
 end
 
-function get_data_loader(red::DeepONetReduction,inputs;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,inputs)
-  data = prepare_data(red,inputs)
-  dataloader = MLUtils.DataLoader(data;batchsize,shuffle,partial)
-  coords_dev = coords |> XDEV
-  (dataloader,coords_dev)
-end
+"""
+    train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger) -> NeuralOperator
 
-function train(red::NeuralReduction,inputs,stats;kwargs...)
-  train_state = get_train_state(red,inputs;kwargs...)
-  dataloader,args... = get_data_loader(red,inputs;shuffle=true,partial=false)
-  train!(red,train_state,dataloader,stats,args...)
-end
+Generic Lux/Reactant/Enzyme training loop shared by every architecture in this package.
+`to_device_batch` maps one raw batch yielded by `dataloader` to whatever `loss` expects
+as its data argument (already moved to `XDEV`) — DeepONet pairs each batch with a fixed
+set of trunk query points, NOMAD's coordinates are already part of the per-row batch,
+and a plain reconstruction network (AutoEncoder/AutoDecoder) just needs `(x,x)`. `loss`
+defaults to `Lux.MSELoss()`; pass a custom `(model,ps,st,data) -> (loss,st,stats)`
+function for anything else (e.g. a VAE's reconstruction+KL loss). `stats` is the
+normalisation bundled into the returned [`NeuralOperator`](@ref).
+"""
+function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
+  init!(logger)
 
-function train(red::AutoDecoderReduction,inputs,stats;kwargs...)
-  train_state = get_train_state(red,inputs;kwargs...)
-  dataloader,args... = get_data_loader(red,inputs;shuffle=false,partial=false)
-  train!(red,train_state,dataloader,stats,args...)
-end
+  Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
+    for epoch in 1:logger.max_epochs
+      local current_loss = zero(TData)
 
-function train(solver::NeuralSolver,inputs,stats;kwargs...)
-  train(get_reduction(solver),inputs,stats;kwargs...)
-end
+      for raw_batch in dataloader
+        batch_dev = to_device_batch(raw_batch)
 
-function train(
-  solver::NeuralSolver,
-  feop::ParamOperator,
-  data...;
-  normalise=true,
-  kwargs...
-  )
+        _,loss_val,_,train_state = Lux.Training.single_train_step!(
+          Lux.AutoEnzyme(),
+          loss,
+          batch_dev,
+          train_state;
+          return_gradients=Val(false)
+        )
+        current_loss += TData(loss_val)
+      end
+      current_loss /= length(dataloader)
 
-  inputs,stats = get_inputs_and_stats(solver,feop,data...;normalise)
-  train(solver,inputs,stats;kwargs...)
-end
+      step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
 
-function train(
-  solver::NeuralSolver,
-  op::NeuralOperator,
-  data...;
-  update_stats=false,
-  normalise=true,
-  kwargs...
-  )
-
-  inputs,stats = if update_stats
-    get_inputs_and_stats(solver,op,data...;normalise)
-  else
-    inputs = get_inputs(solver,op,data...)
-    stats = get_stats(op)
-    normalise && normalise!(inputs,stats)
-    inputs,stats
+      update!(logger,epoch,current_loss)
+    end
   end
-  train(solver,inputs,stats;kwargs...)
+
+  finalise!(logger)
+  return NeuralOperator(train_state,stats)
 end
 
 # utils
 
-function prepare_data(::AbstractKernelReduction,(values,coords,params))
-  return (tensor_of_coords(coords,params),values)
-end
+_shape_factor(::KernelStyle) = 1
+_shape_factor(::IntegralStyle{<:GraphMeasure}) = 2
 
-function prepare_data(::NeuralSolver{<:DeepONetReduction},(values,coords,params))
-  (params,values)
-end
+_augment_dims(::DataFormatter{<:Any,<:Any,C}) where C = C
 
-function prepare_data(::NeuralSolver{<:NOMADReduction},(values,coords,params))
-  ntot = size(coords,2)*size(params,2)
-  p = zeros(eltype(params),size(params,1),ntot)
-  x = zeros(eltype(coords),size(coords,1),ntot)
-  d = zeros(eltype(values),1,ntot)
-
-  col = 1
-  @views for i in axes(params,2)
-    p = params[:,i]
-    for j in axes(coords,2)
-      p[:,col] = p
-      x[:,col] = coords[:,j]
-      d[1,col] = data[j,i]
-      col += 1
-    end
-  end
-
-  (p,x),d
-end
-
-for T in (:AutoEncoderReduction,:AutoDecoderReduction,:VAEReduction,)
-  @eval begin
-    function prepare_data(::NeuralSolver{<:$T},(values,coords,params))
-      (values,values)
-    end
-  end
-end
-
-function prepare_data(::NeuralSolver{<:MLPReduction},(values,coords,params))
-  (params,values)
+function _get_inner_dims(s,d,fixed_dims,in_dims)
+  _shape_factor(s) * (fixed_dims + _augment_dims(d)*in_dims)
 end
