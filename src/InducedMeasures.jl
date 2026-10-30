@@ -73,48 +73,59 @@ function integration(a::AbstractInputData,meas::MultiGraphMeasure)
   return out
 end
 
+"""
+    restrict_edge_data(space::MultiGraphInducedSpace,gdata::AbstractInputData,l::Int=1)
+
+Gathers the global, vertex-indexed `gdata` (one column per point in
+`space`'s shared union of coordinates) onto block `l`'s own local graph
+edges (one column per edge, each holding its source vertex's global data,
+through `space.l_to_lcoord_to_coords[l]`'s local-to-global index map) --
+local counterpart of [`gather_data`](@ref), and built the same way, via
+`NNlib.gather` on plain (non-traced) integer index arrays computed from the
+graph structure alone, rather than a per-edge `setindex!` loop: at a few
+thousand edges per block (routine for a radius graph), such a loop gets
+unrolled into one MLIR op per edge, which is exactly what `gather_data`'s
+own docstring warns can exhaust Reactant's tracing budget.
+"""
 function restrict_edge_data(
   space::MultiGraphInducedSpace,
   gdata::AbstractInputData,
   l::Int=1
   )
-  
-  lspace = space[l]
-  lgraph = get_graph(lspace)
+
+  lgraph = get_graph(space[l])
   lcoord_to_coords = space.l_to_lcoord_to_coords[l]
 
-  D,_,K = size(gdata)
-  Ne = ne(lgraph)
-  ldata = zeros(eltype(gdata),D,Ne,K)
-  @inbounds @views for e in edges(lgraph)
-    lc = src(e)
-    c = lcoord_to_coords[lc]
-    ldata[:,lc,:] .= gdata[:,c,:]
-  end
-  
-  return ldata
+  ids = lcoord_to_coords[src.(edges(lgraph))]
+  g′ = permutedims(gdata,(1,3,2))
+  ldata′ = NNlib.gather(g′,ids)
+  permutedims(ldata′,(1,3,2))
 end
 
+"""
+    expand_vertex_data(space::MultiGraphInducedSpace,ldata::AbstractInputData,l::Int=1)
+
+Scatters block `l`'s local, vertex-indexed `ldata` (the result of integrating
+over block `l`'s own local graph) back onto `space`'s shared global vertex
+indexing, through `space.l_to_lcoord_to_coords[l]`'s local-to-global index
+map (injective, so this amounts to a placement rather than an accumulation)
+-- local counterpart of [`scatter_data`](@ref), and built the same way, via
+`NNlib.scatter` on a plain (non-traced) index array, for the same
+Reactant-tracing-budget reason as [`restrict_edge_data`](@ref).
+"""
 function expand_vertex_data(
   space::MultiGraphInducedSpace,
   ldata::AbstractInputData,
   l::Int=1
   )
 
-  lspace = space[l]
   ggraph = get_graph(space)
-  lgraph = get_graph(lspace)
   lcoord_to_coords = space.l_to_lcoord_to_coords[l]
 
-  D,_,K = size(ldata)
-  Nv = nv(ggraph)
-  gdata = zeros(eltype(ldata),D,Nv,K)
-  @inbounds @views for lc in 1:nv(lgraph)
-    c = lcoord_to_coords[lc]
-    gdata[:,c,:] .= ldata[:,lc,:]
-  end
-  
-  return gdata
+  d,_,k = size(ldata)
+  l′ = permutedims(ldata,(1,3,2))
+  out′ = NNlib.scatter(+,l′,lcoord_to_coords;dstsize=(d,k,nv(ggraph)))
+  permutedims(out′,(1,3,2))
 end
 
 # utils

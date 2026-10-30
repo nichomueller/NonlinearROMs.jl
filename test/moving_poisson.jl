@@ -80,7 +80,7 @@ uhμ = solve(fesolver,feop,μ)
 
 gspace = MultiGraphInducedSpace(test1,test2;radius=2*hd)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fesolver,gmodel;epochs=200,print_every=50)
+solver = NeuralSolver(gmodel;epochs=200,print_every=50)
 input_space = InputSpace(get_coords(gspace),features(μ_train1),features(μ_train2))
 output_space = OutputSpace(uhμ_train1,uhμ_train2)
 op = neural_operator(solver,input_space,output_space)

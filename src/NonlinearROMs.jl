@@ -10,14 +10,14 @@ into its own repository, and plugs back into them via multiple dispatch:
 - **Neural network models** (`NeuralModels.jl`/`NeuralLayers.jl`) — `DeepONet`,
   `NOMAD`, `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`,
   `AutoDecoder`, `KernelNeuralModel`; all trained through the same
-  Lux/Reactant/Enzyme pipeline (`NeuralReduction`, `train_model!`).
+  Lux/Reactant/Enzyme pipeline (`NeuralSolver`, `train_model!`).
 
 - **Direct neural surrogates** — [`NeuralSolver`](@ref)/[`NeuralOperator`](@ref)
-  train a [`NeuralReduction`](@ref)'s model (through its `DeepONetReduction`/
-  `NOMADReduction`/`KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/
-  `VAEReduction`/`MLPReduction` alias) to map parameters directly to the
-  full-order solution, bypassing FE assembly entirely; `reduced_operator`
-  plugs this into the same offline/online API as `GridapROMs`' RB solvers.
+  train a model (through its `DeepONetReduction`/`NOMADReduction`/
+  `KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/`VAEReduction`/
+  `MLPReduction` alias) to map parameters directly to the full-order solution,
+  bypassing FE assembly entirely; `reduced_operator` plugs this into the same
+  offline/online API as `GridapROMs`' RB solvers.
 
 - **Steady hyper-reduction** — `NNRegression` (operator regression),
   `NNHyperReduction` (NN-predicted EIM coefficients), `NNRegressor`,
@@ -156,19 +156,18 @@ export NOMAD
 export MultiLayerPerceptron
 include("NeuralModels.jl")
 
-export NNRegression
-export NNHyperReduction
-export TransientNNRegression
-export TransientNNHyperReduction
-export NeuralReduction
-export NOMADReduction
-export KernelReduction
-include("NeuralReductions.jl")
-
 export NeuralSolver
 export NeuralOperator
 export neural_operator
 include("NeuralOperators.jl")
+
+export NNRegression
+export NNHyperReduction
+export TransientNNRegression
+export TransientNNHyperReduction
+export NOMADReduction
+export KernelReduction
+include("NeuralReductions.jl")
 
 export collect_trajectory
 export rollout_data

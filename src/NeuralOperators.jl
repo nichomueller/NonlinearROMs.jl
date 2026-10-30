@@ -1,51 +1,114 @@
 """
     struct NeuralSolver{A<:NeuralModel} <: ROMSolver
-      reduction::NeuralReduction{A}
+      model::A
+      epochs::Int
+      batch_size::Int
+      formatter::DataFormatter
+      optimiser::Optimiser
+      loss::Function
+      trainlog::TrainingLog
     end
 
-    NeuralSolver(reduction::NeuralReduction)
+    NeuralSolver(
+      model::NeuralModel;
+      epochs::Int=20000,
+      batch_size::Int=0,
+      formatter=DataFormatter(model),
+      lr_scheduler=CosineAnnealing(epochs),
+      loss=Lux.MSELoss(),
+      name=string(nameof(typeof(model))),
+      verbose::Bool=true,
+      print_every::Int=500,
+      kwargs...
+      )
 
-Initializes the Reduced Basis Solver for Neural Operators.
+The Reduced Basis Solver for Neural Operators: bundles a neural architecture
+with its training hyperparameters. The keyword constructor is the intended
+entry point: it builds the `optimiser`/`trainlog` fields from
+`lr_scheduler`(`;kwargs...`) and `verbose`/`print_every` respectively.
 
 # Arguments
-- `reduction::NeuralReduction`: The configured neural reduction strategy (e.g., `DeepONetReduction` or `NOMADReduction`).
+- `model`: Any [`NeuralModel`](@ref) architecture — [`DeepONet`](@ref)/[`NOMAD`](@ref),
+  [`MultiLayerPerceptron`](@ref), [`AutoEncoder`](@ref)/[`AutoDecoder`](@ref)/
+  [`VariationalAutoEncoder`](@ref), or a [`KernelNeuralModel`](@ref).
+- `epochs::Int`: Total number of training epochs. Default: `20000`.
+- `batch_size::Int`: The batch size for training. If `0` (or negative), defaults
+  to the total number of available samples (full-batch). Default: `0`.
+- `formatter::DataFormatter`: Controls which of the model's `(coords,features)`
+  inputs are passed/sampled. Default: `DataFormatter(model)`.
+- `lr_scheduler`: The learning rate scheduler to use (e.g., `CosineAnnealing(epochs)`,
+  `ReduceLROnPlateau()`). Default: `CosineAnnealing(epochs)`.
+- `loss`: The training loss. Default: `Lux.MSELoss()`.
+- `verbose::Bool`: If `true`, prints compilation times, training progress, and
+  loss metrics. Default: `true`.
+- `print_every::Int`: Frequency (in epochs) of the training progress output.
+  Default: `500`.
 
 # Examples
 
 **Minimal Default Initialization:**
 ```julia
-# Default hyperparameters (20000 epochs, full-batch, etc.), 2 params -> Branch, 2D coords -> Trunk
-solver = NeuralSolver(LUSolver(),DeepONetReduction(model=DeepONet(2,2)))
+# Default hyperparameters (20000 epochs, full-batch, etc.)
+solver = NeuralSolver(DeepONet(2,2))
 ```
 **Custom Initialization:**
 ```julia
 using Lux
 
-reduction = NeuralReduction(
+solver = NeuralSolver(
   DeepONet(2,2;width=128,depth=4,activation=Lux.gelu),
-  epochs = 1000
+  epochs=1000
 )
-solver = NeuralSolver(ThetaMethod(LUSolver(),dt,θ),reduction)
 ```
 """
 struct NeuralSolver{A<:NeuralModel} <: ROMSolver
-  reduction::NeuralReduction{A}
+  model::A
+  epochs::Int
+  batch_size::Int
+  formatter::DataFormatter
+  optimiser::Optimiser
+  loss::Function
+  trainlog::TrainingLog
 end
 
-function NeuralSolver(model::NeuralModel;kwargs...)
-  reduction = NeuralReduction(model;kwargs...)
-  NeuralSolver(reduction)
+function NeuralSolver(
+  model::NeuralModel;
+  epochs::Int=20000,
+  batch_size::Int=0,
+  formatter=DataFormatter(model),
+  lr_scheduler=CosineAnnealing(epochs),
+  loss=Lux.MSELoss(),
+  name=string(nameof(typeof(model))),
+  verbose::Bool=true,
+  print_every::Int=500,
+  kwargs...
+  )
+
+  optimiser = Optimiser(;lr_scheduler,kwargs...)
+  trainlog = TrainingLog(name,epochs;verbose,print_every)
+  NeuralSolver(
+    model,
+    epochs,
+    batch_size,
+    formatter,
+    optimiser,
+    loss,
+    trainlog
+  )
 end
 
-get_reduction(s::NeuralSolver) = s.reduction
+get_formatter(s::NeuralSolver) = s.formatter
+get_optimiser(s::NeuralSolver) = s.optimiser.opt
+get_scheduler(s::NeuralSolver) = s.optimiser.lr_scheduler
+get_loss(s::NeuralSolver) = s.loss
+get_logger(s::NeuralSolver) = s.trainlog
+build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
 
-get_formatter(s::NeuralSolver) = get_formatter(s.reduction)
-get_optimiser(s::NeuralSolver) = get_optimiser(s.reduction)
-get_scheduler(s::NeuralSolver) = get_scheduler(s.reduction)
-get_loss(s::NeuralSolver) = get_loss(s.reduction)
-get_logger(s::NeuralSolver) = get_logger(s.reduction)
-build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.reduction,args...;kwargs...)
-resolve_batch_size(s::NeuralSolver,inputs) = resolve_batch_size(s.reduction,inputs)
+function resolve_batch_size(s::NeuralSolver,(inputs,outputs))
+  bs = s.batch_size
+  ns = num_samples(inputs)
+  bs > 0 ? min(bs,ns) : ns
+end
 
 """
     struct NeuralOperator{A,B,C,D} <: AbstractLuxLayer
