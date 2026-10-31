@@ -135,7 +135,7 @@ Recipe for a dense feed-forward network used for scalar/vector regression (e.g.
 predicting EIM/reduced-basis coefficients from parameter values). `hidden_layers`
 holds only the hidden widths (e.g. `(64,64)`); the input/output dimensions are
 inferred from the training data at [`train_neural_coefficient`](@ref) call time, since
-one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralReduction`](@ref))
+one `MultiLayerPerceptron` recipe is typically reused (via [`NeuralSolver`](@ref))
 to train many differently-shaped networks (one per triangulation/reduced quantity).
 """
 struct MultiLayerPerceptron{N,A} <: NeuralModel

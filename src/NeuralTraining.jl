@@ -75,35 +75,31 @@ function build_model(model::MultiLayerPerceptron,(inputs,outputs))
   build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
-function train!(red::NeuralReduction,train_state,dataloader,stats)
-  lr_scheduler = get_scheduler(red)
-  loss = get_loss(red)
-  logger = get_logger(red)
+function train!(solver::NeuralSolver,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  loss = get_loss(solver)
+  logger = get_logger(solver)
   to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
 end
 
-function get_train_state(red::NeuralReduction,data;rng=Random.default_rng(),seed=1234)
+function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
-  model = build_model(red,data)
-  opt = get_optimiser(red)
+  model = build_model(solver,data)
+  opt = get_optimiser(solver)
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(red::NeuralReduction,data;shuffle=true,partial=false)
-  batchsize = resolve_batch_size(red,data)
+function get_data_loader(solver::NeuralSolver,data;shuffle=true,partial=false)
+  batchsize = resolve_batch_size(solver,data)
   MLUtils.DataLoader(data;batchsize,shuffle,partial)
 end
 
-function train(red::NeuralReduction,data,stats;kwargs...)
-  train_state = get_train_state(red,data;kwargs...)
-  dataloader = get_data_loader(red,data;shuffle=true,partial=false)
-  train!(red,train_state,dataloader,stats)
-end
-
 function train(solver::NeuralSolver,data,stats;kwargs...)
-  train(get_reduction(solver),data,stats;kwargs...)
+  train_state = get_train_state(solver,data;kwargs...)
+  dataloader = get_data_loader(solver,data;shuffle=true,partial=false)
+  train!(solver,train_state,dataloader,stats)
 end
 
 """

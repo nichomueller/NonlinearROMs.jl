@@ -28,7 +28,7 @@ features_fn(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
 input_space,output_space = rollout_data(fspace,features_fn,times,states)
 
 model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fesolver,model;epochs=200,print_every=50)
+solver = NeuralSolver(model;epochs=200,print_every=50)
 op = neural_operator(solver,input_space,output_space)
 
 predicted_states = rollout(solver,op,fspace,features_fn,times,states[1])

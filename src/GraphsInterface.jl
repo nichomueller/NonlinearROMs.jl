@@ -282,7 +282,7 @@ function build_graph(coords::AbstractVector;kwargs...)
   tree = BallTree(data)
   g = WeightedSimpleDiGraph(length(coords))
   build_graph!(g,tree,coords;kwargs...)
-  return GraphInducedSpace(g,coords)
+  return g
 end
 
 function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)

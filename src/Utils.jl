@@ -266,29 +266,6 @@ function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
   return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
 end
 
-# Gridap fixes
-
-function FESpaces.gather_free_and_dirichlet_values!(
-  fmdof_to_val::AbstractVector{T},
-  dmdof_to_val::AbstractVector{T},
-  f::FESpaceWithLinearConstraints,
-  cell_to_ludof_to_val
-  ) where T
-
-  fdof_to_val = Vector{T}(undef,num_free_dofs(f.space))
-  ddof_to_val = Vector{T}(undef,num_dirichlet_dofs(f.space))
-  gather_free_and_dirichlet_values!(fdof_to_val,ddof_to_val,f.space,cell_to_ludof_to_val)
-  FESpaces._setup_mdof_to_val!(
-    fmdof_to_val,
-    dmdof_to_val,
-    fdof_to_val,
-    ddof_to_val,
-    f.mDOF_to_DOF,
-    f.n_fdofs,
-    f.n_fmdofs)
-  fmdof_to_val,dmdof_to_val
-end
-
 # visualisation
 
 function visualise(
