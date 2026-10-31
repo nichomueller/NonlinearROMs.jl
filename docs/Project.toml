@@ -8,8 +8,8 @@ Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
 NonlinearROMs = "dcd789dd-871c-4daf-91a9-c07bc3379936"
 
 [sources]
-NonlinearROMs = {path = "/home/nmueller/git_repos/NonlinearROMs.jl"}
-GridapROMs = {path = "/home/nmueller/git_repos/GridapROMs.jl/"}
+NonlinearROMs = {path = "/home/nicholas/git_repos/NonlinearROMs.jl"}
+GridapROMs = {path = "/home/nicholas/git_repos/GridapROMs.jl/"}
 
 [compat]
 DrWatson = "2.19.1"

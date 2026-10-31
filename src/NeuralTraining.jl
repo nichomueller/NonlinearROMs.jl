@@ -91,14 +91,14 @@ function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(solver::NeuralSolver,data;shuffle=true,partial=false)
+function get_data_loader(solver::NeuralSolver,data;kwargs...)
   batchsize = resolve_batch_size(solver,data)
-  MLUtils.DataLoader(data;batchsize,shuffle,partial)
+  MLUtils.DataLoader(data;batchsize,kwargs...)
 end
 
-function train(solver::NeuralSolver,data,stats;kwargs...)
-  train_state = get_train_state(solver,data;kwargs...)
-  dataloader = get_data_loader(solver,data;shuffle=true,partial=false)
+function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
+  train_state = get_train_state(solver,data;rng,seed)
+  dataloader = get_data_loader(solver,data;kwargs...)
   train!(solver,train_state,dataloader,stats)
 end
 

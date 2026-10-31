@@ -156,11 +156,11 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=3),dims=3)
-  σ = dropdims(std(data,dims=3),dims=3)
+  μ = dropdims(mean(data,dims=(2,3)),dims=(2,3))
+  σ = dropdims(std(data,dims=(2,3)),dims=(2,3))
   # Avoid dividing by zero if a feature is constant
   @inbounds for i in eachindex(σ)
-    iszero(σ[i]) && (σ[i] = one(eltype(σ)))
+    iszero(σ[i]) && (σ[i] = eps(eltype(σ)))
   end
   return ZScore(μ,σ)
 end
