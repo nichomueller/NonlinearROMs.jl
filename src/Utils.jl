@@ -111,42 +111,52 @@ abstract type AbstractScore end
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
 
-struct MScore{A<:Union{Nothing,Number}} <: AbstractScore
-  max::A
+struct RScore{A} <: AbstractScore
+  lower::A
+  upper::A
 end
 
-const NoMScore = MScore{Nothing}
+const NoRScore = RScore{Nothing}
 
-MScore(::Nothing;kwargs...) = MScore(nothing)
+RScore(::Nothing;kwargs...) = RScore(nothing,nothing)
 
-function MScore(data::AbstractInputData;normalise=true)
-  max = maximum(abs,data)
-  normalise && (data ./= max)
-  MScore(max)
+function RScore(data::AbstractInputData;normalise=true)
+  if normalise
+    stats = RScore(data;normalise=false)
+    normalise!(data,stats)
+    return stats
+  end
+  l = dropdims(minimum(data,dims=(2,3)),dims=(2,3))
+  u = dropdims(maximum(data,dims=(2,3)),dims=(2,3))
+  return RScore(l,u)
 end
 
-function normalise!(data,score::NoMScore)
+function normalise!(data::AbstractInputData,score::NoRScore)
   data
 end
 
-function normalise!(data,score::MScore)
-  rdiv!(data,score.max)
+function normalise!(data::AbstractInputData,score::RScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .- score.lower[d]) ./ (score.upper[d] - score.lower[d])
+  end
 end
 
-function denormalise!(data,score::NoMScore)
+function denormalise!(data::AbstractInputData,score::NoRScore)
   data
 end
 
-function denormalise!(data,score::MScore)
-  rmul!(data,score.max)
+function denormalise!(data::AbstractInputData,score::RScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .* (score.upper[d] - score.lower[d])) .+ score.lower[d]
+  end
 end
 
-struct ZScore{A,B} <: AbstractScore
+struct ZScore{A} <: AbstractScore
   μ::A
-  σ::B
+  σ::A
 end
 
-const NoZScore = ZScore{Nothing,Nothing}
+const NoZScore = ZScore{Nothing}
 
 ZScore(::Nothing;kwargs...) = ZScore(nothing,nothing)
 
@@ -165,51 +175,28 @@ function ZScore(data::AbstractInputData;normalise=true)
   return ZScore(μ,σ)
 end
 
-function normalise!(data::AbstractMatrix,score::NoZScore)
+function normalise!(data::AbstractInputData,score::NoZScore)
   data
 end
 
-function normalise!(data::AbstractMatrix,stats::ZScore)
-  data .-= stats.μ
-  data ./= stats.σ
+function normalise!(data::AbstractInputData,stats::ZScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .- stats.μ) ./ stats.σ
+  end
+end
+
+function denormalise!(data::AbstractInputData,score::NoZScore)
   data
 end
 
-function denormalise!(data::AbstractMatrix,score::NoZScore)
-  data
-end
-
-function denormalise!(data::AbstractMatrix,stats::ZScore)
-  data .*= stats.σ
-  data .+= stats.μ
-  data
-end
-
-for f in (:normalise!,:denormalise!)
-  @eval begin
-    function $f(data::AbstractInputData,stats::ZScore)
-      @inbounds for m in eachslice(data,dims=3)
-        $f(m,stats)
-      end
-      data
-    end
+function denormalise!(data::AbstractInputData,stats::ZScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .* stats.σ) .+ stats.μ
   end
 end
 
 struct Scores{A} <: AbstractScore
   scores::A
-end
-
-for f in (:MScore,:ZScore)
-  @eval begin
-    function $f(data::NamedTuple;kwargs...)
-      scores = NamedTuple()
-      for (k,v) in pairs(data)
-        scores = merge(scores,NamedTuple{(k,)}(($f(v;kwargs...),)))
-      end
-      return Scores(scores)
-    end
-  end
 end
 
 for f in (:normalise!,:denormalise!)
@@ -228,9 +215,9 @@ struct Normalisation{A<:AbstractScore,B<:AbstractScore}
   output_score::B
 end
 
-function Normalisation((input,output);kwargs...)
-  input_score = ZScore(input;kwargs...)
-  output_score = MScore(output;kwargs...)
+function Normalisation(((coords,features),output);kwargs...)
+  input_score = Scores((coords=RScore(coords;kwargs...),features=ZScore(features;kwargs...)))
+  output_score = ZScore(output;kwargs...)
   Normalisation(input_score,output_score)
 end
 

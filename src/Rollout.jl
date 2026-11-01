@@ -80,7 +80,7 @@ into `times`/`states`/`FeatureBundle` itself).
 Predicting the *change* `u(t+dt)-u(t)` rather than the absolute next state is the
 standard choice for autoregressive PDE surrogates: it's a smaller, more stationary
 target (the "do nothing" baseline is already close to right), which eases
-optimisation and keeps `MScore`'s single global `max` from being dominated by
+optimisation and keeps `RScore`'s single global `max` from being dominated by
 whichever field has the largest absolute magnitude rather than the largest *change*.
 `rollout` undoes this (`u(t+dt) = u(t) + predicted_change`) automatically.
 
