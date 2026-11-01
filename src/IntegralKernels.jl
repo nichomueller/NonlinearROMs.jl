@@ -65,10 +65,11 @@ end
 # we potentially want to replace the space with a new one during the online phase
 # thus we make this struct mutable
 """
-    mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
+    mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter,D} <: AbstractIntegralKernel
       const kernel::A
       measure::B
       formatter::C
+      channels::D
     end
 
 Wraps a plain network `kernel` into a non-local integral operator
@@ -79,13 +80,20 @@ running hidden state from the previous layer. `formatter` (its own, layer-local
 [`DataFormatter`](@ref)) decides which of `(x,a(x))`/`v` actually get concatenated
 and fed to `kernel` -- different layers legitimately want different subsets
 (Kovachki et al.'s three kernel cases `κ(x,y)`/`κ(x,y,a(x),a(y))`/`κ(x,y,v(x),v(y))`
-are exactly a choice of `formatter`). `fixed_data` passes through unchanged so the
-next layer can use it too.
+are exactly a choice of `formatter`). `channels` are the rows of `fixed_data`
+matching `formatter`'s `pass_coords`/`pass_features` (see
+[`get_kernel_channels`](@ref)), `:` keeping all of them. `fixed_data` passes
+through unchanged so the next layer can use it too.
 """
-mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
+mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter,D} <: AbstractIntegralKernel
   const kernel::A
   measure::B
   const formatter::C
+  const channels::D
+end
+
+function IntegralKernel(kernel::AbstractLuxLayer,measure::InducedMeasure,formatter::DataFormatter)
+  IntegralKernel(kernel,measure,formatter,Colon())
 end
 
 get_in_dimension(k::IntegralKernel) = get_in_dimension(k.kernel)
@@ -100,7 +108,7 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)((fixed_data,v),ps,st)
-  x = merge_data(l.formatter,fixed_data,v)
+  x = merge_data(l.formatter,select_channels(fixed_data,l.channels),v)
   xk = kernel_input(x,l.measure)
   k,st = l.kernel(xk,ps,st)
   y = kv(k,v,l.measure)
@@ -244,6 +252,43 @@ function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
 end
 
 # utils
+
+"""
+    get_kernel_channels(kernel_formatter,fixed_formatter,ncoords,fixed_dims)
+
+Rows of the fixed per-sample input (laid out as `[x;a(x)]` by `fixed_formatter`,
+with `ncoords` coordinate channels and `fixed_dims` channels overall) that
+`kernel_formatter`'s `pass_coords`/`pass_features` ask to feed to `κ_θ`. A part
+`fixed_formatter` doesn't pass in the first place can't be selected, and is
+silently skipped. Returns `:` when everything is selected, `nothing` when nothing is.
+"""
+function get_kernel_channels(
+  kernel_formatter::DataFormatter{KC,KF},
+  fixed_formatter::DataFormatter{FC},
+  ncoords::Int,
+  fixed_dims::Int
+  ) where {KC,KF,FC}
+
+  nc = FC ? ncoords : 0
+  coords = KC ? (1:nc) : (1:0)
+  features = KF ? ((nc+1):fixed_dims) : (1:0)
+  if isempty(coords) && isempty(features)
+    nothing
+  elseif length(coords)+length(features) == fixed_dims
+    Colon()
+  elseif isempty(features)
+    coords
+  elseif isempty(coords)
+    features
+  else
+    @check last(coords)+1 == first(features)
+    first(coords):last(features)
+  end
+end
+
+select_channels(data,::Colon) = data
+select_channels(data,::Nothing) = nothing
+select_channels(data::AbstractInputData,ids::AbstractUnitRange) = view(data,ids,:,:)
 
 function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
   k,in_dims,out_dims = size(W)

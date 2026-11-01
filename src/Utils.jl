@@ -181,7 +181,7 @@ end
 
 function normalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
-    data[d,:,:] .= (vd .- stats.μ) ./ stats.σ
+    data[d,:,:] .= (vd .- stats.μ[d]) ./ stats.σ[d]
   end
 end
 
@@ -191,7 +191,7 @@ end
 
 function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
-    data[d,:,:] .= (vd .* stats.σ) .+ stats.μ
+    data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
   end
 end
 
