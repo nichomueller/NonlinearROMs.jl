@@ -95,27 +95,27 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     @test size(fetched.features) == (feat_dims,length(sub_ids),K)
 
     # Kovachki et al. Eq. (7): κ(x, y) -> coordinates only
-    fmt_spatial = DataFormatter(pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false))
-    m_spatial = merge_data(fmt_spatial,fixed_data,v_state)
+    fmt_spatial = SpatialKernelFormatter()
+    m_spatial = merge_data(fmt_spatial,fixed_data,v_state,coord_dims)
     @test size(m_spatial) == (coord_dims,N,K)
     @test m_spatial == view(fixed_data,1:coord_dims,:,:)
 
     # Kovachki et al. Eq. (8): κ(x, y, a(x), a(y)) -> coordinates and PDE features
-    fmt_feature = DataFormatter(pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(false))
-    m_feature = merge_data(fmt_feature,fixed_data,v_state)
+    fmt_feature = FeatureKernelFormatter()
+    m_feature = merge_data(fmt_feature,fixed_data,v_state,coord_dims)
     @test size(m_feature) == (fixed_dims,N,K)
     @test m_feature == fixed_data
 
     # Kovachki et al. Eq. (9): κ(x, y, v(x), v(y)) -> coordinates and latent state v
-    fmt_state = DataFormatter(pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(true))
-    m_state = merge_data(fmt_state,fixed_data,v_state)
+    fmt_state = StateKernelFormatter()
+    m_state = merge_data(fmt_state,fixed_data,v_state,coord_dims)
     @test size(m_state) == (coord_dims + latent_dims,N,K)
     @test m_state[1:coord_dims,:,:] == view(fixed_data,1:coord_dims,:,:)
     @test m_state[(coord_dims+1):end,:,:] == v_state
 
     # Full formulation: κ(x, y, a(x), a(y), v(x), v(y))
-    fmt_full = DataFormatter(pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(true))
-    m_full = merge_data(fmt_full,fixed_data,v_state)
+    fmt_full = FullKernelFormatter()
+    m_full = merge_data(fmt_full,fixed_data,v_state,coord_dims)
     @test size(m_full) == (fixed_dims + latent_dims,N,K)
   end
 
@@ -146,7 +146,8 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     uh = solve(fesolver,feop,μ)
 
     fb = FeatureBundle((aμ(μ),fμ(μ)))
-    in_space = InputSpace(get_coords(V),fb)
+    # Test constructor accepting FESpace directly as first argument
+    in_space = InputSpace(V,fb)
     out_space = OutputSpace(uh)
 
     N = length(get_coords(V))

@@ -317,15 +317,24 @@ column per endpoint (`NNlib.gather`, unlike `scatter`, never accumulates, so the
 no `op`/`dstsize` to combine src/dst into one pass -- two separate gathers are needed,
 one per endpoint, then `vcat`'d along the channel axis).
 """
-function gather_data(vals::AbstractInputData,g::AbstractGraph)
+function gather_data(
+  vals::AbstractInputData,
+  g::AbstractGraph,
+  ids_src=Int[src(e) for e in edges(g)],
+  ids_dst=Int[dst(e) for e in edges(g)],
+  edge_weights=nothing
+  )
+
   @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
-  ids_src,ids_dst = map(edges(g)) do e
-    (src(e),dst(e))
-  end |> tuple_of_arrays
   v′ = permutedims(vals,(1,3,2))
   src′ = NNlib.gather(v′,ids_src)
   dst′ = NNlib.gather(v′,ids_dst)
-  out′ = vcat(src′,dst′)
+  out′ = if isnothing(edge_weights)
+    vcat(src′,dst′)
+  else
+    w′ = (src′[1:1,:,:] .* zero(TData)) .+ edge_weights
+    vcat(src′,dst′,w′)
+  end
   permutedims(out′,(1,3,2))
 end
 
@@ -352,10 +361,9 @@ path to stay off the traced call stack entirely). `NNlib.scatter`'s own edge axi
 the array's *last* dimension, not `vals`'s second (see `AbstractInputData`'s
 `(D,N,K)` layout), hence the `permutedims` wrapping either side of the call.
 """
-function scatter_data(vals::AbstractInputData,g::AbstractGraph)
+function scatter_data(vals::AbstractInputData,g::AbstractGraph,ids_src=nothing,ids_dst=Int[dst(e) for e in edges(g)])
   @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
   d,_,k = size(vals)
-  ids_dst = dst.(edges(g))
   v′ = permutedims(vals,(1,3,2))
   out′ = NNlib.scatter(+,v′,ids_dst;dstsize=(d,k,nv(g)))
   permutedims(out′,(1,3,2))
@@ -375,9 +383,8 @@ same Reactant/MLIR-scaling reason. `scores`/`dsts` are already 1-D (one entry pe
 edge, no channel/sample axes), so no `permutedims` wrapping is needed here, unlike
 `gather_data`/`scatter_data`.
 """
-function attention(scores::AbstractVector{T},g::AbstractGraph) where T
+function attention(scores::AbstractVector{T},g::AbstractGraph,ids_src=nothing,dsts=Int[dst(e) for e in edges(g)]) where T
   @check length(scores) == ne(g) "The number of scores must match the number of graph edges"
-  dsts = dst.(edges(g))
   maxs = NNlib.scatter(max,scores,dsts;dstsize=(nv(g),),init=T(-Inf))
   α = exp.(scores .- maxs[dsts])
   sums = NNlib.scatter(+,α,dsts;dstsize=(nv(g),))

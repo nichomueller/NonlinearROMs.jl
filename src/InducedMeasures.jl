@@ -15,11 +15,12 @@ end
 
 function compute_weights(f::GraphInducedSpace)
   graph = get_graph(f)
-  w = zeros(Int,nv(graph))
-  for e in edges(graph)
-    w[dst(e)] += 1
+  deg = zeros(Int,nv(graph))
+  for d in f.dst_ids
+    deg[d] += 1
   end
-  return w
+  inv_deg = TData[d > 0 ? inv(TData(d)) : zero(TData) for d in deg]
+  return reshape(inv_deg,1,nv(graph),1)
 end
 
 function compute_weights(f::MultiGraphInducedSpace)
@@ -41,7 +42,7 @@ function InducedMeasure(space::DiscreteSpace)
 end
 
 const FESpaceMeasure = InducedMeasure{<:FunctionSpace{<:FESpace},<:AbstractMatrix}
-const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractVector}
+const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractArray}
 const MultiGraphMeasure = InducedMeasure{<:MultiGraphInducedSpace,<:Tuple}
 
 integration(a,meas::InducedMeasure) = @abstractmethod
@@ -142,13 +143,9 @@ end
 function _integration(a::AbstractInputData,meas::GraphMeasure)
   w = get_weights(meas)
   space = get_space(meas)
-  out = scatter_data(a,space)
-  @views for i in axes(out,2)
-    !iszero(w[i]) && (out[:,i,:] ./= w[i])
-  end
-  return out
+  scatter_data(a,space) .* w
 end
-
+  
 function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
   D,N,K = size(x)
   x2 = reshape(permutedims(x,(2,1,3)),N,D*K)

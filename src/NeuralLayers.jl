@@ -15,7 +15,10 @@ Lux.initialparameters(rng::AbstractRNG,l::Lift) = Lux.initialparameters(rng,l.la
 Lux.initialstates(rng::AbstractRNG,l::Lift) = Lux.initialstates(rng,l.layer)
 
 function (l::Lift)(fixed_data,ps,st)
-  v,st = l.layer(fixed_data,ps,st)
+  sz = size(fixed_data)
+  x_2d = reshape(fixed_data,sz[1],:)
+  v_2d,st = l.layer(x_2d,ps,st)
+  v = reshape(v_2d,size(v_2d,1),Base.tail(sz)...)
   return (fixed_data,v),st
 end
 
@@ -34,7 +37,11 @@ Lux.initialparameters(rng::AbstractRNG,l::Project) = Lux.initialparameters(rng,l
 Lux.initialstates(rng::AbstractRNG,l::Project) = Lux.initialstates(rng,l.layer)
 
 function (l::Project)((fixed_data,v),ps,st)
-  l.layer(v,ps,st)
+  sz = size(v)
+  v_2d = reshape(v,sz[1],:)
+  u_2d,st = l.layer(v_2d,ps,st)
+  u = reshape(u_2d,size(u_2d,1),Base.tail(sz)...)
+  return u,st
 end
 
 """

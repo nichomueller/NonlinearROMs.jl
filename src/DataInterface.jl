@@ -52,6 +52,16 @@ function DataFormatter(;
   DataFormatter(pass_coords,pass_features,pass_new_data,normalise,sampler)
 end
 
+# Constructor for the 3 formulation of Kovachki et al. (Sez. 3, Eq. 7, 8, 9):
+# Eq. (7): κ(x, y)
+SpatialKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false),kwargs...)
+# Eq. (8): κ(x, y, a(x), a(y))
+FeatureKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(false),kwargs...)
+# Eq. (9): κ(x, y, v(x), v(y))
+StateKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(true),kwargs...)
+# Combined: κ(x, y, a(x), a(y), v(x), v(y))
+FullKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(true),kwargs...)
+
 # input
 function fetch_data(::DataFormatter{false,false},(coords,features)::NamedTuple)
   @notimplemented "Wait ... no input?"
@@ -94,12 +104,21 @@ function merge_data(d::DataFormatter,(coords,features)::NamedTuple)
   _merge_data(coords,features)
 end
 
-function merge_data(::DataFormatter{<:Any,<:Any,false},fixed_data,new_data)
-  fixed_data
-end
-
-function merge_data(::DataFormatter{<:Any,<:Any,true},fixed_data,new_data)
-  _merge_data(fixed_data,new_data)
+function merge_data(::DataFormatter{A,B,C},fixed_data,new_data,coord_dims::Int=0) where {A,B,C}
+  base = if coord_dims > 0 && size(fixed_data,1) > coord_dims
+    if A && B
+      fixed_data
+    elseif A && !B
+      view(fixed_data,1:coord_dims,:,:)
+    elseif !A && B
+      view(fixed_data,(coord_dims+1):size(fixed_data,1),:,:)
+    else
+      nothing
+    end
+  else
+    (A || B) ? fixed_data : nothing
+  end
+  C ? _merge_data(base,new_data) : base
 end
 
 # utils

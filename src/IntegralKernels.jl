@@ -9,7 +9,7 @@ get_in_dimension(k::Lux.Conv) = k.in
 get_out_dimension(k::Lux.Conv) = k.out
 
 kernel_input(x,meas::InducedMeasure) = x
-kernel_input(x,meas::GraphMeasure) = gather_data(x,get_graph(meas))
+kernel_input(x,meas::GraphMeasure) = gather_data(x,get_space(meas))
 
 """
     kv(k,v,meas::InducedMeasure)
@@ -29,9 +29,10 @@ function kv(k,v,meas::InducedMeasure)
 end
 
 function kv(k,v,meas::GraphMeasure)
-  graph = get_graph(meas)
-  ids = src.(edges(graph))
-  _kv(k,view(v,:,ids,:))
+  space = get_space(meas)
+  v′ = permutedims(v,(1,3,2))
+  v_src = permutedims(NNlib.gather(v′,space.src_ids),(1,3,2))
+  _kv(k,v_src)
 end
 
 struct FourierKernel <: AbstractIntegralKernel
@@ -86,7 +87,10 @@ mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataForma
   const kernel::A
   measure::B
   const formatter::C
+  const coord_dims::Int
 end
+
+IntegralKernel(kernel,measure,formatter) = IntegralKernel(kernel,measure,formatter,0)
 
 get_in_dimension(k::IntegralKernel) = get_in_dimension(k.kernel)
 get_out_dimension(k::IntegralKernel) = get_out_dimension(k.kernel)
@@ -100,9 +104,12 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)((fixed_data,v),ps,st)
-  x = merge_data(l.formatter,fixed_data,v)
+  x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
   xk = kernel_input(x,l.measure)
-  k,st = l.kernel(xk,ps,st)
+  sz = size(xk)
+  xk_2d = reshape(xk,sz[1],:)
+  k_2d,st = l.kernel(xk_2d,ps,st)
+  k = reshape(k_2d,size(k_2d,1),Base.tail(sz)...)
   y = kv(k,v,l.measure)
   z = integration(y,l.measure)
   return (fixed_data,z),st
@@ -225,7 +232,7 @@ function Lux.initialparameters(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialparameters(rng,l.kernel),
     weights = Lux.glorot_uniform(rng,l.out_dims,l.in_dims),
-    bias = zeros(TData,l.out_dims),
+    bias = zeros(TData,l.out_dims,1,1),
   )
 end
 
@@ -266,8 +273,13 @@ end
 # it to v, batched over the (N,K) = (num_points,num_params) trailing axes
 function _kv(k::AbstractInputData,v::AbstractInputData)
   din,N,nbatch = size(v)
-  dout = div(size(k,1),din)
-  k_r = reshape(k,din,dout,N,nbatch)
-  v_r = reshape(v,din,1,N,nbatch)
-  dropdims(sum(k_r.*v_r,dims=1),dims=1)
+  kdim = size(k,1)
+  if kdim == din
+    return k .* v
+  else
+    dout = div(kdim,din)
+    k_r = reshape(k,dout,din,N,nbatch)
+    v_r = reshape(v,1,din,N,nbatch)
+    return dropdims(sum(k_r.*v_r,dims=2),dims=2)
+  end
 end

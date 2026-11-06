@@ -156,44 +156,36 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=3),dims=3)
-  σ = dropdims(std(data,dims=3),dims=3)
-  # Avoid dividing by zero if a feature is constant
+  μ = mean(data,dims=(2,3))
+  σ = std(data,dims=(2,3))
+  # Avoid wiping out or dividing by zero if a channel is constant
   @inbounds for i in eachindex(σ)
-    iszero(σ[i]) && (σ[i] = one(eltype(σ)))
+    if σ[i] < TData(1e-6)
+      μ[i] = zero(eltype(μ))
+      σ[i] = one(eltype(σ))
+    end
   end
   return ZScore(μ,σ)
 end
 
-function normalise!(data::AbstractMatrix,score::NoZScore)
+function normalise!(data::AbstractArray,score::NoZScore)
   data
 end
 
-function normalise!(data::AbstractMatrix,stats::ZScore)
+function normalise!(data::AbstractArray,stats::ZScore)
   data .-= stats.μ
   data ./= stats.σ
   data
 end
 
-function denormalise!(data::AbstractMatrix,score::NoZScore)
+function denormalise!(data::AbstractArray,score::NoZScore)
   data
 end
 
-function denormalise!(data::AbstractMatrix,stats::ZScore)
+function denormalise!(data::AbstractArray,stats::ZScore)
   data .*= stats.σ
   data .+= stats.μ
   data
-end
-
-for f in (:normalise!,:denormalise!)
-  @eval begin
-    function $f(data::AbstractInputData,stats::ZScore)
-      @inbounds for m in eachslice(data,dims=3)
-        $f(m,stats)
-      end
-      data
-    end
-  end
 end
 
 struct Scores{A} <: AbstractScore

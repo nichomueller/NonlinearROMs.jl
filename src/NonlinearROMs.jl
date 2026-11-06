@@ -103,6 +103,10 @@ include("LRSchedulers.jl")
 
 export FeatureBundle
 export DataFormatter
+export SpatialKernelFormatter
+export FeatureKernelFormatter
+export StateKernelFormatter
+export FullKernelFormatter
 export Sampler
 include("DataInterface.jl")
 

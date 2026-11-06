@@ -71,11 +71,13 @@ struct NeuralSolver{A<:NeuralModel} <: ROMSolver
   trainlog::TrainingLog
 end
 
+default_solver_formatter(model::NeuralModel) = DataFormatter()
+
 function NeuralSolver(
   model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
-  formatter=DataFormatter(model),
+  formatter=default_solver_formatter(model),
   lr_scheduler=CosineAnnealing(epochs),
   loss=Lux.MSELoss(),
   name=string(nameof(typeof(model))),
@@ -219,8 +221,12 @@ function fetch_data_and_stats(
   output_space::OutputSpace
   )
 
-  input = fetch_data(solver,input_space)
-  output = fetch_data(solver,output_space)
+  raw_in = fetch_data(solver,input_space)
+  input = (
+    coords = isnothing(raw_in.coords) ? nothing : copy(raw_in.coords),
+    features = isnothing(raw_in.features) ? nothing : copy(raw_in.features)
+  )
+  output = copy(fetch_data(solver,output_space))
   stats = fetch_stats(solver,(input,output))
   data = (input=merge_data(solver,input),output=output)
   return data,stats
@@ -241,8 +247,12 @@ function fetch_data_from_stats(
   stats::Normalisation
   )
 
-  input = fetch_data(solver,input_space)
-  output = fetch_data(solver,output_space)
+  raw_in = fetch_data(solver,input_space)
+  input = (
+    coords = isnothing(raw_in.coords) ? nothing : copy(raw_in.coords),
+    features = isnothing(raw_in.features) ? nothing : copy(raw_in.features)
+  )
+  output = copy(fetch_data(solver,output_space))
   normalise!(input,stats)
   normalise!(output,stats)
   return (input=merge_data(solver,input),output=output)
@@ -254,7 +264,11 @@ function fetch_data_from_stats(
   stats::Normalisation
   )
 
-  input = fetch_data(solver,input_space)
+  raw_in = fetch_data(solver,input_space)
+  input = (
+    coords = isnothing(raw_in.coords) ? nothing : copy(raw_in.coords),
+    features = isnothing(raw_in.features) ? nothing : copy(raw_in.features)
+  )
   normalise!(input,stats)
   return merge_data(solver,input)
 end

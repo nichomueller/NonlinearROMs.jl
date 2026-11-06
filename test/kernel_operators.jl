@@ -83,32 +83,31 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     # Verify model construction across both discrete spaces (Graph & FESpace)
     # and all kernel input formulations
     for space in (gspace,fspace)
-      for fmt in (
-        DataFormatter(pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false)),
-        DataFormatter(pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(false)),
-        DataFormatter(pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(true)),
-        DataFormatter(pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(true))
-      )
-        kno = KernelNeuralModel(
-          space;
-          hidden_layers=(8,8,8),
-          activation=Lux.gelu,
-          formatter=fmt
-        )
-        chain = build_model(kno,(dummy_in,dummy_out))
+      for fmt in (SpatialKernelFormatter(),FeatureKernelFormatter(),StateKernelFormatter(),FullKernelFormatter())
+        for cw in (true,false)
+          kno = KernelNeuralModel(
+            space;
+            hidden_layers=(8,8,8),
+            kernel_layers=(12,),
+            channel_wise=cw,
+            activation=Lux.gelu,
+            formatter=fmt
+          )
+          chain = build_model(kno,(dummy_in,dummy_out))
 
-        # Lift + 2 KernelNeuralLayers + Project = 4 layers
-        @test length(chain.layers) == 4
-        klayer1 = chain.layers.layer_2
+          # Lift + 2 KernelNeuralLayers + Project = 4 layers
+          @test length(chain.layers) == 4
+          klayer1 = chain.layers.layer_2
 
-        # Both the integral kernel network κ_θ and the projection Q must be non-linear MLPs (Lux.Chain)
-        @test klayer1.kernel.kernel isa Lux.Chain
-        @test chain.layers.layer_4.layer isa Lux.Chain
+          # Both the integral kernel network κ_θ and the projection Q must be non-linear MLPs (Lux.Chain)
+          @test klayer1.kernel.kernel isa Lux.Chain
+          @test chain.layers.layer_4.layer isa Lux.Chain
 
-        ps,st = Lux.setup(Random.default_rng(),chain)
-        pred,_ = chain(dummy_in,ps,st)
-        @test size(pred) == (out_dims,N,K)
-        @test !any(isnan,pred)
+          ps,st = Lux.setup(Random.default_rng(),chain)
+          pred,_ = chain(dummy_in,ps,st)
+          @test size(pred) == (out_dims,N,K)
+          @test !any(isnan,pred)
+        end
       end
     end
   end
