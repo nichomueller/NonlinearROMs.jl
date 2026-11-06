@@ -42,7 +42,7 @@ using NonlinearROMs: WeightedSimpleDiGraph,get_weight,out_weights,in_weights
   @test get_weight(g,3,1) == 0.0  # no such edge -> zero, not an error
 
   @test out_weights(g,1) == [1.5,2.5]
-  @test in_weights(g,3) == [9.0,0.5]  # backward weight of (1,3) was set to 9.0 explicitly
+  @test in_weights(g,3) == [9.0,0.5]  # backward weight of (1, 3) was set to 9.0 explicitly
   @test in_weights(g,2) == [1.5]
 
   W = weights(g)
@@ -73,48 +73,79 @@ using NonlinearROMs: WeightedSimpleDiGraph,get_weight,out_weights,in_weights
   @test nv(g) == nv_before-1
 end
 
-@testset "GraphsInterface" begin
+@testset "GraphsInterface & GraphInducedSpace" begin
   model = CartesianDiscreteModel((0,1,0,1),(6,6))
-  reffe = ReferenceFE(lagrangian,Float64,2)
-  V = LexicographicFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
-  coords = get_free_dof_coordinates(V)
-  ndofs = length(coords)
+  reffe = ReferenceFE(lagrangian,Float64,1)
+  V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
+  coords = get_coords(V)
+  npts = length(coords)
+  radius = 0.35
 
-  @testset "MeshGraph" begin
-    g = build_graph(MeshGraph(),V)
-
-    @test nv(g) == ndofs
+  @testset "build_graph & NystromSubgraph" begin
+    g = build_graph(coords;radius=radius)
+    @test nv(g) == npts
     @test ne(g) > 0
 
-    # every stored weight is the Euclidean distance between its two dofs
     for s in vertices(g)
       nbrs = outneighbors(g,s)
       ws = out_weights(g,s)
       @test length(nbrs) == length(ws)
       for (d,w) in zip(nbrs,ws)
-        @test w ≈ norm(coords[s]-coords[d])
+        @test w <= radius + 1e-12
+        @test w ≈ norm(coords[s] - coords[d])
       end
     end
 
-    # dof-sharing-a-cell adjacency is symmetric, even though each direction
-    # is inserted independently while looping over cells
-    for s in vertices(g),d in outneighbors(g,s)
-      @test has_edge(g,d,s)
-    end
+    sub_n = min(10,npts)
+    subg = NystromSubgraph(g;subgraph_size=sub_n)
+    @test nv(subg.graph) == sub_n
+    @test length(subg.vertex_map) == sub_n
   end
 
-  @testset "DistanceGraph" begin
-    radius = 0.3
-    g = build_graph(DistanceGraph(radius),V)
+  @testset "GraphInducedSpace, gather_data, scatter_data & attention" begin
+    gspace = GraphInducedSpace(V; radius=radius)
+    g = get_graph(gspace)
 
-    @test nv(g) == ndofs
+    es = collect(edges(g))
+    src_ids = Int[src(e) for e in es]
+    dst_ids = Int[dst(e) for e in es]
 
-    for s in vertices(g)
-      nbrs = outneighbors(g,s)
-      for d in nbrs
-        w = get_weight(g,s,d)
-        @test w <= radius
-        @test w ≈ norm(coords[s]-coords[d])
+    D,K = 4,3
+    vals = rand(Float32,D,npts,K)
+    gathered = gather_data(vals,gspace)
+
+    @test size(gathered) == (2D,ne(g),K)
+
+    # Check source and destination node features
+    for e_idx in unique((1,max(1,ne(g) ÷ 2),ne(g)))
+      s = src_ids[e_idx]
+      d = dst_ids[e_idx]
+
+      @test gathered[1:D,e_idx,:] ≈ vals[:,s,:]
+      @test gathered[(D+1):(2D),e_idx,:] ≈ vals[:,d,:]
+    end
+
+    edge_vals = ones(Float32,D,ne(g),K)
+    scattered = scatter_data(edge_vals,gspace)
+
+    @test size(scattered) == (D,npts,K)
+    for v in vertices(g)
+      in_deg = Float32(length(inneighbors(g,v)))
+      @test all(x -> isapprox(x,in_deg; atol=1e-5),scattered[:,v,:])
+    end
+
+    scores = randn(Float32,ne(g))
+    α = NonlinearROMs.attention(scores,g)
+
+    @test length(α) == ne(g)
+    @test all(isfinite,α)
+    @test all(x -> x >= 0.0f0,α)
+
+    # Incoming attention weights must sum to one for each non-isolated vertex
+    for v in vertices(g)
+      in_mask = findall(==(v),dst_ids)
+      if !isempty(in_mask)
+        @test sum(α[in_mask]) ≈ 1.0f0 atol=1e-5
       end
     end
   end
