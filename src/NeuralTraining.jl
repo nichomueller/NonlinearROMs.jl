@@ -11,16 +11,26 @@ end
 
 build_model(::NeuralModel,args...) = @abstractmethod
 
+_coord_dims(::KernelStyle) = 0
+function _coord_dims(style::IntegralStyle)
+  coords = get_coords(get_space(style.measure))
+  isempty(coords) ? 0 : num_components(eltype(coords))
+end
+
 function build_kernel_neural_layer(
   style::IntegralStyle,
   formatter::DataFormatter,
   fixed_dims::Int,in_dims::Int,out_dims::Int,
+  kernel_layers::Tuple,
+  channel_wise::Bool,
   activation
   )
 
-  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
-  inner = Lux.Dense(inner_dims => out_dims*in_dims)
-  kernel = IntegralKernel(inner,style.measure,formatter)
+  c_dims = _coord_dims(style)
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,c_dims)
+  k_out = (channel_wise && in_dims == out_dims) ? out_dims : out_dims*in_dims
+  inner = build_lux_chain((inner_dims,kernel_layers...,k_out),activation)
+  kernel = IntegralKernel(inner,style.measure,formatter,c_dims)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
@@ -28,10 +38,12 @@ function build_kernel_neural_layer(
   style::FourierStyle,
   formatter::DataFormatter,
   fixed_dims::Int,in_dims::Int,out_dims::Int,
+  kernel_layers::Tuple,
+  channel_wise::Bool,
   activation
   )
 
-  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims)
+  inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,0)
   kernel = FourierKernel(inner_dims,out_dims,style.truncation)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
@@ -48,11 +60,14 @@ function build_model(model::KernelNeuralModel,(inputs,outputs))
       in_dims,
       widths[i+1],
       widths[i+2],
+      model.kernel_layers,
+      model.channel_wise,
       model.activation
     ),
     length(widths)-3
   )
-  project = Lux.Dense(widths[end-1] => widths[end])
+  last_h = widths[end-1]
+  project = build_lux_chain((last_h,last_h,out_dims),model.activation)
   Lux.Chain(Lift(lift),klayers...,Project(project))
 end
 
@@ -150,8 +165,20 @@ end
 _shape_factor(::KernelStyle) = 1
 _shape_factor(::IntegralStyle{<:GraphMeasure}) = 2
 
+_edge_dims(::KernelStyle) = 0
+_edge_dims(::IntegralStyle{<:GraphMeasure}) = 1
+
+function _selected_fixed_dims(::DataFormatter{A,B},fixed_dims::Int,coord_dims::Int) where {A,B}
+  if coord_dims > 0 && fixed_dims > coord_dims
+    (A ? coord_dims : 0) + (B ? (fixed_dims - coord_dims) : 0)
+  else
+    (A || B) ? fixed_dims : 0
+  end
+end
+
 _augment_dims(::DataFormatter{<:Any,<:Any,C}) where C = C
 
-function _get_inner_dims(s,d,fixed_dims,in_dims)
-  _shape_factor(s) * (fixed_dims + _augment_dims(d)*in_dims)
+function _get_inner_dims(s,d,fixed_dims,in_dims,coord_dims=0)
+  sel_fixed = _selected_fixed_dims(d,fixed_dims,coord_dims)
+  _shape_factor(s) * (sel_fixed + _augment_dims(d)*in_dims) + _edge_dims(s)
 end

@@ -50,21 +50,25 @@ state `v` gets folded into that kernel's own input.
    hidden-width transition) performing the non-local processing.
 3. Projection (Q): a local `Dense` layer mapping the final hidden state to the output dimension.
 """
-struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter} <: NeuralModel
   style::A
   hidden_layers::NTuple{N,Int}
+  kernel_layers::NTuple{M,Int}
+  channel_wise::Bool
   activation::B
   formatter::C
 end
 
 function KernelNeuralModel(
   style::KernelStyle;
-  hidden_layers=(16,16),
+  hidden_layers=(16,16,16),
+  kernel_layers=(16,),
+  channel_wise::Bool=true,
   activation=tanh,
   formatter=DataFormatter(style)
   )
 
-  KernelNeuralModel(style,hidden_layers,activation,formatter)
+  KernelNeuralModel(style,Tuple(hidden_layers),Tuple(kernel_layers),channel_wise,activation,formatter)
 end
 
 function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)

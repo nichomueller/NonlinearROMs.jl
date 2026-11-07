@@ -41,7 +41,7 @@ end
 
 function InputSpace(space,args...)
   x = get_coords(space)
-  InputSpace(x,a)
+  InputSpace(x,args...)
 end
 
 get_coords(f::InputSpace) = f.coords
@@ -172,16 +172,33 @@ end
 
 abstract type AbstractGraphInducedSpace <: DiscreteSpace end
 
-get_graph(space::AbstractGraphInducedSpace) = @abstractmethod
+get_edge_ids(g::AbstractGraph) = (Int[src(e) for e in edges(g)],Int[dst(e) for e in edges(g)])
+get_edge_ids(space::AbstractGraphInducedSpace) = get_edge_ids(get_graph(space))
 
-for f in (:gather_data,:scatter_data,:attention)
-  @eval $f(vals::AbstractInputData,space::AbstractGraphInducedSpace) = $f(vals,get_graph(space))
+function get_edge_weights(g::AbstractGraph)
+  es = edges(g)
+  w = TData[get_weight(g,src(e),dst(e)) for e in es]
+  wmax = maximum(w;init=zero(TData))
+  wmax > zero(TData) && (w ./= wmax)
+  reshape(w,1,1,length(w))
 end
+get_edge_weights(space::AbstractGraphInducedSpace) = get_edge_weights(get_graph(space))
+
+gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace) =
+  gather_data(vals,get_graph(space),get_edge_ids(space)...,get_edge_weights(space))
+
+scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace) =
+  scatter_data(vals,get_graph(space),get_edge_ids(space)...)
+
+attention(scores::AbstractVector,space::AbstractGraphInducedSpace) =
+  attention(scores,get_graph(space),get_edge_ids(space)...)
 
 """
     struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
       graph::A
       coords::B
+      src_ids::C
+      dst_ids::C
     end
 
 No precomputed/cached scatter structure needed (see `scatter_data` in
@@ -189,19 +206,28 @@ No precomputed/cached scatter structure needed (see `scatter_data` in
 an active Reactant/Enzyme trace's call stack the way the old `setindex!`-based dense
 incidence matrix did, so there's nothing left to precompute here at construction time.
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},W<:AbstractArray{TData,3}} <: AbstractGraphInducedSpace
   graph::A
   coords::B
+  src_ids::C
+  dst_ids::C
+  edge_weights::W
 end
 
 function GraphInducedSpace(space;kwargs...)
   coords = get_coords(space)
   graph = build_graph(coords;kwargs...)
-  GraphInducedSpace(graph,coords)
+  es = edges(graph)
+  src_ids = Int[src(e) for e in es]
+  dst_ids = Int[dst(e) for e in es]
+  edge_weights = get_edge_weights(graph)
+  GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights)
 end
 
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
+get_edge_ids(space::GraphInducedSpace) = (space.src_ids,space.dst_ids)
+get_edge_weights(space::GraphInducedSpace) = space.edge_weights
 
 struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
   lspaces::NTuple{N,A}
