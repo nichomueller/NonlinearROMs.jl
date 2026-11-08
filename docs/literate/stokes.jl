@@ -99,23 +99,17 @@ features(μ) = FeatureBundle((aμ(μ),gμ(μ)))
 input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
-# ## 3. The training loss: `H1L2Loss`, not `EnergyLoss`
+# ## 3. The training loss: a block energy norm
 #
-# The Poisson tutorial's [`EnergyLoss`](@ref) only works because a scalar,
-# order-1 FE space has exactly one free dof per evaluation point. That
-# equivalence breaks for Taylor-Hood: velocity has 2 components per point and
-# pressure has 1, and the point sets themselves differ in size (§2). Taking
-# a Gram matrix on dofs and multiplying along the model's *point* axis (as
-# `EnergyLoss` does) is therefore meaningless here.
-#
-# [`H1L2Loss`](@ref) sidesteps this by building its Gram matrix directly on
-# `FunctionSpace`'s own `(D,N,K)` point layout -- summing an ``H^1\times L^2``
-# form field-by-field via `assemble_mass_stiffness` -- rather than on the raw
-# FE dof numbering, so it stays well-defined regardless of how many
-# components or distinct points each field has.
+# Unlike the Poisson tutorial's scalar, order-1 space, Taylor-Hood has more than
+# one dof per point (velocity has 2 components), and the two fields live on
+# different point sets (§2). [`EnergyLoss`](@ref) handles this by assembling one
+# norm per field, `H1()` for the velocity and `L2()` for the pressure, each on its
+# own points, extending it by zero to the union of every field's points, and
+# stacking the results block-diagonally, one block per channel.
 
 fspace = FunctionSpace(test)
-loss = H1L2Loss(fspace)
+loss = EnergyLoss(BlockNorm((H1(),L2())),fspace)
 
 # ## 4. Test 1 & 2 -- same two `InducedMeasure`s as the Poisson tutorial
 #

@@ -88,10 +88,10 @@ import StaticArrays: MVector,SVector
 
 export TrainingLog
 export ZScore
+export MScoreStyle
+export RScoreStyle
+export ZScoreStyle
 export EnergyLoss
-export L2Loss
-export H1Loss
-export H1L2Loss
 export visualise
 include("Utils.jl")
 
@@ -164,6 +164,7 @@ include("NeuralModels.jl")
 export NeuralSolver
 export NeuralOperator
 export neural_operator
+export replace_space
 include("NeuralOperators.jl")
 
 export NNRegression

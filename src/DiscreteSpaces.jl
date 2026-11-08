@@ -36,7 +36,10 @@ function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
 end
 
 function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle...)
-  InputSpace(x,merge_bundles(a...))
+  spaces = map(ai -> InputSpace(x,ai),a)
+  coords = cat(map(get_coords,spaces)...;dims=3)
+  features = cat(map(get_features,spaces)...;dims=3)
+  InputSpace(coords,features)
 end
 
 function InputSpace(space,args...)
@@ -182,16 +185,22 @@ function get_edge_weights(g::AbstractGraph)
   wmax > zero(TData) && (w ./= wmax)
   reshape(w,1,1,length(w))
 end
-get_edge_weights(space::AbstractGraphInducedSpace) = get_edge_weights(get_graph(space))
 
-gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace) =
+function get_edge_weights(space::AbstractGraphInducedSpace)
+  get_edge_weights(get_graph(space))
+end
+
+function gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
   gather_data(vals,get_graph(space),get_edge_ids(space)...,get_edge_weights(space))
+end
 
-scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace) =
+function scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
   scatter_data(vals,get_graph(space),get_edge_ids(space)...)
+end
 
-attention(scores::AbstractVector,space::AbstractGraphInducedSpace) =
+function attention(scores::AbstractVector,space::AbstractGraphInducedSpace)
   attention(scores,get_graph(space),get_edge_ids(space)...)
+end
 
 """
     struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
@@ -218,8 +227,9 @@ function GraphInducedSpace(space;kwargs...)
   coords = get_coords(space)
   graph = build_graph(coords;kwargs...)
   es = edges(graph)
-  src_ids = Int[src(e) for e in es]
-  dst_ids = Int[dst(e) for e in es]
+  src_ids,dst_ids = map(es) do e
+    (src(e),dst(e))
+  end |> tuple_of_arrays
   edge_weights = get_edge_weights(graph)
   GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights)
 end
@@ -239,8 +249,7 @@ end
 function MultiGraphInducedSpace(spaces...;kwargs...)
   lspaces = map(x -> GraphInducedSpace(x;kwargs...),spaces)
   lcoords = map(get_coords,lspaces)
-  sets = map(Set,lcoords)
-  coords = collect(∪(sets...))
+  coords = collect(∪(lcoords...))
   graph = build_graph(coords;kwargs...)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
   MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords)
@@ -255,44 +264,48 @@ Base.iterate(space::MultiGraphInducedSpace,state...) = iterate(space.lspaces,sta
 
 # norms
 
-function assemble_mass(f::FunctionSpace)
-  dΩ = get_measure(f)
-  assemble_form((u,v) -> ∫(u⋅v)dΩ,f)
-end
+"""
+    assemble_norm(op::AssembleOperator,f) -> AbstractMatrix
 
-function assemble_mass(f::FunctionSpace{<:MultiFieldFESpace})
-  dΩ = get_measure(f)
-  m(u,v) = sum(u[i]⋅v[i] for i in 1:num_fields(f.space))
-  assemble_form((u,v) -> ∫(m(u,v))*dΩ,f)
-end
+Gram matrix of the `GridapROMs` norm `op` (`ℓ2()`, `L2()`, `H1()`, ...) on the
+point layout of the `(D,N,K)` data living on `f`, rather than on `f`'s dofs:
+- single field: `(N,N)`, restricted to one representative dof per point (the
+  norms are component-wise, so every component shares this same matrix);
+- multi-field: `(D*N,D*N)`, block-diagonal with one block per channel, each
+  field's matrix being extended by zero from its own points to the union of
+  every field's points (see [`join_spaces`](@ref)).
+"""
+assemble_norm(op::AssembleOperator,f::FunctionSpace) = assemble_norm(op,f.space)
 
-function assemble_stiffness(f::FunctionSpace)
-  dΩ = get_measure(f)
-  assemble_form((u,v) -> ∫(∇(v)⊙∇(u))dΩ,f)
-end
-
-function assemble_stiffness(f::FunctionSpace{<:MultiFieldFESpace})
-  dΩ = get_measure(f)
-  a(u,v) = sum(∇(u[i])⊙∇(v[i]) for i in 1:num_fields(f.space))
-  assemble_form((u,v) -> ∫(a(u,v))*dΩ,f)
-end
-
-function assemble_mass_stiffness(f::FunctionSpace)
-  dΩ = get_measure(f)
-  assemble_form((u,v) -> ∫(u⋅v + ∇(v)⊙∇(u))dΩ,f)
-end
-
-function assemble_mass_stiffness(f::FunctionSpace{<:MultiFieldFESpace})
-  dΩ = get_measure(f)
-  am(u,v) = sum(u[i]⋅v[i] + ∇(u[i])⊙∇(v[i]) for i in 1:num_fields(f.space))
-  assemble_form((u,v) -> ∫(am(u,v))*dΩ,f)
-end
-
-function assemble_form(fun,f::FunctionSpace)
-  mat = assemble_matrix(fun,f.space,f.space)
-  msk = get_node_masks(f.space)
+function assemble_norm(op::AssembleOperator,f::SingleFieldFESpace)
+  mat = _assemble_dof_norm(op,f)
+  msk = get_node_masks(f)
   return TData.(mat[msk,msk])
 end
+
+function assemble_norm(op::AssembleOperator,f::MultiFieldFESpace)
+  assemble_norm(BlockOperator(ntuple(_ -> op,length(f.spaces))),f)
+end
+
+function assemble_norm(op::BlockOperator,f::MultiFieldFESpace)
+  @check length(op.op) == length(f.spaces) "Wrong number of norms for the MultiFieldFESpace"
+  x = get_coords(f)
+  n = length(x)
+  blocks = []
+  for (opi,spacei) in zip(op.op,f.spaces)
+    Xi = assemble_norm(opi,spacei)
+    pos = indexin(get_coords(spacei),x)
+    I,J,V = findnz(Xi)
+    Xi_global = sparse(pos[I],pos[J],V,n,n)
+    for _ in 1:maximum(get_free_dof_to_comp(spacei))
+      push!(blocks,Xi_global)
+    end
+  end
+  blockdiag(blocks...)
+end
+
+_assemble_dof_norm(op::AssembleOperator,f::SingleFieldFESpace) = RBSteady._assemble_operator(op,f,f)
+_assemble_dof_norm(::ℓ2,f::SingleFieldFESpace) = sparse(I(num_free_dofs(f)))
 
 # utils
 

@@ -138,6 +138,20 @@ function NeuralOperator(train_state::Lux.Training.TrainState,args...)
 end
 
 """
+    replace_space(op::NeuralOperator,space::DiscreteSpace) -> NeuralOperator
+
+Returns `op` with every kernel's measure rebuilt on `space`, keeping the trained
+parameters, states and normalisation: this is how a kernel operator trained on
+some point cloud(s) is evaluated on a new one. `space` must be of the same kind as
+the training one (e.g. a `MultiGraphInducedSpace` for a model trained on a
+`MultiGraphInducedSpace`), and the inputs must then live on `get_coords(space)`.
+"""
+function replace_space(op::NeuralOperator,space::DiscreteSpace)
+  chain = replace_measure(op.chain,InducedMeasure(space))
+  NeuralOperator(chain,op.parameters,op.states,op.stats)
+end
+
+"""
     (m::NeuralOperator)(inputs) -> AbstractArray
 
 Applies `m` to `inputs` (a `(params,coords)`/`(pin,xin)` tuple for DeepONet/NOMAD, or

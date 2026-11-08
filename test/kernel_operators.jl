@@ -46,7 +46,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     u_rand = rand(TData,1,N,K)
     @test size(integration(u_rand,fmeas)) == (1,N,K)
 
-    for loss_fn in (NonlinearROMs.L2Loss(fspace),NonlinearROMs.H1Loss(fspace),NonlinearROMs.H1L2Loss(fspace))
+    for loss_fn in (EnergyLoss(ℓ2(),fspace),EnergyLoss(L2(),fspace),EnergyLoss(H1(),fspace))
       @test loss_fn(u_rand,u_rand) ≈ 0.0f0 atol=1e-6
       @test loss_fn(u_rand,zeros(TData,1,N,K)) > 0.0f0
     end

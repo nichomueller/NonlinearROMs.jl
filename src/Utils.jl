@@ -106,10 +106,33 @@ num_samples(data::AbstractInputData) = size(data,3)
 
 # normalisation handling
 
+abstract type ScoreStyle end
+
+struct MScoreStyle <: ScoreStyle end
+struct RScoreStyle <: ScoreStyle end
+struct ZScoreStyle <: ScoreStyle end
+
+Score(::ScoreStyle,data;kwargs...) = @abstractmethod
+Score(::MScoreStyle,data;kwargs...) = MScore(data;kwargs...)
+Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
+Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
+
+function Score(style::NamedTuple,data::NamedTuple;kwargs...)
+  scores = NamedTuple()
+  for (k,v) in pairs(data)
+    scores = merge(scores,(k => Score(style[k],v;kwargs...),))
+  end
+  return NamedScores(scores)
+end
+
 abstract type AbstractScore end
 
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
+
+# e.g. the coordinates, when the formatter does not pass them
+normalise!(data::Nothing,score::AbstractScore) = data
+denormalise!(data::Nothing,score::AbstractScore) = data
 
 struct MScore{A<:Union{Nothing,Number}} <: AbstractScore
   max::A
@@ -139,6 +162,46 @@ end
 
 function denormalise!(data,score::MScore)
   rmul!(data,score.max)
+end
+
+struct RScore{A} <: AbstractScore
+  lower::A
+  upper::A
+end
+
+const NoRScore = RScore{Nothing}
+
+RScore(::Nothing;kwargs...) = RScore(nothing,nothing)
+
+function RScore(data::AbstractInputData;normalise=true)
+  if normalise
+    stats = RScore(data;normalise=false)
+    normalise!(data,stats)
+    return stats
+  end
+  l = minimum(data,dims=(2,3))
+  u = maximum(data,dims=(2,3))
+  return RScore(l,u)
+end
+
+function normalise!(data::AbstractInputData,score::NoRScore)
+  data
+end
+
+function normalise!(data::AbstractInputData,score::RScore)
+  data .-= score.lower
+  data ./= (score.upper - score.lower)
+  data
+end
+
+function denormalise!(data::AbstractInputData,score::NoRScore)
+  data
+end
+
+function denormalise!(data::AbstractInputData,score::RScore)
+  data .*= (score.upper - score.lower)
+  data .+= score.lower
+  data
 end
 
 struct ZScore{A,B} <: AbstractScore
@@ -188,25 +251,13 @@ function denormalise!(data::AbstractArray,stats::ZScore)
   data
 end
 
-struct Scores{A} <: AbstractScore
+struct NamedScores{A} <: AbstractScore
   scores::A
-end
-
-for f in (:MScore,:ZScore)
-  @eval begin
-    function $f(data::NamedTuple;kwargs...)
-      scores = NamedTuple()
-      for (k,v) in pairs(data)
-        scores = merge(scores,NamedTuple{(k,)}(($f(v;kwargs...),)))
-      end
-      return Scores(scores)
-    end
-  end
 end
 
 for f in (:normalise!,:denormalise!)
   @eval begin
-    function $f(data::NamedTuple,stats::Scores{<:NamedTuple})
+    function $f(data::NamedTuple,stats::NamedScores{<:NamedTuple})
       @inbounds for k in keys(stats.scores)
         $f(data[k],stats.scores[k])
       end
@@ -215,15 +266,49 @@ for f in (:normalise!,:denormalise!)
   end
 end
 
-struct Normalisation{A<:AbstractScore,B<:AbstractScore}
+"""
+    struct NormStyle{A<:NamedTuple,B<:ScoreStyle}
+      input_style::A
+      output_style::B
+      normalise::Bool
+    end
+
+Recipe for a [`Normalisation`](@ref): which [`ScoreStyle`](@ref) to apply to the
+coordinates, the features and the output values, and whether to normalise at all.
+Not to be confused with `GridapROMs.NormStyle`, the supertype of the `ℓ2`/`L2`/`H1`
+norms used by [`EnergyLoss`](@ref).
+"""
+struct NormStyle{A<:NamedTuple,B<:ScoreStyle}
+  input_style::A
+  output_style::B
+  normalise::Bool
+end
+
+function NormStyle(;
+  coords_style=RScoreStyle(),
+  features_style=ZScoreStyle(),
+  output_style=ZScoreStyle(),
+  normalise=true
+  )
+
+  input_style = (coords=coords_style,features=features_style)
+  NormStyle(input_style,output_style,normalise)
+end
+
+struct Normalisation{A<:NamedScores,B<:AbstractScore}
   input_score::A
   output_score::B
 end
 
-function Normalisation((input,output);kwargs...)
-  input_score = ZScore(input;kwargs...)
-  output_score = MScore(output;kwargs...)
+function Normalisation(style::NormStyle,(input,output);kwargs...)
+  normalise = style.normalise
+  input_score = Score(style.input_style,input;normalise)
+  output_score = Score(style.output_style,output;normalise)
   Normalisation(input_score,output_score)
+end
+
+function Normalisation((input,output);kwargs...)
+  Normalisation(NormStyle(;kwargs...),(input,output))
 end
 
 for f in (:normalise!,:denormalise!)
@@ -240,22 +325,41 @@ end
 
 # losses
 
-assemble_mass(args...) = @abstractmethod
-assemble_stiffness(args...) = @abstractmethod
-assemble_mass_stiffness(args...) = @abstractmethod
+assemble_norm(args...) = @abstractmethod
 
-L2Loss(args...) = EnergyLoss(assemble_mass(args...))
-H1Loss(args...) = EnergyLoss(assemble_stiffness(args...))
-H1L2Loss(args...) = EnergyLoss(assemble_mass_stiffness(args...))
+"""
+    struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+      X::A
+    end
 
+    EnergyLoss(op::AssembleOperator,f)
+
+MSE between `Xŷ` and `Xy`, with `X` the Gram matrix of the `GridapROMs` norm `op`
+(`ℓ2()`, `L2()`, `H1()`, ...) on `f`'s point layout (see [`assemble_norm`](@ref)).
+`X` is either `(N,N)`, shared by every channel, or `(D*N,D*N)`, block-diagonal
+with one block per channel (the multi-field case).
+"""
 struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
   X::A
 end
 
+EnergyLoss(op::AssembleOperator,f) = EnergyLoss(assemble_norm(op,f))
+
 function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
-  Xŷ = _mat_mul_data(loss.X,ŷ)
-  Xy = _mat_mul_data(loss.X,y)
+  Xŷ = _norm_mul_data(loss.X,ŷ)
+  Xy = _norm_mul_data(loss.X,y)
   return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
+end
+
+function _norm_mul_data(X::AbstractMatrix,x::AbstractInputData)
+  D,N,K = size(x)
+  if size(X,1) == N
+    _mat_mul_data(X,x)
+  else
+    @check size(X,1) == D*N "Norm matrix of size $(size(X)) incompatible with data of size $(size(x))"
+    x2 = reshape(permutedims(x,(2,1,3)),N*D,K)
+    permutedims(reshape(X*x2,N,D,K),(2,1,3))
+  end
 end
 
 # visualisation

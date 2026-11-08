@@ -250,6 +250,39 @@ function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
   return (fixed_data,y),(kernel=kst,)
 end
 
+# swapping the discretisation (e.g. to evaluate on a new mesh), keeping the
+# trained network: the new measure must be fed per-point/per-edge data alike
+
+replace_measure(l::AbstractLuxLayer,meas::InducedMeasure) = l
+
+function replace_measure(c::Lux.Chain,meas::InducedMeasure)
+  Lux.Chain(map(l -> replace_measure(l,meas),c.layers))
+end
+
+function replace_measure(l::KernelNeuralLayer,meas::InducedMeasure)
+  KernelNeuralLayer(replace_measure(l.kernel,meas),l.in_dims,l.out_dims,l.activation)
+end
+
+function replace_measure(k::IntegralKernel,meas::InducedMeasure)
+  _check_measure(k.measure,meas)
+  IntegralKernel(k.kernel,meas,k.formatter,k.coord_dims)
+end
+
+function replace_measure(k::AttentionKernel,meas::InducedMeasure)
+  _check_measure(k.measure,meas)
+  AttentionKernel(k.score,k.value,meas,k.formatter)
+end
+
+function replace_measure(k::MultipleAttentionKernel,meas::InducedMeasure)
+  _check_measure(k.measure,meas)
+  MultipleAttentionKernel(k.scores,k.values,k.aggregation,meas,k.formatter)
+end
+
+function _check_measure(old::InducedMeasure,new::InducedMeasure)
+  msg = "The new measure must be of the same kind as the trained one: got $(nameof(typeof(get_space(new)))), trained on $(nameof(typeof(get_space(old))))"
+  @check (old isa GraphMeasure) == (new isa GraphMeasure) msg
+end
+
 # utils
 
 function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T

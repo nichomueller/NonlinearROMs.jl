@@ -59,6 +59,8 @@ end
 
 fesolver = LinearFESolver(LUSolver())
 
+dir = datadir("moving_poisson")
+
 features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ)))
 
 # PDE 1
@@ -85,7 +87,10 @@ input_space = InputSpace(get_coords(gspace),features(μ_train1),features(μ_trai
 output_space = OutputSpace(uhμ_train1,uhμ_train2)
 op = neural_operator(solver,input_space,output_space)
 
-input_space = InputSpace(get_coords(test),features(μ))
-pred_uμ = solve(solver,op,input_space)
+# evaluation on a new mesh: same trained network, kernels integrated on the new graph
+gspace_test = MultiGraphInducedSpace(test;radius=2*hd)
+op_test = replace_space(op,gspace_test)
+input_space = InputSpace(get_coords(gspace_test),features(μ))
+pred_uμ = solve(solver,op_test,input_space)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")

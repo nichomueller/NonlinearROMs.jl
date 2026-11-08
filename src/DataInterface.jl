@@ -10,14 +10,6 @@ struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
 end
 
-function merge_bundles(a::FeatureBundle,b::FeatureBundle)
-  FeatureBundle((a.bundle...,b.bundle...))
-end
-
-function merge_bundles(a::FeatureBundle,b::FeatureBundle,args::FeatureBundle...)
-  merge_bundles(merge_bundles(a,b),args...)
-end
-
 function ParamDataStructures.num_params(a::FeatureBundle)
   dict = OrderedDict{UInt64,AbstractRealisation}()
   for f in a.bundle
@@ -33,11 +25,11 @@ end
 
 ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
 
-struct DataFormatter{A,B,C,D}
+struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_coords::Val{A}
   pass_features::Val{B}
   pass_new_data::Val{C}
-  normalise::Bool
+  norm_style::E
   sampler::Sampler{D}
 end
 
@@ -45,11 +37,11 @@ function DataFormatter(;
   pass_coords=Val{true}(),
   pass_features=Val{true}(),
   pass_new_data=Val{false}(),
-  normalise=true,
+  norm_style=NormStyle(),
   sampler=Sampler()
   )
 
-  DataFormatter(pass_coords,pass_features,pass_new_data,normalise,sampler)
+  DataFormatter(pass_coords,pass_features,pass_new_data,norm_style,sampler)
 end
 
 # Constructor for the 3 formulation of Kovachki et al. (Sez. 3, Eq. 7, 8, 9):
@@ -97,7 +89,7 @@ function fetch_data(d::DataFormatter,values::AbstractInputData)
 end
 
 function fetch_stats(d::DataFormatter,data)
-  Normalisation(data;normalise=d.normalise)
+  Normalisation(d.norm_style,data)
 end
 
 function merge_data(d::DataFormatter,(coords,features)::NamedTuple)

@@ -176,18 +176,15 @@ output_space = OutputSpace(uhμ_train)
 
 # ## 8. The training loss: an energy norm
 #
-# [`EnergyLoss`](@ref) wraps a Gram matrix `X` and trains in the (squared)
-# `X`-induced norm of the error, rather than a plain pointwise MSE.
-# [`H1Loss`](@ref) builds `X` from `fspace`'s own `(D,N,K)` point layout (a
-# masked, FE-assembled stiffness form) instead of the raw FE dof numbering --
-# the same mechanism the Stokes tutorial's `H1L2Loss` needs for its
-# multi-field, vector-valued problem (see its §3), used here too so loss
-# construction stays consistent across tutorials. For this scalar, order-1
-# field the two numberings coincide one-to-one, so `H1Loss(fspace)` is simply
-# the ``H^1_0`` stiffness energy natural to this elliptic problem.
+# [`EnergyLoss`](@ref) wraps the Gram matrix `X` of one of `GridapROMs`' norms
+# (`ℓ2()`, `L2()`, `H1()`), assembled on `fspace`'s own `(D,N,K)` point layout
+# (one representative dof per point) rather than on the raw FE dof numbering,
+# and trains on the MSE between `Xŷ` and `Xy` rather than a plain pointwise MSE.
+# For this scalar, order-1 field the two numberings coincide one-to-one, so
+# `EnergyLoss(H1(),fspace)` is simply the ``H^1`` (mass + stiffness) form.
 
 fspace = FunctionSpace(test)
-loss = H1Loss(fspace)
+loss = EnergyLoss(H1(),fspace)
 
 # ## 9. Test 1 -- a Kernel Neural Operator discretised on the FE mesh
 #
