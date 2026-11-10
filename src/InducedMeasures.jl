@@ -137,7 +137,7 @@ end
 
 function _integration(a::AbstractInputData,meas::FESpaceMeasure)
   M = get_weights(meas)
-  _mat_mul_data(M,a)
+  _mat_mul_diff_data(M,a)
 end
 
 function _integration(a::AbstractInputData,meas::GraphMeasure)
@@ -154,10 +154,10 @@ function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
 end
 
 # Specialized for sparse matrices to avoid dense matrix conversion during Reactant/XLA compilation
-function _mat_mul_data(A::SparseMatrixCSC,x::AbstractInputData)
+function _mat_mul_data(A::AbstractSparseMatrix,x::AbstractInputData)
   D,N,K = size(x)
   rows,cols,vals = findnz(A)
-  w = reshape(TData.(vals),1,1,length(vals))
+  w = reshape(vals,1,1,length(vals))
   # Permute to (D, K, N) as NNlib.gather/scatter operate on the last dimension
   x_perm = permutedims(x,(1,3,2))
   # Gather source columns: shape (D, K, nnz)
@@ -165,6 +165,22 @@ function _mat_mul_data(A::SparseMatrixCSC,x::AbstractInputData)
   # Multiply by non-zero matrix entries (vals): shape (D, K, nnz)
   weighted = gathered .* w
   # Scatter-add into destination rows: shape (D, K, nrows)
+  out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
+  return permutedims(out_perm,(1,3,2))
+end
+
+function _mat_mul_diff_data(A::AbstractMatrix,x::AbstractInputData)
+  @noitimplemented "Weight matrix must be sparse"
+end
+
+function _mat_mul_diff_data(A::AbstractSparseMatrix,x::AbstractInputData)
+  D,N,K = size(x)
+  rows,cols,vals = findnz(A)
+  w = reshape(vals,1,1,length(vals))
+  x_perm = permutedims(x,(1,3,2))
+  dst = NNlib.gather(x_perm,rows)
+  src = NNlib.gather(x_perm,cols)
+  weighted = (dst .- src) .* w
   out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
   return permutedims(out_perm,(1,3,2))
 end

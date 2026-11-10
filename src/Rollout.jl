@@ -1,8 +1,8 @@
-function Base.collect(sol::TransientParamSolution)
-  r = sol.odeosol.r
+function Base.collect(sol::TransientParamFESolution)
+  r = sol.odesol.r
   vals = collect(sol.odesol)
-  trial = get_trial(sol.odesol.odeop)
-  FEFunction(trial(r),vals)
+  trial = sol.trial(r)
+  FEFunction(trial,vals)
 end
 
 """

@@ -299,6 +299,36 @@ end
 
 # message-passing on graph and graph-induced spaces
 
+abstract type MPRule end
+
+MPRule() = DifferenceMP()
+
+combine_message(::MPRule,src,dst,args...) = @abstractmethod
+
+function combine_message(r::MPRule,src,dst;edge_weights=nothing)
+  isnothing(edge_weights) && return combine_message(r,src,dst)
+  w = repeat(edge_weights;inner=(1,size(src,2),1))
+  combine_message(r,src,dst,w)
+end
+
+struct PlainMP <: MPRule end
+
+combine_message(::PlainMP,src,dst,args...) = vcat(src,dst,args...)
+
+struct DifferenceMP <: MPRule end
+
+combine_message(::DifferenceMP,src,dst,args...) = src .- dst
+
+struct CompositeMP <: MPRule end
+
+function combine_message(::CompositeMP,src,dst,args...)
+  combine_message(DifferenceMP(),src,dst)
+end
+
+function combine_message(::CompositeMP,src,dst,w)
+  combine_message(PlainMP(),combine_message(DifferenceMP(),src,dst),w)
+end
+
 """
     gather_data(vals,g::AbstractGraph) -> per-edge array
 
@@ -322,19 +352,15 @@ function gather_data(
   g::AbstractGraph,
   ids_src=Int[src(e) for e in edges(g)],
   ids_dst=Int[dst(e) for e in edges(g)],
-  edge_weights=nothing
+  edge_weights=nothing;
+  message_rule::MPRule=MPRule()
   )
 
   @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
   v′ = permutedims(vals,(1,3,2))
   src′ = NNlib.gather(v′,ids_src)
   dst′ = NNlib.gather(v′,ids_dst)
-  out′ = if isnothing(edge_weights)
-    vcat(src′,dst′)
-  else
-    w′ = (src′[1:1,:,:] .* zero(TData)) .+ edge_weights
-    vcat(src′,dst′,w′)
-  end
+  out′ = combine_message(message_rule,src′,dst′;edge_weights)
   permutedims(out′,(1,3,2))
 end
 

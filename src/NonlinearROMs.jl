@@ -81,9 +81,11 @@ using GridapROMs.Utils
 
 import DataStructures: OrderedDict
 import Gridap.Fields: GenericField
+import GridapROMs.ParamODEs: TransientParamFESolution
 import GridapROMs.RBSteady: get_interpolation,allocate_coefficient,allocate_hyper_reduction,allocate_hypred_cache
 import Lux: AbstractLuxLayer
 import Random: AbstractRNG
+import SparseArrays: AbstractSparseMatrix
 import StaticArrays: MVector,SVector
 
 export TrainingLog
@@ -117,6 +119,11 @@ export scatter_data
 export attention
 export build_graph
 export get_edge_tensors
+export MPRule
+export PlainMP
+export DifferenceMP
+export CompositeMP
+export combine_message
 include("GraphsInterface.jl")
 
 export DiscreteSpace
@@ -129,6 +136,7 @@ export MultiGraphInducedSpace
 export get_coords
 export get_features
 export get_graph
+export get_message_rule
 export to_element
 include("DiscreteSpaces.jl")
 

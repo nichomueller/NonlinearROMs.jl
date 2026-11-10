@@ -190,8 +190,16 @@ function get_edge_weights(space::AbstractGraphInducedSpace)
   get_edge_weights(get_graph(space))
 end
 
+get_message_rule(space::AbstractGraphInducedSpace) = @abstractmethod
+
 function gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
-  gather_data(vals,get_graph(space),get_edge_ids(space)...,get_edge_weights(space))
+  gather_data(
+    vals,
+    get_graph(space),
+    get_edge_ids(space)...,
+    get_edge_weights(space);
+    message_rule=get_message_rule(space)
+  )
 end
 
 function scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
@@ -203,11 +211,13 @@ function attention(scores::AbstractVector,space::AbstractGraphInducedSpace)
 end
 
 """
-    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point}} <: AbstractGraphInducedSpace
+    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3},E<:MPRule} <: AbstractGraphInducedSpace
       graph::A
       coords::B
       src_ids::C
       dst_ids::C
+      edge_weights::D
+      message_rule::E
     end
 
 No precomputed/cached scatter structure needed (see `scatter_data` in
@@ -215,15 +225,16 @@ No precomputed/cached scatter structure needed (see `scatter_data` in
 an active Reactant/Enzyme trace's call stack the way the old `setindex!`-based dense
 incidence matrix did, so there's nothing left to precompute here at construction time.
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},W<:AbstractArray{TData,3}} <: AbstractGraphInducedSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3},E<:MPRule} <: AbstractGraphInducedSpace
   graph::A
   coords::B
   src_ids::C
   dst_ids::C
-  edge_weights::W
+  edge_weights::D
+  message_rule::E
 end
 
-function GraphInducedSpace(space;kwargs...)
+function GraphInducedSpace(space;message_rule::MPRule=MPRule(),kwargs...)
   coords = get_coords(space)
   graph = build_graph(coords;kwargs...)
   es = edges(graph)
@@ -231,13 +242,14 @@ function GraphInducedSpace(space;kwargs...)
     (src(e),dst(e))
   end |> tuple_of_arrays
   edge_weights = get_edge_weights(graph)
-  GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights)
+  GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights,message_rule)
 end
 
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 get_edge_ids(space::GraphInducedSpace) = (space.src_ids,space.dst_ids)
 get_edge_weights(space::GraphInducedSpace) = space.edge_weights
+get_message_rule(space::GraphInducedSpace) = space.message_rule
 
 struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
   lspaces::NTuple{N,A}
@@ -246,13 +258,13 @@ struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:Abstrac
   l_to_lcoord_to_coords::D
 end
 
-function MultiGraphInducedSpace(spaces...;kwargs...)
-  lspaces = map(x -> GraphInducedSpace(x;kwargs...),spaces)
+function MultiGraphInducedSpace(spaces...;message_rule::MPRule=MPRule(),kwargs...)
+  lspaces = map(x -> GraphInducedSpace(x;message_rule,kwargs...),spaces)
   lcoords = map(get_coords,lspaces)
   coords = collect(∪(lcoords...))
   graph = build_graph(coords;kwargs...)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
-  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords)
+  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords,message_rule)
 end
 
 get_coords(space::MultiGraphInducedSpace) = space.coords
