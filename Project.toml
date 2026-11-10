@@ -30,9 +30,6 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
 
-[sources]
-GridapROMs = {url = "https://github.com/gridap/GridapROMs.jl", rev="dev"}
-
 [compat]
 ConcreteStructs = "0.2.8"
 DataStructures = "0.19.6"
@@ -46,7 +43,7 @@ Graphs = "1.14.0"
 Gridap = "0.20"
 GridapEmbedded = "0.9.12"
 GridapGmsh = "0.7.4"
-GridapROMs = "0.1, 0.2"
+GridapROMs = "0.2.0"
 GridapSolvers = "0.7.1"
 Lux = "1.31.4"
 MLUtils = "0.4.13"

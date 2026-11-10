@@ -11,7 +11,7 @@ domain = (0,1,0,1)
 partition = (50,50)
 model = CartesianDiscreteModel(domain,partition)
 
-order = 1
+order = 2
 degree = 2*order
 
 Ω = Triangulation(model)

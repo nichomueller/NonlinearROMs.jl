@@ -31,7 +31,8 @@ end
 function kv(k,v,meas::GraphMeasure)
   space = get_space(meas)
   v′ = permutedims(v,(1,3,2))
-  v_src = permutedims(NNlib.gather(v′,space.src_ids),(1,3,2))
+  v′_src = NNlib.gather(v′,space.src_ids)
+  v_src = permutedims(v′_src,(1,3,2))
   _kv(k,v_src)
 end
 

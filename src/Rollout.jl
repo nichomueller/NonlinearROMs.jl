@@ -1,62 +1,8 @@
-"""
-    module Rollout (included into NonlinearROMs)
-
-Autoregressive one-step training/inference for transient problems: instead of
-learning a single map `parameters -> u(T)` (or a full space-time operator), we learn
-one *time-stepping* operator `(x,a(x,t),...,u(t)) -> u(t+dt)-u(t)` and apply it
-repeatedly. This is the natural choice when the underlying PDE's physics is
-time-invariant (the same map governs every step): every consecutive pair in every
-trajectory becomes one training sample, so a handful of trajectories already gives
-plenty of data, and the architecture/training machinery is exactly the existing
-steady-state one (`KernelNeuralModel`, `NeuralSolver`, `neural_operator`,
-`Algebra.solve`) -- the only difference is what `InputSpace`/`OutputSpace` hold.
-
-The known failure mode of this approach is rollout drift: the model only ever sees
-*exact* states as input during training, but at inference it's fed its own
-(slightly imperfect) predictions, so small per-step errors can compound over a long
-rollout. `rollout_data`'s `noise_std` (a simplified stand-in for Brandstetter et
-al.'s "pushforward trick") perturbs the training-time state input to make the model
-more robust to that distribution shift; `rollout` is also the function to use to
-actually measure how much drift remains over a given horizon, since next-step
-validation error alone won't show it.
-
-Usage (see `test/heat_equation.jl`):
-```julia
-times = collect(tdomain)
-states = [uh0μ(μ);collect_trajectory(solve(fesolver,feop,μt,uh0μ))]
-features_fn(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
-input_space,output_space = rollout_data(fspace,features_fn,times,states)
-
-model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(model;epochs=200,print_every=50)
-op = neural_operator(solver,input_space,output_space)
-
-predicted_states = rollout(solver,op,fspace,features_fn,times,states[1])
-```
-"""
-
-"""
-    collect_trajectory(sol) -> states::Vector
-
-Eagerly collects a transient Gridap/GridapROMs solve's iterator (as returned by
-`solve(fesolver,feop,μt,uh0μ)` for a `TransientLinearParamFEOperator`) into memory.
-Autoregressive training needs random access to every consecutive pair across the
-whole trajectory, not just a single forward pass over it, and the iterator is
-typically not cheaply re-iterable (each step depends on solving from the previous
-one).
-
-Yields one state per *solved* step -- i.e. `t0` (the given initial condition) is
-excluded, since the iterator never solves for it; prepend it (and its own known
-time) yourself before calling `rollout_data`/`rollout`, e.g.
-`times = collect(tdomain); states = [uh0μ(μ); collect_trajectory(uhμ)]`
-(see `test/heat_equation.jl`).
-"""
-function collect_trajectory(sol)
-  states = []
-  for uh in sol
-    push!(states,uh)
-  end
-  identity.(states)
+function Base.collect(sol::TransientParamSolution)
+  r = sol.odeosol.r
+  vals = collect(sol.odesol)
+  trial = get_trial(sol.odesol.odeop)
+  FEFunction(trial(r),vals)
 end
 
 """
