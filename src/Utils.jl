@@ -357,8 +357,9 @@ function _norm_mul_data(X::AbstractMatrix,x::AbstractInputData)
     _mat_mul_data(X,x)
   else
     @check size(X,1) == D*N "Norm matrix of size $(size(X)) incompatible with data of size $(size(x))"
-    x2 = reshape(permutedims(x,(2,1,3)),N*D,K)
-    permutedims(reshape(X*x2,N,D,K),(2,1,3))
+    x_flat = reshape(permutedims(x,(2,1,3)),1,N*D,K)
+    y_flat = _mat_mul_data(X,x_flat)
+    permutedims(reshape(y_flat,N,D,K),(2,1,3))
   end
 end
 

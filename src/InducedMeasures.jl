@@ -152,3 +152,19 @@ function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
   b2 = A*x2
   permutedims(reshape(b2,N,D,K),(2,1,3))
 end
+
+# Specialized for sparse matrices to avoid dense matrix conversion during Reactant/XLA compilation
+function _mat_mul_data(A::SparseMatrixCSC,x::AbstractInputData)
+  D,N,K = size(x)
+  rows,cols,vals = findnz(A)
+  w = reshape(TData.(vals),1,1,length(vals))
+  # Permute to (D, K, N) as NNlib.gather/scatter operate on the last dimension
+  x_perm = permutedims(x,(1,3,2))
+  # Gather source columns: shape (D, K, nnz)
+  gathered = NNlib.gather(x_perm,cols)
+  # Multiply by non-zero matrix entries (vals): shape (D, K, nnz)
+  weighted = gathered .* w
+  # Scatter-add into destination rows: shape (D, K, nrows)
+  out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
+  return permutedims(out_perm,(1,3,2))
+end
