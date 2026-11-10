@@ -1,6 +1,7 @@
 using Test
 using LinearAlgebra
 using Random
+using SparseArrays
 using Graphs
 using Lux
 using Gridap
@@ -44,7 +45,13 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     @test size(get_weights(fmeas)) == (N,N)
 
     u_rand = rand(TData,1,N,K)
-    @test size(integration(u_rand,fmeas)) == (1,N,K)
+    M = get_weights(fmeas)
+    _,cols,_ = findnz(M)
+    edge_rand = u_rand[:,cols,:]
+    fe_int = integration(edge_rand,fmeas)
+    @test size(fe_int) == (1,N,K)
+    Mu = stack(k -> M*u_rand[1,:,k],1:K;dims=2)
+    @test fe_int ≈ reshape(Mu,1,N,K)
 
     for loss_fn in (EnergyLoss(ℓ2(),fspace),EnergyLoss(L2(),fspace),EnergyLoss(H1(),fspace))
       @test loss_fn(u_rand,u_rand) ≈ 0.0f0 atol=1e-6

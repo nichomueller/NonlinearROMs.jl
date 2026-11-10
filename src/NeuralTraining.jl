@@ -163,10 +163,17 @@ end
 # utils
 
 _shape_factor(::KernelStyle) = 1
-_shape_factor(::IntegralStyle{<:GraphMeasure}) = 2
-
 _edge_dims(::KernelStyle) = 0
-_edge_dims(::IntegralStyle{<:GraphMeasure}) = 1
+
+_shape_factor(s::IntegralStyle) = _shape_factor(get_message_rule(s.measure))
+_edge_dims(s::IntegralStyle) = _edge_dims(get_message_rule(s.measure))
+
+_shape_factor(::MPRule) = 1
+_shape_factor(::PlainMP) = 2
+
+_edge_dims(::MPRule) = 0
+_edge_dims(::PlainMP) = 1
+_edge_dims(::CompositeMP) = 1
 
 function _selected_fixed_dims(::DataFormatter{A,B},fixed_dims::Int,coord_dims::Int) where {A,B}
   if coord_dims > 0 && fixed_dims > coord_dims

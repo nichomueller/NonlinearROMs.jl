@@ -1,6 +1,36 @@
-dimension(f::FunctionSpace) = num_coords(f)
-dimension(g::AbstractGraph) = ne(g) # graphs are evaluated per-edge
-dimension(space::AbstractGraphInducedSpace) = dimension(get_graph(space))
+# message passing
+
+abstract type MPRule end
+
+MPRule() = DifferenceMP()
+
+combine_message(::MPRule,src,dst,args...) = @abstractmethod
+
+function combine_message(r::MPRule,src,dst;edge_weights=nothing)
+  isnothing(edge_weights) && return combine_message(r,src,dst)
+  w = repeat(edge_weights;inner=(1,size(src,2),1))
+  combine_message(r,src,dst,w)
+end
+
+struct PlainMP <: MPRule end
+
+combine_message(::PlainMP,src,dst,args...) = vcat(src,dst,args...)
+
+struct DifferenceMP <: MPRule end
+
+combine_message(::DifferenceMP,src,dst,args...) = src .- dst
+
+struct CompositeMP <: MPRule end
+
+function combine_message(::CompositeMP,src,dst,args...)
+  combine_message(DifferenceMP(),src,dst)
+end
+
+function combine_message(::CompositeMP,src,dst,w)
+  combine_message(PlainMP(),combine_message(DifferenceMP(),src,dst),w)
+end
+
+# measures
 
 function compute_weights(f::DiscreteSpace)
   @abstractmethod
@@ -45,6 +75,10 @@ function InducedMeasure(space::DiscreteSpace;message_rule::MPRule=MPRule())
   InducedMeasure(space,weights,message_rule)
 end
 
+function InducedMeasure(space::DiscreteSpace,weights;message_rule::MPRule=MPRule())
+  InducedMeasure(space,weights,message_rule)
+end
+
 integration(a,meas::InducedMeasure) = @abstractmethod
 get_space(meas::InducedMeasure) = meas.space
 get_weights(meas::InducedMeasure) = meas.weights
@@ -56,11 +90,15 @@ num_edges(meas::InducedMeasure) = ne(get_graph(meas))
 
 const FESpaceMeasure = InducedMeasure{<:FunctionSpace{<:FESpace},<:AbstractSparseMatrix}
 
-num_vertices(meas::FESpaceMeasure) = nnz(get_weights(meas))
-num_edges(meas::FESpaceMeasure) = ne(get_graph(meas)) #TODO what goes here?
+num_vertices(meas::FESpaceMeasure) = size(get_weights(meas),1)
+num_edges(meas::FESpaceMeasure) = nnz(get_weights(meas))
 get_src_ids(meas::FESpaceMeasure) = findnz(get_weights(meas))[2]
 get_dst_ids(meas::FESpaceMeasure) = findnz(get_weights(meas))[1]
-get_edge_weights(meas::FESpaceMeasure) = nonzeros(get_weights(meas))
+
+function get_edge_weights(meas::FESpaceMeasure)
+  w = nonzeros(get_weights(meas))
+  reshape(w,1,length(w),1)
+end
 
 const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractArray}
 
@@ -71,15 +109,16 @@ get_edge_weights(meas::GraphMeasure) = get_edge_weights(get_space(meas))
 const MultiGraphMeasure = InducedMeasure{<:MultiGraphInducedSpace,<:Tuple}
 
 function integration(a::AbstractInputData,meas::InducedMeasure)
-  msg = "Integrand must be of size (latent_dim, num_coords, num_params), where num_coords == $(dimension(get_space(meas))); got size $(size(a))"
-  @check size(a,2) == dimension(get_space(meas)) msg
+  msg = "Integrand must be of size (latent_dim, num_edges, num_params), where num_edges == $(num_edges(meas)); got size $(size(a))"
+  @check size(a,2) == num_edges(meas) msg
   _integration(a,meas)
 end
 
 function Base.iterate(meas::MultiGraphMeasure,i::Int=1)
   space = get_space(meas)
   i > length(space) && return nothing
-  (InducedMeasure(space[i],get_weights(meas)[i]),i+1)
+  m = InducedMeasure(space[i],get_weights(meas)[i];message_rule=get_message_rule(meas))
+  (m,i+1)
 end
 
 function integration(a::AbstractInputData,meas::MultiGraphMeasure)
@@ -91,38 +130,6 @@ function integration(a::AbstractInputData,meas::MultiGraphMeasure)
     out += expand_vertex_data(space,outr,i)
   end
   return out
-end
-
-# message passing
-
-abstract type MPRule end
-
-MPRule() = DifferenceMP()
-
-combine_message(::MPRule,src,dst,args...) = @abstractmethod
-
-function combine_message(r::MPRule,src,dst;edge_weights=nothing)
-  isnothing(edge_weights) && return combine_message(r,src,dst)
-  w = repeat(edge_weights;inner=(1,size(src,2),1))
-  combine_message(r,src,dst,w)
-end
-
-struct PlainMP <: MPRule end
-
-combine_message(::PlainMP,src,dst,args...) = vcat(src,dst,args...)
-
-struct DifferenceMP <: MPRule end
-
-combine_message(::DifferenceMP,src,dst,args...) = src .- dst
-
-struct CompositeMP <: MPRule end
-
-function combine_message(::CompositeMP,src,dst,args...)
-  combine_message(DifferenceMP(),src,dst)
-end
-
-function combine_message(::CompositeMP,src,dst,w)
-  combine_message(PlainMP(),combine_message(DifferenceMP(),src,dst),w)
 end
 
 """
@@ -206,6 +213,7 @@ edge, no channel/sample axes), so no `permutedims` wrapping is needed here, unli
 """
 function attention(scores::AbstractVector{T},meas::InducedMeasure) where T
   @check length(scores) == num_edges(meas) "The number of scores must match the number of graph edges"
+  ids_dst = get_dst_ids(meas)
   maxs = NNlib.scatter(max,scores,ids_dst;dstsize=(num_vertices(meas),),init=T(-Inf))
   α = exp.(scores .- maxs[ids_dst])
   sums = NNlib.scatter(+,α,ids_dst;dstsize=(num_vertices(meas),))
@@ -275,14 +283,13 @@ function _integration(a::AbstractArray,meas::InducedMeasure)
 end
 
 function _integration(a::AbstractInputData,meas::FESpaceMeasure)
-  M = get_weights(meas)
-  _mat_mul_diff_data(M,a)
+  w = get_edge_weights(meas)
+  scatter_data(a.*reshape(w,1,length(w),1),meas)
 end
 
 function _integration(a::AbstractInputData,meas::GraphMeasure)
   w = get_weights(meas)
-  space = get_space(meas)
-  scatter_data(a,space) .* w
+  scatter_data(a,meas) .* w
 end
   
 function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
@@ -304,22 +311,6 @@ function _mat_mul_data(A::AbstractSparseMatrix,x::AbstractInputData)
   # Multiply by non-zero matrix entries (vals): shape (D, K, nnz)
   weighted = gathered .* w
   # Scatter-add into destination rows: shape (D, K, nrows)
-  out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
-  return permutedims(out_perm,(1,3,2))
-end
-
-function _mat_mul_diff_data(A::AbstractMatrix,x::AbstractInputData)
-  @notimplemented "Weight matrix must be sparse"
-end
-
-function _mat_mul_diff_data(A::AbstractSparseMatrix,x::AbstractInputData)
-  D,N,K = size(x)
-  rows,cols,vals = findnz(A)
-  w = reshape(vals,1,1,length(vals))
-  x_perm = permutedims(x,(1,3,2))
-  dst = NNlib.gather(x_perm,rows)
-  src = NNlib.gather(x_perm,cols)
-  weighted = (dst .- src) .* w
   out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
   return permutedims(out_perm,(1,3,2))
 end

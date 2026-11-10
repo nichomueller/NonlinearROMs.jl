@@ -177,44 +177,56 @@ abstract type AbstractGraphInducedSpace <: DiscreteSpace end
 
 get_src_ids(space::AbstractGraphInducedSpace) = @abstractmethod
 get_dst_ids(space::AbstractGraphInducedSpace) = @abstractmethod
-get_message_rule(space::AbstractGraphInducedSpace) = @abstractmethod
 
 get_edge_ids(space::AbstractGraphInducedSpace) = (get_src_ids(space),get_dst_ids(space))
 
-function get_edge_weights(space::AbstractGraphInducedSpace)
-  g = get_graph(space)
-  w = TData.(get_edge_weights(g))
-  wmax = maximum(w;init=zero(TData))
-  wmax > zero(TData) && (w ./= wmax)
-  return reshape(w,1,1,length(w))
-end
+# """
+#     gather_data(vals,space::AbstractGraphInducedSpace) -> per-edge array
 
-function gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
-  gather_data(
-    vals,
-    get_graph(space),
-    get_edge_ids(space)...,
-    get_edge_weights(space);
-    message_rule=get_message_rule(space)
-  )
-end
+# Low-level, rule-free counterpart of `gather_data(vals,meas::InducedMeasure)`
+# (`InducedMeasures.jl`): always concatenates source, destination and (broadcast)
+# edge weight, since a bare space carries no [`MPRule`](@ref) of its own -- that
+# choice only exists once a space is wrapped in an `InducedMeasure`. Useful for
+# inspecting/testing a space's raw graph structure directly, independent of any
+# kernel/model.
+# """
+# function gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
+#   ids_src = get_src_ids(space)
+#   ids_dst = get_dst_ids(space)
+#   edge_weights = get_edge_weights(space)
+#   v′ = permutedims(vals,(1,3,2))
+#   src′ = NNlib.gather(v′,ids_src)
+#   dst′ = NNlib.gather(v′,ids_dst)
+#   w′ = repeat(edge_weights;inner=(1,size(src′,2),1))
+#   out′ = vcat(src′,dst′,w′)
+#   permutedims(out′,(1,3,2))
+# end
 
-function scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
-  scatter_data(vals,get_graph(space),get_edge_ids(space)...)
-end
+# function scatter_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
+#   ids_dst = get_dst_ids(space)
+#   d,_,k = size(vals)
+#   v′ = permutedims(vals,(1,3,2))
+#   out′ = NNlib.scatter(+,v′,ids_dst;dstsize=(d,k,nv(get_graph(space))))
+#   permutedims(out′,(1,3,2))
+# end
 
-function attention(scores::AbstractVector,space::AbstractGraphInducedSpace)
-  attention(scores,get_graph(space),get_edge_ids(space)...)
-end
+# function attention(scores::AbstractVector{T},space::AbstractGraphInducedSpace) where T
+#   ids_dst = get_dst_ids(space)
+#   nv_ = nv(get_graph(space))
+#   maxs = NNlib.scatter(max,scores,ids_dst;dstsize=(nv_,),init=T(-Inf))
+#   α = exp.(scores .- maxs[ids_dst])
+#   sums = NNlib.scatter(+,α,ids_dst;dstsize=(nv_,))
+#   α ./= sums[ids_dst]
+#   return α
+# end
 
 """
-    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3},E<:MPRule} <: AbstractGraphInducedSpace
+    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3}} <: AbstractGraphInducedSpace
       graph::A
       coords::B
       src_ids::C
       dst_ids::C
       edge_weights::D
-      message_rule::E
     end
 
 No precomputed/cached scatter structure needed (see `scatter_data` in
@@ -222,13 +234,12 @@ No precomputed/cached scatter structure needed (see `scatter_data` in
 an active Reactant/Enzyme trace's call stack the way the old `setindex!`-based dense
 incidence matrix did, so there's nothing left to precompute here at construction time.
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3},E<:MPRule} <: AbstractGraphInducedSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3}} <: AbstractGraphInducedSpace
   graph::A
   coords::B
   src_ids::C
   dst_ids::C
   edge_weights::D
-  message_rule::E
 end
 
 function GraphInducedSpace(space;kwargs...)
@@ -238,7 +249,10 @@ function GraphInducedSpace(space;kwargs...)
   src_ids,dst_ids = map(es) do e
     (src(e),dst(e))
   end |> tuple_of_arrays
-  edge_weights = get_edge_weights(graph)
+  w = TData.(get_edge_weights(graph))
+  wmax = maximum(w;init=zero(TData))
+  wmax > zero(TData) && (w ./= wmax)
+  edge_weights = reshape(w,1,1,length(w))
   GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights)
 end
 
@@ -255,13 +269,13 @@ struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:Abstrac
   l_to_lcoord_to_coords::D
 end
 
-function MultiGraphInducedSpace(spaces...;message_rule::MPRule=MPRule(),kwargs...)
-  lspaces = map(x -> GraphInducedSpace(x;message_rule,kwargs...),spaces)
+function MultiGraphInducedSpace(spaces...;kwargs...)
+  lspaces = map(x -> GraphInducedSpace(x;kwargs...),spaces)
   lcoords = map(get_coords,lspaces)
   coords = collect(∪(lcoords...))
   graph = build_graph(coords;kwargs...)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
-  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords,message_rule)
+  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords)
 end
 
 get_coords(space::MultiGraphInducedSpace) = space.coords

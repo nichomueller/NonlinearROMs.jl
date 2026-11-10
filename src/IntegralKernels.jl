@@ -36,10 +36,9 @@ function kv(k,v,meas::InducedMeasure)
   _kv(k,v)
 end
 
-function kv(k,v,meas::GraphMeasure)
-  space = get_space(meas)
+function kv(k,v,meas::Union{GraphMeasure,FESpaceMeasure})
   v′ = permutedims(v,(1,3,2))
-  v′_src = NNlib.gather(v′,get_src_ids(space))
+  v′_src = NNlib.gather(v′,get_src_ids(meas))
   v_src = permutedims(v′_src,(1,3,2))
   _kv(k,v_src)
 end
@@ -115,7 +114,7 @@ end
 function (l::IntegralKernel)((fixed_data,v),ps,st)
   x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
   xk = gather_data(x,l.measure)
-  k = evaluate(l.kernel,xk,ps,st)
+  k,st = evaluate(l.kernel,xk,ps,st)
   y = kv(k,v,l.measure)
   z = integration(y,l.measure)
   return (fixed_data,z),st
@@ -303,9 +302,8 @@ function attention_integral(scores,values,meas::InducedMeasure)
 end
 
 function attention_integral(scores,values,meas::GraphMeasure)
-  graph = get_space(meas)
-  α = attention(vec(scores),graph)
-  scatter_data(α'.*values,graph)
+  α = attention(vec(scores),meas)
+  scatter_data(α'.*values,meas)
 end
 
 # reconstructs the (dout x din) matrix flattened into k's first axis and applies
