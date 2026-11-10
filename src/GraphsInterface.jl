@@ -186,6 +186,11 @@ end
 
 get_weight(g::WeightedSimpleDiGraph,e::Edge) = get_weight(g,src(e),dst(e))
 
+function get_edge_weights(g::AbstractGraph)
+  es = edges(g)
+  map(e -> get_weight(g,e),es)
+end
+
 """
     out_weights(g::WeightedSimpleDiGraph,v) -> Vector
 
@@ -295,125 +300,4 @@ function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radiu
     end
   end
   g
-end
-
-# message-passing on graph and graph-induced spaces
-
-abstract type MPRule end
-
-MPRule() = DifferenceMP()
-
-combine_message(::MPRule,src,dst,args...) = @abstractmethod
-
-function combine_message(r::MPRule,src,dst;edge_weights=nothing)
-  isnothing(edge_weights) && return combine_message(r,src,dst)
-  w = repeat(edge_weights;inner=(1,size(src,2),1))
-  combine_message(r,src,dst,w)
-end
-
-struct PlainMP <: MPRule end
-
-combine_message(::PlainMP,src,dst,args...) = vcat(src,dst,args...)
-
-struct DifferenceMP <: MPRule end
-
-combine_message(::DifferenceMP,src,dst,args...) = src .- dst
-
-struct CompositeMP <: MPRule end
-
-function combine_message(::CompositeMP,src,dst,args...)
-  combine_message(DifferenceMP(),src,dst)
-end
-
-function combine_message(::CompositeMP,src,dst,w)
-  combine_message(PlainMP(),combine_message(DifferenceMP(),src,dst),w)
-end
-
-"""
-    gather_data(vals,g::AbstractGraph) -> per-edge array
-
-Pure indexing (`src.(edges(g))`/`dst.(edges(g))` are computed from `g` alone, never
-from `vals`, so they're ordinary concrete arrays even when `vals` is a Reactant-traced
-tensor): no edge ever needs to accumulate more than one value, unlike `scatter_data`,
-so a plain vectorised gather suffices and no per-edge Julia loop is traced. A loop
-here would otherwise get unrolled into one set of MLIR ops per edge -- fine at
-boh.jl's ~200 edges, but a multi-field graph (e.g. Stokes' combined velocity+pressure
-point cloud) can have tens of thousands, enough to exhaust Reactant's internal
-MLIR symbol-naming budget.
-
-Each edge's output column is the source node's features stacked on top of the
-destination node's (channel axis doubles, `2*size(vals,1)`), not a separate output
-column per endpoint (`NNlib.gather`, unlike `scatter`, never accumulates, so there's
-no `op`/`dstsize` to combine src/dst into one pass -- two separate gathers are needed,
-one per endpoint, then `vcat`'d along the channel axis).
-"""
-function gather_data(
-  vals::AbstractInputData,
-  g::AbstractGraph,
-  ids_src=Int[src(e) for e in edges(g)],
-  ids_dst=Int[dst(e) for e in edges(g)],
-  edge_weights=nothing;
-  message_rule::MPRule=MPRule()
-  )
-
-  @check size(vals,2) == nv(g) "The final dimension must match the number of graph vertices"
-  v′ = permutedims(vals,(1,3,2))
-  src′ = NNlib.gather(v′,ids_src)
-  dst′ = NNlib.gather(v′,ids_dst)
-  out′ = combine_message(message_rule,src′,dst′;edge_weights)
-  permutedims(out′,(1,3,2))
-end
-
-"""
-    scatter_data(vals,g::AbstractGraph) -> per-vertex array
-
-Sums `vals` (one column per edge, in `edges(g)` order; leading axes = channels) into
-its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building block
-behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph)`
-(plain GNO) and the softmax-weighted aggregation in `attention`/`AttentionKernel`
-(HAMLET): the only difference between the two is what's summed -- `vals` itself for a
-fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
-
-Unlike `gather_data`, this genuinely needs to accumulate (several edges can share a
-destination vertex), so a plain vectorised `getindex`-style gather doesn't suffice --
-`NNlib.scatter(+,...)` is used instead (the same primitive `GNNGraphs.jl` builds its
-own message passing on), rather than either a per-edge loop (gets unrolled into one
-set of MLIR ops per edge under a Reactant/Enzyme trace -- fine at boh.jl's ~200 edges,
-but a multi-field graph, e.g. Stokes' combined velocity+pressure point cloud, can have
-tens of thousands, enough to exhaust Reactant's internal MLIR symbol-naming budget) or
-the previous dense `(nv,ne)` incidence-matrix matmul (whose own construction was a
-`setindex!`-based loop with the same problem, needing a separate precomputed-and-cached
-path to stay off the traced call stack entirely). `NNlib.scatter`'s own edge axis is
-the array's *last* dimension, not `vals`'s second (see `AbstractInputData`'s
-`(D,N,K)` layout), hence the `permutedims` wrapping either side of the call.
-"""
-function scatter_data(vals::AbstractInputData,g::AbstractGraph,ids_src=nothing,ids_dst=Int[dst(e) for e in edges(g)])
-  @check size(vals,2) == ne(g) "The final dimension must match the number of graph edges"
-  d,_,k = size(vals)
-  v′ = permutedims(vals,(1,3,2))
-  out′ = NNlib.scatter(+,v′,ids_dst;dstsize=(d,k,nv(g)))
-  permutedims(out′,(1,3,2))
-end
-
-"""
-    attention(scores::AbstractVector,g::AbstractGraph) -> per-edge weights
-
-Normalizes `scores` (one per edge) into attention weights: a numerically-stable
-softmax over the scores of every edge sharing the same destination vertex (a
-per-vertex group, not a single global softmax over all edges).
-
-Same `NNlib.scatter` approach as `scatter_data`, applied to the two group
-reductions a segmented softmax needs (max-per-group, then sum-per-group of the
-shifted exponentials) instead of three sequential per-edge scalar loops, for the
-same Reactant/MLIR-scaling reason. `scores`/`dsts` are already 1-D (one entry per
-edge, no channel/sample axes), so no `permutedims` wrapping is needed here, unlike
-`gather_data`/`scatter_data`.
-"""
-function attention(scores::AbstractVector{T},g::AbstractGraph,ids_src=nothing,dsts=Int[dst(e) for e in edges(g)]) where T
-  @check length(scores) == ne(g) "The number of scores must match the number of graph edges"
-  maxs = NNlib.scatter(max,scores,dsts;dstsize=(nv(g),),init=T(-Inf))
-  α = exp.(scores .- maxs[dsts])
-  sums = NNlib.scatter(+,α,dsts;dstsize=(nv(g),))
-  α ./= sums[dsts]
-  return α
 end

@@ -175,22 +175,19 @@ end
 
 abstract type AbstractGraphInducedSpace <: DiscreteSpace end
 
-get_edge_ids(g::AbstractGraph) = (Int[src(e) for e in edges(g)],Int[dst(e) for e in edges(g)])
-get_edge_ids(space::AbstractGraphInducedSpace) = get_edge_ids(get_graph(space))
+get_src_ids(space::AbstractGraphInducedSpace) = @abstractmethod
+get_dst_ids(space::AbstractGraphInducedSpace) = @abstractmethod
+get_message_rule(space::AbstractGraphInducedSpace) = @abstractmethod
 
-function get_edge_weights(g::AbstractGraph)
-  es = edges(g)
-  w = TData[get_weight(g,src(e),dst(e)) for e in es]
-  wmax = maximum(w;init=zero(TData))
-  wmax > zero(TData) && (w ./= wmax)
-  reshape(w,1,1,length(w))
-end
+get_edge_ids(space::AbstractGraphInducedSpace) = (get_src_ids(space),get_dst_ids(space))
 
 function get_edge_weights(space::AbstractGraphInducedSpace)
-  get_edge_weights(get_graph(space))
+  g = get_graph(space)
+  w = TData.(get_edge_weights(g))
+  wmax = maximum(w;init=zero(TData))
+  wmax > zero(TData) && (w ./= wmax)
+  return reshape(w,1,1,length(w))
 end
-
-get_message_rule(space::AbstractGraphInducedSpace) = @abstractmethod
 
 function gather_data(vals::AbstractInputData,space::AbstractGraphInducedSpace)
   gather_data(
@@ -234,7 +231,7 @@ struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:Abstract
   message_rule::E
 end
 
-function GraphInducedSpace(space;message_rule::MPRule=MPRule(),kwargs...)
+function GraphInducedSpace(space;kwargs...)
   coords = get_coords(space)
   graph = build_graph(coords;kwargs...)
   es = edges(graph)
@@ -242,14 +239,14 @@ function GraphInducedSpace(space;message_rule::MPRule=MPRule(),kwargs...)
     (src(e),dst(e))
   end |> tuple_of_arrays
   edge_weights = get_edge_weights(graph)
-  GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights,message_rule)
+  GraphInducedSpace(graph,coords,src_ids,dst_ids,edge_weights)
 end
 
 get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
-get_edge_ids(space::GraphInducedSpace) = (space.src_ids,space.dst_ids)
+get_src_ids(space::GraphInducedSpace) = space.src_ids
+get_dst_ids(space::GraphInducedSpace) = space.dst_ids
 get_edge_weights(space::GraphInducedSpace) = space.edge_weights
-get_message_rule(space::GraphInducedSpace) = space.message_rule
 
 struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
   lspaces::NTuple{N,A}

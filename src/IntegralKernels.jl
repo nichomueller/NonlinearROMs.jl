@@ -8,8 +8,16 @@ get_out_dimension(k::Lux.Dense) = k.out
 get_in_dimension(k::Lux.Conv) = k.in
 get_out_dimension(k::Lux.Conv) = k.out
 
-kernel_input(x,meas::InducedMeasure) = x
-kernel_input(x,meas::GraphMeasure) = gather_data(x,get_space(meas))
+function Arrays.evaluate(layer::AbstractLuxLayer,x::Union{AbstractVector,AbstractMatrix},ps,st)
+  layer(x,ps,st)
+end
+
+function Arrays.evaluate(layer::AbstractLuxLayer,x::AbstractArray,ps,st)
+  a = reshape(x,size(x,1),:)
+  b,st = layer(a,ps,st)
+  y = reshape(b,size(b,1),Base.tail(size(x))...)
+  return y,st
+end
 
 """
     kv(k,v,meas::InducedMeasure)
@@ -31,7 +39,7 @@ end
 function kv(k,v,meas::GraphMeasure)
   space = get_space(meas)
   v′ = permutedims(v,(1,3,2))
-  v′_src = NNlib.gather(v′,space.src_ids)
+  v′_src = NNlib.gather(v′,get_src_ids(space))
   v_src = permutedims(v′_src,(1,3,2))
   _kv(k,v_src)
 end
@@ -106,11 +114,8 @@ end
 
 function (l::IntegralKernel)((fixed_data,v),ps,st)
   x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
-  xk = kernel_input(x,l.measure)
-  sz = size(xk)
-  xk_2d = reshape(xk,sz[1],:)
-  k_2d,st = l.kernel(xk_2d,ps,st)
-  k = reshape(k_2d,size(k_2d,1),Base.tail(sz)...)
+  xk = gather_data(x,l.measure)
+  k = evaluate(l.kernel,xk,ps,st)
   y = kv(k,v,l.measure)
   z = integration(y,l.measure)
   return (fixed_data,z),st
@@ -139,9 +144,9 @@ end
 
 function (l::AttentionKernel)((fixed_data,v),ps,st)
   x = merge_data(l.formatter,fixed_data,v)
-  xk = kernel_input(x,l.measure)
-  s,st_score = l.score(xk,ps.score,st.score)
-  val,st_value = l.value(xk,ps.value,st.value)
+  xk = gather_data(x,l.measure)
+  s,st_score = evaluate(l.score,xk,ps.score,st.score)
+  val,st_value = evaluate(l.value,xk,ps.value,st.value)
   y = attention_integral(s,val,l.measure)
   return (fixed_data,y),(score=st_score,value=st_value)
 end
@@ -172,18 +177,18 @@ end
 
 function (l::MultipleAttentionKernel{N})((fixed_data,v),ps,st) where N
   x = merge_data(l.formatter,fixed_data,v)
-  xk = kernel_input(x,l.measure)
+  xk = gather_data(x,l.measure)
   st_score = ()
   st_value = ()
   y = ()
   for i in 1:N
-    si,st_scorei = l.scores[i](xk,ps.score[i],st.score[i])
-    vali,st_valuei = l.values[i](xk,ps.value[i],st.value[i])
+    si,st_scorei = evaluate(l.scores[i],xk,ps.score[i],st.score[i])
+    vali,st_valuei = evaluate(l.values[i],xk,ps.value[i],st.value[i])
     st_score = (st_score...,st_scorei)
     st_value = (st_value...,st_valuei)
     y = (y...,attention_integral(si,vali,l.measure))
   end
-  z,st_aggregation = l.aggregation(hcat(y...),ps.aggregation,st.aggregation)
+  z,st_aggregation = evaluate(l.aggregation,hcat(y...),ps.aggregation,st.aggregation)
   return (fixed_data,z),(score=st_score,value=st_value,aggregation=st_aggregation)
 end
 
