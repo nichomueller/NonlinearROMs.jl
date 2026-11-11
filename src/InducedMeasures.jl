@@ -8,7 +8,7 @@ combine_message(::MPRule,src,dst,args...) = @abstractmethod
 
 function combine_message(r::MPRule,src,dst;edge_weights=nothing)
   isnothing(edge_weights) && return combine_message(r,src,dst)
-  w = repeat(edge_weights;inner=(1,size(src,2),1))
+  w = repeat(reshape(edge_weights,1,1,:);inner=(1,size(src,2),1))
   combine_message(r,src,dst,w)
 end
 
@@ -94,11 +94,7 @@ num_vertices(meas::FESpaceMeasure) = size(get_weights(meas),1)
 num_edges(meas::FESpaceMeasure) = nnz(get_weights(meas))
 get_src_ids(meas::FESpaceMeasure) = findnz(get_weights(meas))[2]
 get_dst_ids(meas::FESpaceMeasure) = findnz(get_weights(meas))[1]
-
-function get_edge_weights(meas::FESpaceMeasure)
-  w = nonzeros(get_weights(meas))
-  reshape(w,1,length(w),1)
-end
+get_edge_weights(meas::FESpaceMeasure) = nonzeros(get_weights(meas))
 
 const GraphMeasure = InducedMeasure{<:GraphInducedSpace,<:AbstractArray}
 
@@ -284,7 +280,7 @@ end
 
 function _integration(a::AbstractInputData,meas::FESpaceMeasure)
   w = get_edge_weights(meas)
-  scatter_data(a.*reshape(w,1,length(w),1),meas)
+  scatter_data(a.*reshape(w,1,:,1),meas)
 end
 
 function _integration(a::AbstractInputData,meas::GraphMeasure)
@@ -304,13 +300,9 @@ function _mat_mul_data(A::AbstractSparseMatrix,x::AbstractInputData)
   D,N,K = size(x)
   rows,cols,vals = findnz(A)
   w = reshape(vals,1,1,length(vals))
-  # Permute to (D, K, N) as NNlib.gather/scatter operate on the last dimension
   x_perm = permutedims(x,(1,3,2))
-  # Gather source columns: shape (D, K, nnz)
   gathered = NNlib.gather(x_perm,cols)
-  # Multiply by non-zero matrix entries (vals): shape (D, K, nnz)
   weighted = gathered .* w
-  # Scatter-add into destination rows: shape (D, K, nrows)
   out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
   return permutedims(out_perm,(1,3,2))
 end
