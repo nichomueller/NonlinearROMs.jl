@@ -67,13 +67,11 @@ function build_model(
   in_dims = size(inputs,1)
   out_dims = size(outputs,1)
   widths = (in_dims,model.hidden_layers...,out_dims)
-  channels = get_kernel_channels(model.formatter,fixed_formatter,_num_coord_dims(model.style),in_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
   klayers = ntuple(
     i -> build_kernel_neural_layer(
       model.style,
       model.formatter,
-      channels,
       in_dims,
       widths[i+1],
       widths[i+2],

@@ -187,11 +187,50 @@ function ZScore(data::AbstractInputData;normalise=true)
   end
   μ = dropdims(mean(data,dims=(2,3)),dims=(2,3))
   σ = dropdims(std(data,dims=(2,3)),dims=(2,3))
-  # Avoid dividing by zero if a feature is constant
+  # A constant channel has zero variance: leave it unnormalised (identity
+  # transform) instead of dividing by a near-zero σ, which would collapse it to 0
   @inbounds for i in eachindex(σ)
-    iszero(σ[i]) && (σ[i] = eps(eltype(σ)))
+    if iszero(σ[i])
+      μ[i] = zero(eltype(μ))
+      σ[i] = one(eltype(σ))
+    end
   end
   return ZScore(μ,σ)
+end
+
+struct MScore{A} <: AbstractScore
+  scale::A
+end
+
+const NoMScore = MScore{Nothing}
+
+MScore(::Nothing;kwargs...) = MScore(nothing)
+
+function MScore(data::AbstractInputData;normalise=true)
+  if normalise
+    stats = MScore(data;normalise=false)
+    normalise!(data,stats)
+    return stats
+  end
+  s = maximum(abs,data)
+  iszero(s) && (s = one(s))
+  return MScore(s)
+end
+
+function normalise!(data::AbstractInputData,score::NoMScore)
+  data
+end
+
+function normalise!(data::AbstractInputData,score::MScore)
+  data ./= score.scale
+end
+
+function denormalise!(data::AbstractInputData,score::NoMScore)
+  data
+end
+
+function denormalise!(data::AbstractInputData,score::MScore)
+  data .*= score.scale
 end
 
 function normalise!(data::AbstractInputData,score::NoZScore)
@@ -214,7 +253,7 @@ function denormalise!(data::AbstractInputData,stats::ZScore)
   end
 end
 
-struct Scores{A} <: AbstractScore
+struct NamedScores{A} <: AbstractScore
   scores::A
 end
 
@@ -263,14 +302,10 @@ struct Normalisation{A<:NamedScores,B<:AbstractScore}
   output_score::B
 end
 
-function Normalisation(((coords,features),output);kwargs...)
-  input_score = Scores((coords=RScore(coords;kwargs...),features=ZScore(features;kwargs...)))
-  output_score = ZScore(output;kwargs...)
+function Normalisation(style::NormStyle,(input,output))
+  input_score = Score(style.input_style,input)
+  output_score = Score(style.output_style,output)
   Normalisation(input_score,output_score)
-end
-
-function Normalisation((input,output);kwargs...)
-  Normalisation(NormStyle(;kwargs...),(input,output))
 end
 
 for f in (:normalise!,:denormalise!)

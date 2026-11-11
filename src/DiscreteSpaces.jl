@@ -181,7 +181,7 @@ get_dst_ids(space::AbstractGraphInducedSpace) = @abstractmethod
 get_edge_ids(space::AbstractGraphInducedSpace) = (get_src_ids(space),get_dst_ids(space))
 
 """
-    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractArray{TData,3}} <: AbstractGraphInducedSpace
+    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractVector{TData}} <: AbstractGraphInducedSpace
       graph::A
       coords::B
       src_ids::C

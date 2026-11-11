@@ -74,11 +74,11 @@ end
 # we potentially want to replace the space with a new one during the online phase
 # thus we make this struct mutable
 """
-    mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter,D} <: AbstractIntegralKernel
+    mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
       const kernel::A
       measure::B
-      formatter::C
-      channels::D
+      const formatter::C
+      const coord_dims::Int
     end
 
 Wraps a plain network `kernel` into a non-local integral operator
@@ -89,12 +89,13 @@ running hidden state from the previous layer. `formatter` (its own, layer-local
 [`DataFormatter`](@ref)) decides which of `(x,a(x))`/`v` actually get concatenated
 and fed to `kernel` -- different layers legitimately want different subsets
 (Kovachki et al.'s three kernel cases `κ(x,y)`/`κ(x,y,a(x),a(y))`/`κ(x,y,v(x),v(y))`
-are exactly a choice of `formatter`). `channels` are the rows of `fixed_data`
-matching `formatter`'s `pass_coords`/`pass_features` (see
-[`get_kernel_channels`](@ref)), `:` keeping all of them. `fixed_data` passes
-through unchanged so the next layer can use it too.
+are exactly a choice of `formatter`). `coord_dims` is how many of `fixed_data`'s
+leading rows are coordinates (vs. features), which `formatter`'s
+`pass_coords`/`pass_features` use to select which part of `fixed_data` to keep
+(see [`DataInterface.merge_data`](@ref)). `fixed_data` passes through unchanged
+so the next layer can use it too.
 """
-mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter,D} <: AbstractIntegralKernel
+mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
   const kernel::A
   measure::B
   const formatter::C

@@ -118,7 +118,7 @@ end
     # Edge indices and normalized weights
     @test length(src_ids) == ne(g)
     @test length(dst_ids) == ne(g)
-    @test size(edge_weights) == (1,1,ne(g))
+    @test length(edge_weights) == ne(g)
 
     @test all(i -> 1 <= i <= nv(g),src_ids)
     @test all(i -> 1 <= i <= nv(g),dst_ids)
@@ -142,7 +142,7 @@ end
     for e_idx in unique((1,max(1,ne(g) ÷ 2),ne(g)))
       s = src_ids[e_idx]
       d = dst_ids[e_idx]
-      w = edge_weights[1,1,e_idx]
+      w = edge_weights[e_idx]
 
       @test gathered[1:D,e_idx,:] ≈ vals[:,s,:]
       @test gathered[(D+1):(2D),e_idx,:] ≈ vals[:,d,:]

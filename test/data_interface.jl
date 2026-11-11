@@ -48,10 +48,10 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     @test all(x -> isapprox(x,5.0f0; atol=1e-5),view(data,3,:,:))
     @test !any(isnan,data)
 
-    # Discretization invariance: statistics must have shape (D, 1, 1) so they can
+    # Discretization invariance: statistics are per-channel scalars, so they can
     # be applied to a mesh with a different number of evaluation points N_test != N
-    @test size(stats.μ) == (D,1,1)
-    @test size(stats.σ) == (D,1,1)
+    @test size(stats.μ) == (D,)
+    @test size(stats.σ) == (D,)
 
     N_test = 37
     data_new_mesh = rand(TData,D,N_test,4)

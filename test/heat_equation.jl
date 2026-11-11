@@ -65,9 +65,9 @@ fspace = FunctionSpace(test)
 gspace = GraphInducedSpace(fspace;radius=0.3)
 
 times = collect(tdomain)
-states = [uh0μ(μ);collect_trajectory(uhμ)]
-features_fn(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
-input_space,output_space = rollout_data(fspace,features_fn,times,states)
+states = vcat(uh0μ(μ),collect(uhμ)...)
+features(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
+input_space,output_space = rollout_data(fspace,features,times,states)
 
 model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(model;epochs=200,print_every=50)
@@ -77,4 +77,4 @@ op = neural_operator(solver,input_space,output_space)
 
 # online phase: roll the trained operator out over the whole trajectory, starting
 # from the true initial condition -- each step only ever sees its own prediction
-predicted_states = rollout(solver,op,fspace,features_fn,times,states[1])
+predicted_states = rollout(solver,op,fspace,features,times,states[1])

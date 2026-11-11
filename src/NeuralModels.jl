@@ -65,8 +65,6 @@ struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter} <: Neu
   channel_wise::Bool
   activation::B
   formatter::C
-  kernel_layers::NTuple{M,Int}
-  kernel_activation::D
 end
 
 function KernelNeuralModel(
@@ -94,7 +92,7 @@ end
 # the solver-side (fixed input) formatter: always pass both `x` and `a(x)`, the
 # kernel-side selection being `model.formatter`'s job
 function DataFormatter(model::KernelNeuralModel)
-  DataFormatter(;normalise=model.formatter.normalise,sampler=model.formatter.sampler)
+  DataFormatter(;norm_style=model.formatter.norm_style,sampler=model.formatter.sampler)
 end
 
 """
