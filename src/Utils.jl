@@ -130,40 +130,6 @@ abstract type AbstractScore end
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
 
-# e.g. the coordinates, when the formatter does not pass them
-normalise!(data::Nothing,score::AbstractScore) = data
-denormalise!(data::Nothing,score::AbstractScore) = data
-
-struct MScore{A<:Union{Nothing,Number}} <: AbstractScore
-  max::A
-end
-
-const NoMScore = MScore{Nothing}
-
-MScore(::Nothing;kwargs...) = MScore(nothing)
-
-function MScore(data::AbstractInputData;normalise=true)
-  max = maximum(abs,data)
-  normalise && (data ./= max)
-  MScore(max)
-end
-
-function normalise!(data,score::NoMScore)
-  data
-end
-
-function normalise!(data,score::MScore)
-  rdiv!(data,score.max)
-end
-
-function denormalise!(data,score::NoMScore)
-  data
-end
-
-function denormalise!(data,score::MScore)
-  rmul!(data,score.max)
-end
-
 struct RScore{A} <: AbstractScore
   lower::A
   upper::A
@@ -179,8 +145,8 @@ function RScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  l = minimum(data,dims=(2,3))
-  u = maximum(data,dims=(2,3))
+  l = dropdims(minimum(data,dims=(2,3)),dims=(2,3))
+  u = dropdims(maximum(data,dims=(2,3)),dims=(2,3))
   return RScore(l,u)
 end
 
@@ -189,9 +155,9 @@ function normalise!(data::AbstractInputData,score::NoRScore)
 end
 
 function normalise!(data::AbstractInputData,score::RScore)
-  data .-= score.lower
-  data ./= (score.upper - score.lower)
-  data
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .- score.lower[d]) ./ (score.upper[d] - score.lower[d])
+  end
 end
 
 function denormalise!(data::AbstractInputData,score::NoRScore)
@@ -199,17 +165,17 @@ function denormalise!(data::AbstractInputData,score::NoRScore)
 end
 
 function denormalise!(data::AbstractInputData,score::RScore)
-  data .*= (score.upper - score.lower)
-  data .+= score.lower
-  data
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .* (score.upper[d] - score.lower[d])) .+ score.lower[d]
+  end
 end
 
-struct ZScore{A,B} <: AbstractScore
+struct ZScore{A} <: AbstractScore
   μ::A
-  σ::B
+  σ::A
 end
 
-const NoZScore = ZScore{Nothing,Nothing}
+const NoZScore = ZScore{Nothing}
 
 ZScore(::Nothing;kwargs...) = ZScore(nothing,nothing)
 
@@ -219,39 +185,36 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  μ = mean(data,dims=(2,3))
-  σ = std(data,dims=(2,3))
-  # Avoid wiping out or dividing by zero if a channel is constant
+  μ = dropdims(mean(data,dims=(2,3)),dims=(2,3))
+  σ = dropdims(std(data,dims=(2,3)),dims=(2,3))
+  # Avoid dividing by zero if a feature is constant
   @inbounds for i in eachindex(σ)
-    if σ[i] < TData(1e-6)
-      μ[i] = zero(eltype(μ))
-      σ[i] = one(eltype(σ))
-    end
+    iszero(σ[i]) && (σ[i] = eps(eltype(σ)))
   end
   return ZScore(μ,σ)
 end
 
-function normalise!(data::AbstractArray,score::NoZScore)
+function normalise!(data::AbstractInputData,score::NoZScore)
   data
 end
 
-function normalise!(data::AbstractArray,stats::ZScore)
-  data .-= stats.μ
-  data ./= stats.σ
+function normalise!(data::AbstractInputData,stats::ZScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .- stats.μ[d]) ./ stats.σ[d]
+  end
+end
+
+function denormalise!(data::AbstractInputData,score::NoZScore)
   data
 end
 
-function denormalise!(data::AbstractArray,score::NoZScore)
-  data
+function denormalise!(data::AbstractInputData,stats::ZScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
+  end
 end
 
-function denormalise!(data::AbstractArray,stats::ZScore)
-  data .*= stats.σ
-  data .+= stats.μ
-  data
-end
-
-struct NamedScores{A} <: AbstractScore
+struct Scores{A} <: AbstractScore
   scores::A
 end
 
@@ -300,10 +263,9 @@ struct Normalisation{A<:NamedScores,B<:AbstractScore}
   output_score::B
 end
 
-function Normalisation(style::NormStyle,(input,output);kwargs...)
-  normalise = style.normalise
-  input_score = Score(style.input_style,input;normalise)
-  output_score = Score(style.output_style,output;normalise)
+function Normalisation(((coords,features),output);kwargs...)
+  input_score = Scores((coords=RScore(coords;kwargs...),features=ZScore(features;kwargs...)))
+  output_score = ZScore(output;kwargs...)
   Normalisation(input_score,output_score)
 end
 

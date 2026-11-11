@@ -48,15 +48,32 @@ function build_kernel_neural_layer(
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
-function build_model(model::KernelNeuralModel,(inputs,outputs))
+build_kernel_network(in_dims,out_dims,::Tuple{},activation) = Lux.Dense(in_dims => out_dims)
+
+function build_kernel_network(in_dims,out_dims,layers::Tuple,activation)
+  build_lux_chain((in_dims,layers...,out_dims),activation)
+end
+
+function build_model(s::NeuralSolver{<:KernelNeuralModel},data)
+  build_model(s.model,data,get_formatter(s))
+end
+
+function build_model(
+  model::KernelNeuralModel,
+  (inputs,outputs),
+  fixed_formatter::DataFormatter=DataFormatter(model)
+  )
+
   in_dims = size(inputs,1)
   out_dims = size(outputs,1)
   widths = (in_dims,model.hidden_layers...,out_dims)
+  channels = get_kernel_channels(model.formatter,fixed_formatter,_num_coord_dims(model.style),in_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
   klayers = ntuple(
     i -> build_kernel_neural_layer(
       model.style,
       model.formatter,
+      channels,
       in_dims,
       widths[i+1],
       widths[i+2],
@@ -106,14 +123,14 @@ function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(solver::NeuralSolver,data;shuffle=true,partial=false)
+function get_data_loader(solver::NeuralSolver,data;kwargs...)
   batchsize = resolve_batch_size(solver,data)
-  MLUtils.DataLoader(data;batchsize,shuffle,partial)
+  MLUtils.DataLoader(data;batchsize,kwargs...)
 end
 
-function train(solver::NeuralSolver,data,stats;kwargs...)
-  train_state = get_train_state(solver,data;kwargs...)
-  dataloader = get_data_loader(solver,data;shuffle=true,partial=false)
+function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
+  train_state = get_train_state(solver,data;rng,seed)
+  dataloader = get_data_loader(solver,data;kwargs...)
   train!(solver,train_state,dataloader,stats)
 end
 

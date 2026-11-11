@@ -27,11 +27,13 @@ function DataFormatter(style::FourierStyle)
 end
 
 """
-    struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter} <: NeuralModel
+    struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter,M,D<:Function} <: NeuralModel
       style::A
       hidden_layers::NTuple{N,Int}
       activation::B
       formatter::C
+      kernel_layers::NTuple{M,Int}
+      kernel_activation::D
     end
 
 Recipe for a kernel-based neural operator (Kovachki et al.), in the same spirit as
@@ -39,10 +41,16 @@ Recipe for a kernel-based neural operator (Kovachki et al.), in the same spirit 
 hidden widths, with the input/output dimensions inferred from the training data
 at `build_model` time. `style` picks the non-local discretisation shared by every
 hidden layer (`IntegralStyle` for a graph/FE-quadrature [`InducedMeasure`](@ref),
-`FourierStyle` for an FNO-style spectral kernel); `formatter` is the single
-[`DataFormatter`](@ref) that both decides what the model's fixed per-sample input
-is made of (`x`/`a(x)`) and, inside every hidden layer, whether the running hidden
-state `v` gets folded into that kernel's own input.
+`FourierStyle` for an FNO-style spectral kernel). `formatter` is the kernel-side
+[`DataFormatter`](@ref): inside every hidden layer, `pass_coords`/`pass_features`
+select which channels of the fixed per-sample input `(x,a(x))` are fed to `κ_θ`,
+and `pass_new_data` whether the running hidden state `v` is folded in too (e.g.
+`pass_features=Val(false)` gives Kovachki et al.'s `κ(x,y)` case). What the fixed
+input itself is made of is decided by the [`NeuralSolver`](@ref)'s own formatter,
+which by default passes both `x` and `a(x)`. `kernel_layers`/`kernel_activation`
+are the hidden widths/nonlinearity of `κ_θ`'s own network; the default `()` makes
+`κ_θ` a single affine `Dense`, which cannot represent a non-affine kernel such as
+a Green's function.
 
 `build_model` turns this recipe into an actual `Lux.Chain`:
 1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
@@ -57,6 +65,8 @@ struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter} <: Neu
   channel_wise::Bool
   activation::B
   formatter::C
+  kernel_layers::NTuple{M,Int}
+  kernel_activation::D
 end
 
 function KernelNeuralModel(
@@ -81,7 +91,11 @@ function KernelNeuralModel(args...;truncation=16,kwargs...)
   KernelNeuralModel(style,args...;kwargs...)
 end
 
-DataFormatter(model::KernelNeuralModel) = model.formatter
+# the solver-side (fixed input) formatter: always pass both `x` and `a(x)`, the
+# kernel-side selection being `model.formatter`'s job
+function DataFormatter(model::KernelNeuralModel)
+  DataFormatter(;normalise=model.formatter.normalise,sampler=model.formatter.sampler)
+end
 
 """
     struct NOMAD{N,A} <: NeuralModel
