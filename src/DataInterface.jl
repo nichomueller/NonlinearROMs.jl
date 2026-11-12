@@ -130,20 +130,42 @@ function cat_channels(
   @check all(size(a,3) == K for a in ldata) "All local data must share the same samples"
   @check length(ldata) == length(lcoord_map) "Local data and local coordinate maps must have the same length"
   D = sum(a -> size(a,1),ldata)
-  data = zeros(T,D,N,K)
+  gdata = zeros(T,D,N,K)
   cache = array_cache(lcoord_map)
   @inbounds for l in eachindex(ldata)
     a = ldata[l]
     coord_ids = getindex!(cache,lcoord_map,l)
     for (p,ap) in enumerate(a)
       i,j,k = Tuple(p)
-      data[offsets[l]+i,coord_ids[j],k] = ap
+      gdata[offsets[l]+i,coord_ids[j],k] = ap
     end
   end
-  data
+  gdata
+end
+
+function get_channel(
+  gdata::AbstractInputData{T},
+  range::AbstractVector{<:Integer},
+  gcoord_map::AbstractVector{<:Integer}
+  ) where T
+
+  d = length(range)
+  n = length(gcoord_map)
+  K = size(gdata,3)
+  ldata = zeros(T,d,n,K)
+  @inbounds for p in CartesianIndices(ldata)
+    i,j,k = Tuple(p)
+    ldata[i,j,k] = gdata[range[i],gcoord_map[j],k]
+  end
+  ldata
 end
 
 # concatenate along the sample axis (the last one)
+function cat_samples(ldata,args...)
+  offsets = compute_offsets(ldata;axis=3)
+  cat_samples(ldata,offsets,args...)
+end
+
 function cat_samples(
   ldata::Tuple{Vararg{AbstractInputData{T}}},
   lcoord_map::Table=_trivial_table(ldata),
@@ -156,7 +178,7 @@ function cat_samples(
   for (l,a) in enumerate(ldata)
     offsets[l+1] = offsets[l] + size(a,3)
   end
-  data = zeros(T,D,N,last(offsets)-1)
+  gdata = zeros(T,D,N,last(offsets)-1)
   cache = array_cache(lcoord_map)
   @inbounds for l in eachindex(ldata)
     a = ldata[l]
@@ -164,10 +186,27 @@ function cat_samples(
     range = _get_range(offsets,l)
     for (p,ap) in enumerate(a)
       i,j,k = Tuple(p)
-      data[i,coord_ids[j],range[k]] = ap
+      gdata[i,coord_ids[j],range[k]] = ap
     end
   end
-  data,offsets
+  gdata,offsets
+end
+
+function get_sample(
+  gdata::AbstractInputData{T},
+  range::AbstractVector{<:Integer},
+  gcoord_map::AbstractVector{<:Integer}
+  ) where T
+
+  D = size(gdata,1)
+  n = length(gcoord_map)
+  k = length(range)
+  ldata = zeros(T,D,n,k)
+  @inbounds for p in CartesianIndices(ldata)
+    i,j,k = Tuple(p)
+    ldata[i,j,k] = gdata[i,gcoord_map[j],range[k]]
+  end
+  ldata
 end
 
 function compute_offsets(a;axis=1)
@@ -180,7 +219,7 @@ end
 
 # utils
 
-function _get_coords(x::AbstractVector{<:Point},K::Int)
+function points_to_coords(x::AbstractVector{<:Point},K::Int=1)
   D = num_components(eltype(x))
   N = length(x)
   coords = zeros(TData,D,N,K)
@@ -190,6 +229,15 @@ function _get_coords(x::AbstractVector{<:Point},K::Int)
     end
   end
   return coords
+end
+
+function coords_to_points(coords::AbstractInputData)
+  D = size(coords,1)
+  points = Vector{Point{D,TData}}(undef,size(coords,2))
+  @inbounds for i in axes(coords,2)
+    points[i] = Point(ntuple(d -> coords[d,i,1],Val(D)))
+  end
+  points
 end
 
 function _get_features(a::FeatureBundle,x::AbstractVector{<:Point})

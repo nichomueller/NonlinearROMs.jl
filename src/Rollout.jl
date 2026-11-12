@@ -40,7 +40,7 @@ end
 
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   data = collect(a)
-  coords = _get_coords(x,num_params(first(data)))
+  coords = points_to_coords(x,num_params(first(data)))
   features = _get_features(data,x)
   InputSpace(coords,features)
 end
@@ -101,7 +101,7 @@ end
 
 #   input = cat(ins...;dims=3)
 #   output = cat(outs...;dims=3)
-#   coords = _get_coords(x,size(input,3))
+#   coords = points_to_coords(x,size(input,3))
 
 #   input_space = InputSpace(coords,input)
 #   output_space = OutputSpace(get_fe_space(states[1]),InputData(output,ranges,point_ranges))
@@ -125,7 +125,7 @@ end
 #   for i in 1:length(times)-1
 #     feat_i = _get_features(features_fn(times[i]),x)
 #     @check size(feat_i,3) == K "features_fn(t) must be evaluated at the same K parameters as u0"
-#     input_i = InputSpace(_get_coords(x,K),vcat(feat_i,u))
+#     input_i = InputSpace(points_to_coords(x,K),vcat(feat_i,u))
 #     du = solve(solver,op,input_i)
 #     u = u .+ du
 #     states[i+1] = u
@@ -150,18 +150,18 @@ for (F,T) in zip((:_get_features,:get_values),(:FeatureBundle,:ParamFEFunction))
   end
 end
 
-function _free_values(f::OutputSpace,data::RolloutData{<:AbstractInputData})
-  msg = "Data does not match the output space's dof count"
-  comps = get_free_dof_to_comp(f.space)
-  points = get_free_dof_to_point(f.space)
-  ids = findall(get_node_masks(f.space)) # representative dof ids
-  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
-  @check size(data,1)*size(data,2) == length(comps) msg
-  T = eltype2(get_vector_type(f.space))
-  u = zeros(T,length(comps),size(data,3))
-  @inbounds @views for dof in eachindex(comps)
-    pos = point_to_pos[points[dof]]
-    u[dof,:] .= data[comps[dof],pos,:]
-  end
-  u
-end
+# function _free_values(f::OutputSpace,data::RolloutData{<:AbstractInputData})
+#   msg = "Data does not match the output space's dof count"
+#   comps = get_free_dof_to_comp(f.space)
+#   points = get_free_dof_to_point(f.space)
+#   ids = findall(get_node_masks(f.space)) # representative dof ids
+#   point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+#   @check size(data,1)*size(data,2) == length(comps) msg
+#   T = eltype2(get_vector_type(f.space))
+#   u = zeros(T,length(comps),size(data,3))
+#   @inbounds @views for dof in eachindex(comps)
+#     pos = point_to_pos[points[dof]]
+#     u[dof,:] .= data[comps[dof],pos,:]
+#   end
+#   u
+# end

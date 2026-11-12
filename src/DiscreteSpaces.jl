@@ -35,7 +35,7 @@ struct InputSpace{A<:AbstractInputData,B<:AbstractInputData} <: TrainingSpace
 end
 
 function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
-  coords = _get_coords(x,num_params(a))
+  coords = points_to_coords(x,num_params(a))
   features = _get_features(a,x)
   InputSpace(coords,features)
 end
@@ -49,7 +49,7 @@ get_coords(f::InputSpace) = f.coords
 get_features(f::InputSpace) = f.features
 num_coords(f::InputSpace) = size(f.coords,2)
 
-get_points(f::InputSpace) = _to_points(f.coords)
+get_points(f::InputSpace) = coords_to_points(f.coords)
 
 function fetch_data(d::DataFormatter,f::InputSpace)
   input = (coords=f.coords,features=f.features)
@@ -81,7 +81,7 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
 end
 
 function to_element(f::OutputSpace,data)
-  u = _free_values(f,data)
+  u = _free_values(f.space,data)
   pu = ConsecutiveParamArray(u)
   FEFunction(f.space,pu)
 end
@@ -198,6 +198,8 @@ Base.getindex(space::MultipleSpaces,i::Int) = space.lspaces[i]
 Base.iterate(space::MultipleSpaces,state...) = iterate(space.lspaces,state...)
 
 const MultipleInputSpaces = MultipleSpaces{N,<:InputSpace} where N
+# TODO this concept is a bit weird: do we ever evaluate on multiple PDEs?
+# I guess yes, in principle, but we may want to eliminate this in the future
 const MultipleOutputSpaces = MultipleSpaces{N,<:OutputSpace} where N
 
 const AbstractInputSpace = Union{InputSpace,MultipleInputSpaces}
@@ -257,7 +259,7 @@ function InputSpace(lspaces::InputSpace...)
   x = collect(∪(lpoints...))
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lpoints,x)
   features,l_to_sample_offset = cat_samples(map(get_features,lspaces),l_to_lcoord_to_coords,length(x))
-  coords = _get_coords(x,size(features,3))
+  coords = points_to_coords(x,size(features,3))
   gspace = InputSpace(coords,features)
   MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,l_to_sample_offset)
 end
@@ -412,29 +414,20 @@ function get_free_dof_to_point(f::UnconstrainedFESpace)
   point
 end
 
-function _free_values(f::OutputSpace,data::AbstractInputData)
-  msg = "Data does not match the output space's dof count"
-  comps = get_free_dof_to_comp(f.space)
-  points = get_free_dof_to_point(f.space)
-  ids = findall(get_node_masks(f.space)) # representative dof ids
+function _free_values(f::FESpace,data::AbstractInputData)
+  msg = "Data does not match the space's dof count"
+  comps = get_free_dof_to_comp(f)
+  points = get_free_dof_to_point(f)
+  ids = findall(get_node_masks(f)) # representative dof ids
   point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
   @check size(data,1)*size(data,2) == length(comps) msg
-  T = eltype2(get_vector_type(f.space))
+  T = eltype2(get_vector_type(f))
   u = zeros(T,length(comps),size(data,3))
   @inbounds @views for dof in eachindex(comps)
     pos = point_to_pos[points[dof]]
     u[dof,:] .= data[comps[dof],pos,:]
   end
   u
-end
-
-function _to_points(coords::AbstractInputData{T}) where T
-  D = size(coords,1)
-  points = Vector{Point{D,T}}(undef,size(coords,2))
-  @inbounds for i in axes(coords,2)
-    points[i] = Point(ntuple(d -> coords[d,i,1],Val(D)))
-  end
-  points
 end
 
 function _lcoord_to_coords_map(lcoords,coords)
@@ -454,14 +447,26 @@ end
 
 # one FE function on the multi-field space: channels are stacked field by field
 function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
-  off = 0
-  us = map(f.lspaces,Tuple(f.l_to_lcoord_to_coords)) do s,lcoord_to_coords
-    d = size(get_values(s),1)
-    ldata = data[off+1:off+d,lcoord_to_coords,:]
-    off += d
-    _free_values(s,ldata)
+  msg = "Data does not match the space's dof count"
+  gcomps = get_free_dof_to_comp(f.gspace)
+  T = eltype2(get_vector_type(f.gspace.space))
+  u = zeros(T,length(gcomps),size(data,3))
+  lvals = map(get_values,f.lspaces)
+  offsets = compute_offsets(lvals;axis=1)
+  cache = array_cache(f.l_to_lcoord_to_coords)
+  @inbounds @views for (l,lspace) in enumerate(f.lspaces)
+    lcoord_to_coords = getindex!(cache,f.l_to_lcoord_to_coords,l)
+    ldata = get_channel(data,offsets[l]:offsets[l+1]-1,lcoord_to_coords)
+    comps = get_free_dof_to_comp(lspace)
+    points = get_free_dof_to_point(lspace)
+    ids = findall(get_node_masks(lspace)) # representative dof ids
+    point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+    @check size(ldata,1)*size(ldata,2) == length(comps) msg
+    for dof in eachindex(comps)
+      pos = point_to_pos[points[dof]]
+      u[dof,:] .= ldata[offsets[l]+comps[dof],pos,:]
+    end
   end
-  u = reduce(vcat,us)
   FEFunction(f.gspace.space,ConsecutiveParamArray(u))
 end
 
@@ -470,7 +475,7 @@ function _to_element(f::MultipleOutputSpaces,l_to_sample_offset,data::AbstractIn
   @check size(data,3) == last(l_to_sample_offset)-1 "Data does not match the number of samples of the output space"
   ntuple(length(f)) do l
     samples = _get_range(l_to_sample_offset,l)
-    ldata = data[:,f.l_to_lcoord_to_coords[l],samples]
+    @views ldata = data[:,f.l_to_lcoord_to_coords[l],samples]
     to_element(f.lspaces[l],ldata)
   end
 end
