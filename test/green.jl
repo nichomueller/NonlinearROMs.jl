@@ -57,8 +57,11 @@ uhμ = solve(fesolver,feop,μ)
 
 # GNO setup:
 # - a complete graph (radius ≥ diam(Ω)), since G is non-local
-# - identity activations, so that the whole network is affine in f
-# - κ = κ(x,y) only (no features), with an MLP since G has a kink at x = y
+# - identity activations between/around the kernel layers, so that the whole
+#   network is affine in f (κ never sees f at all, since pass_features=false,
+#   so giving κ_θ its own nonlinearity below doesn't break this)
+# - κ = κ(x,y) only (no features), with an MLP (kernel_activation) since G has
+#   a kink at x = y
 
 x = get_coords(test)
 features(μ) = FeatureBundle((fμ(μ),))
@@ -66,12 +69,13 @@ input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
 gspace = GraphInducedSpace(test;radius=1.0)
+style = IntegralStyle(InducedMeasure(gspace;message_rule=PlainMP()))
 gmodel = KernelNeuralModel(
-  gspace;
-  hidden_layers=(1,1),
+  style;
+  hidden_layers=(64,64),
   activation=identity,
-  formatter=DataFormatter(;pass_features=Val(false)),
-  kernel_layers=(64,64)
+  kernel_activation=tanh,
+  formatter=DataFormatter(;pass_features=Val(false))
 )
 solver = NeuralSolver(gmodel;epochs=1000,print_every=100)
 op = neural_operator(solver,input_space(μ_train),output_space)
@@ -85,7 +89,7 @@ println("relative test error: $(norm(pred_uμ - uμ) / norm(uμ))")
 # divided by the nodal quadrature weight h
 
 N = length(x)
-xs = map(xi -> xi[1],x)
+xs = map(xi -> xi.data[1],x)
 coords = repeat(reshape(Float32.(xs),1,N,1),1,1,N+1)
 forcings = zeros(Float32,1,N,N+1)
 for j in 1:N
@@ -94,7 +98,14 @@ end
 inputs = (coords=coords,features=forcings)
 NonlinearROMs.normalise!(inputs,op.stats)
 fixed_data = NonlinearROMs.merge_data(solver,inputs)
-responses, = op.chain(fixed_data,op.parameters,op.states)
+
+lift_layer = op.chain.layers.layer_1
+(_,v), = lift_layer(fixed_data,op.parameters.layer_1,op.states.layer_1)
+kernel_layer = op.chain.layers.layer_2.kernel
+(_,kout), = kernel_layer((fixed_data,v),op.parameters.layer_2.kernel,op.states.layer_2.kernel)
+project_layer = op.chain.layers.layer_3.layer
+responses_2d, = project_layer(reshape(kout,size(kout,1),:),op.parameters.layer_3,op.states.layer_3)
+responses = reshape(responses_2d,size(responses_2d,1),size(kout)[2:end]...)
 NonlinearROMs.denormalise!(responses,op.stats)
 
 approx_values = (responses[1,:,2:end] .- responses[1,:,1]) ./ h
@@ -108,10 +119,17 @@ kernel_layer = op.chain.layers[2].kernel
 kernel_ps = op.parameters.layer_2.kernel
 kernel_st = op.states.layer_2.kernel
 x̃s = vec(inputs.coords[1,:,1])
-pairs = zeros(Float32,2,N*N,1)
+
+# PlainMP's combine_message is vcat(src,dst,w): the graph is complete (radius=1.0
+# spans the whole domain), so every (i,j) pair is a real edge, with the same raw
+# (unnormalized) weight |xi-xj| and the same global normalization (the domain's
+# diameter among the free-dof points) that GraphInducedSpace's constructor applies
+wmax = maximum(xs) - minimum(xs)
+pairs = zeros(Float32,3,N*N,1)
 for (k,(i,j)) in enumerate(Iterators.product(1:N,1:N))
   pairs[1,k,1] = x̃s[j] # source (y)
   pairs[2,k,1] = x̃s[i] # destination (x)
+  pairs[3,k,1] = abs(xs[i] - xs[j]) / wmax # edge weight
 end
 κ, = kernel_layer.kernel(pairs,kernel_ps,kernel_st)
 kernel_values = reshape(κ[1,:,1],N,N)

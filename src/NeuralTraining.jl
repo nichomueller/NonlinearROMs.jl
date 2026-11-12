@@ -23,13 +23,14 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
-  activation
+  activation,
+  kernel_activation
   )
 
   c_dims = _coord_dims(style)
   inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,c_dims)
   k_out = (channel_wise && in_dims == out_dims) ? out_dims : out_dims*in_dims
-  inner = build_lux_chain((inner_dims,kernel_layers...,k_out),activation)
+  inner = build_lux_chain((inner_dims,kernel_layers...,k_out),kernel_activation)
   kernel = IntegralKernel(inner,style.measure,formatter,c_dims)
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
@@ -40,7 +41,8 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
-  activation
+  activation,
+  kernel_activation
   )
 
   inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,0)
@@ -77,7 +79,8 @@ function build_model(
       widths[i+2],
       model.kernel_layers,
       model.channel_wise,
-      model.activation
+      model.activation,
+      model.kernel_activation
     ),
     length(widths)-3
   )

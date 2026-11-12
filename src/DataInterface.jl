@@ -135,9 +135,9 @@ function cat_channels(
   @inbounds for l in eachindex(ldata)
     a = ldata[l]
     coord_ids = getindex!(cache,lcoord_map,l)
-    for (p,ap) in enumerate(a)
+    for (p,ap) in pairs(a)
       i,j,k = Tuple(p)
-      gdata[offsets[l]+i,coord_ids[j],k] = ap
+      gdata[offsets[l]-1+i,coord_ids[j],k] = ap
     end
   end
   gdata
@@ -184,7 +184,7 @@ function cat_samples(
     a = ldata[l]
     coord_ids = getindex!(cache,lcoord_map,l)
     range = _get_range(offsets,l)
-    for (p,ap) in enumerate(a)
+    for (p,ap) in pairs(a)
       i,j,k = Tuple(p)
       gdata[i,coord_ids[j],range[k]] = ap
     end

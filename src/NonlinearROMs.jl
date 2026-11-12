@@ -147,6 +147,10 @@ include("DiscreteSpaces.jl")
 export InducedMeasure
 export FESpaceMeasure
 export GraphMeasure
+export MPRule
+export PlainMP
+export DifferenceMP
+export CompositeMP
 export get_space
 export integration
 include("InducedMeasures.jl")
@@ -189,6 +193,7 @@ export AbstractKernelReduction
 export GNOReduction
 include("NeuralReductions.jl")
 
+export RolloutData
 export collect_trajectory
 export rollout_data
 export rollout

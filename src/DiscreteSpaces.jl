@@ -448,11 +448,11 @@ end
 # one FE function on the multi-field space: channels are stacked field by field
 function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
   msg = "Data does not match the space's dof count"
-  gcomps = get_free_dof_to_comp(f.gspace)
   T = eltype2(get_vector_type(f.gspace.space))
-  u = zeros(T,length(gcomps),size(data,3))
+  u = zeros(T,num_free_dofs(f.gspace.space),size(data,3))
   lvals = map(get_values,f.lspaces)
   offsets = compute_offsets(lvals;axis=1)
+  dof_offsets = compute_field_offsets(f.gspace.space)
   cache = array_cache(f.l_to_lcoord_to_coords)
   @inbounds @views for (l,lspace) in enumerate(f.lspaces)
     lcoord_to_coords = getindex!(cache,f.l_to_lcoord_to_coords,l)
@@ -464,7 +464,7 @@ function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
     @check size(ldata,1)*size(ldata,2) == length(comps) msg
     for dof in eachindex(comps)
       pos = point_to_pos[points[dof]]
-      u[dof,:] .= ldata[offsets[l]+comps[dof],pos,:]
+      u[dof_offsets[l]+dof,:] .= ldata[comps[dof],pos,:]
     end
   end
   FEFunction(f.gspace.space,ConsecutiveParamArray(u))

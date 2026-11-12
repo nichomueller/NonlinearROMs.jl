@@ -1,10 +1,25 @@
-function Base.collect(sol::TransientParamFESolution)
-  r = sol.odesol.r
-  vals = collect(sol.odesol)
-  trial = sol.trial(r)
-  FEFunction(trial,vals)
-end
+# function Base.collect(sol::TransientParamFESolution)
+#   r = sol.odesol.r
+#   vals = collect(sol.odesol)
+#   trial = sol.trial(r)
+#   FEFunction(trial,vals)
+# end
 
+# Gridap.FESpaces.get_fe_space(sol::TransientParamFESolution) = sol.trial(sol.odesol.r)
+
+"""
+    struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
+      data::A
+      times::B
+      steps::C
+    end
+
+Temporal-bundling layout (Brandstetter et al.) for an autoregressive neural
+operator `N(u^i) -> (u^{i+1},...,u^{i+K})`, `K` the cluster size. `steps` cuts
+`times` (indices into it, not time values) into clusters of `K+1` consecutive
+time indices each (`steps[k]:steps[k+1]`): index 1 is the input time `i`,
+indices `2:K+1` are the `K` target times `i+1,...,i+K`.
+"""
 struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
   data::A
   times::B
@@ -13,10 +28,12 @@ end
 
 function RolloutData(data,times::AbstractVector,step::Int=2)
   @check step % 2 == 0 "Step must be even"
-  _steps = 1:step:length(times)
-  steps = last(_steps) == length(times) ? _steps : vcat(_steps,length(times))
+  steps = 1:step:length(times)
+  last(steps) != length(times) && @warn "Removing $((times[last(steps)+1],times[end])) from rollout: incomplete cluster"
   RolloutData(data,times,steps)
 end
+
+# Gridap.FESpaces.get_fe_space(a::RolloutData) = get_fe_space(a.data)
 
 function Base.collect(a::RolloutData)
   data = collect(a.data)
@@ -28,38 +45,101 @@ function Base.collect(a::RolloutData)
   return rollout
 end
 
+function Base.collect(a::RolloutData{<:TransientParamFESolution})
+  _collect_trajectory(a.data,a.steps)
+end
+
+# function Base.collect(a::RolloutData{<:TransientParamFESolution})
+#   states = [xh for (_,xh) in a.data]
+#   T = eltype(states)
+#   rollout = Vector{Vector{T}}(undef,length(a.steps)-1)
+#   for k in eachindex(rollout)
+#     rollout[k] = states[a.steps[k]:a.steps[k+1]]
+#   end
+#   rollout
+# end
+
 function Base.collect(a::RolloutData{<:Function})
   map(1:length(a.steps)-1) do k
-    [a.data(t) for t in a.times[a.steps[k]]:a.times[a.steps[k+1]]]
+    ts = a.times[a.steps[k]:a.steps[k+1]]
+    [a.data(t) for t in ts]
   end
 end
 
-function to_rollout_data(a::AbstractInputData,)
-  
+# the regular (non-ragged) cluster size K, and the clusters that actually have it
+function _full_clusters(clusters::AbstractVector)
+  K = maximum(c -> length(c)-1,clusters)
+  filter(c -> length(c)-1 == K,clusters)
 end
 
+"""
+    InputSpace(x::AbstractVector{<:Point},a::RolloutData) -> InputSpace
+
+Builds the fixed (non-autoregressive) conditioning data for one cluster/sample:
+the features at every one of its `K+1` times (input time included), channel-
+concatenated, so the kernel can see the forcing/BC values at every time it
+must predict. The autoregressive state `u^i` itself is *not* part of this --
+it is threaded separately through the model as its running hidden state (`v`,
+Kovachki et al.'s `pass_new_data`), exactly as in the steady case.
+"""
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
-  data = collect(a)
-  coords = points_to_coords(x,num_params(first(data)))
-  features = _get_features(data,x)
+  clusters = _full_clusters(collect(a))
+  per_cluster = map(c -> _get_features(c,x),clusters)
+  features = cat(per_cluster...;dims=3)
+  coords = points_to_coords(x,size(features,3))
   InputSpace(coords,features)
 end
 
 function InputSpace(space::MultiFieldFESpace,a::RolloutData)
-  data = collect(a)
   x = get_coords(space)
   fields = Tuple(space.spaces)
-  gspace = InputSpace(x,data)
-  lspaces = map(s -> InputSpace(s,data),fields)
+  gspace = InputSpace(x,a)
+  lspaces = map(s -> InputSpace(s,a),fields)
   l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,fields),x)
   MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,nothing)
 end
 
+# per cluster: drop the input state, stack the K target states channel-wise;
+# across clusters: stack along the sample axis. `getstate` extracts the field
+# of interest out of a (possibly multi-field) per-time-step state
+function _rollout_values(a::RolloutData,x::AbstractVector{<:Point},getstate=identity)
+  clusters = _full_clusters(collect(a))
+  per_cluster = map(clusters) do states
+    targets = @views states[2:end]
+    cat(map(s -> _get_values(getstate(s),x),targets)...;dims=1)
+  end
+  cat(per_cluster...;dims=3)
+end
+
+"""
+    OutputSpace(uh::RolloutData{<:TransientParamFESolution}) -> OutputSpace
+
+Builds the autoregressive target data for one cluster/sample: the `K` *future*
+states `u^{i+1},...,u^{i+K}` (the input state `u^i` is excluded -- it belongs to
+`InputSpace`'s pass-through state, not to the target), channel-concatenated
+into a `(D*K,N,P)` array, one sample per (original parameter, cluster) pair.
+"""
 function OutputSpace(uh::RolloutData{<:TransientParamFESolution})
-  f = get_fe_space(uh)
-  x = get_coords(f)
-  values = _get_values(uh,x)
-  OutputSpace(f,values)
+  space = get_fe_space(uh)
+  _rollout_output_space(space,uh)
+end
+
+function _rollout_output_space(space::SingleFieldFESpace,uh::RolloutData)
+  x = get_coords(space)
+  values = _rollout_values(uh,x)
+  OutputSpace(space,values)
+end
+
+function _rollout_output_space(space::MultiFieldFESpace,uh::RolloutData)
+  x = get_coords(space)
+  lspaces = ntuple(length(space.spaces)) do i
+    xi = get_coords(space.spaces[i])
+    values_i = _rollout_values(uh,xi,s -> s[i])
+    OutputSpace(space.spaces[i],values_i)
+  end
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,lspaces),x)
+  values = cat_channels(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
+  MultipleSpaces(OutputSpace(space,values),lspaces,l_to_lcoord_to_coords,nothing)
 end
 
 function OutputSpace(sol::TransientParamFESolution,args...)
@@ -67,6 +147,10 @@ function OutputSpace(sol::TransientParamFESolution,args...)
   data = RolloutData(sol,times,args...)
   OutputSpace(data)
 end
+
+# geometry (the integration measure/graph) doesn't depend on the time-clustering
+FunctionSpace(a::RolloutData) = FunctionSpace(get_fe_space(a))
+GraphInducedSpace(a::RolloutData;kwargs...) = GraphInducedSpace(get_fe_space(a);kwargs...)
 
 # function rollout_data(
 #   fspace,
@@ -141,7 +225,7 @@ end
 
 # utils
 
-for (F,T) in zip((:_get_features,:get_values),(:FeatureBundle,:ParamFEFunction))
+for (F,T) in zip((:_get_features,:_get_values),(:FeatureBundle,:ParamFEFunction))
   @eval function $F(data::AbstractVector{<:$T},x::AbstractVector{<:Point})
     ax = map(data) do a
       $F(a,x)
@@ -150,18 +234,47 @@ for (F,T) in zip((:_get_features,:get_values),(:FeatureBundle,:ParamFEFunction))
   end
 end
 
-# function _free_values(f::OutputSpace,data::RolloutData{<:AbstractInputData})
-#   msg = "Data does not match the output space's dof count"
-#   comps = get_free_dof_to_comp(f.space)
-#   points = get_free_dof_to_point(f.space)
-#   ids = findall(get_node_masks(f.space)) # representative dof ids
-#   point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
-#   @check size(data,1)*size(data,2) == length(comps) msg
-#   T = eltype2(get_vector_type(f.space))
-#   u = zeros(T,length(comps),size(data,3))
-#   @inbounds @views for dof in eachindex(comps)
-#     pos = point_to_pos[points[dof]]
-#     u[dof,:] .= data[comps[dof],pos,:]
-#   end
-#   u
-# end
+function _collect_trajectory(fesol::TransientParamFESolution,steps)
+  sol = fesol.odesol
+  u0 = first(sol.us0)
+  nsteps = length(steps)
+  step = steps[2] - steps[1]
+  ncols = num_params(sol.r)*step
+  cache = Vector{typeof(u0)}(undef,nsteps)
+  for (k,(rk,uk)) in enumerate(sol)
+    k > last(steps) && break
+    sols = ParamODEs._allocate_solutions(u0,ncols)
+    ParamODEs._collect_solutions!(sols,uk,k)
+    if (k+1) in steps
+      cache[k] = sols
+      sols = ParamODEs._allocate_solutions(u0,ncols)
+    end
+  end
+  return cache
+end
+
+function _collect_trajectory(sol::ODEParamSolution,steps)
+  msg = """ 
+  The values should be consecutive for efficiency. Deactivate 
+  BlockMultiFieldStyle() in the MultiFieldFESpace!
+  """
+  @notimplemented msg
+end
+
+function _collect_trajectory(sol::ODEParamSolution{<:ConsecutiveParamVector},steps)
+  u0 = first(sol.us0)
+  nsteps = length(steps)
+  step = steps[2] - steps[1]
+  ncols = num_params(sol.r)*step
+  cache = Vector{typeof(u0)}(undef,nsteps)
+  for (k,(rk,uk)) in enumerate(sol)
+    k > last(steps) && break
+    sols = ParamODEs._allocate_solutions(u0,ncols)
+    ParamODEs._collect_solutions!(sols,uk,k)
+    if (k+1) in steps
+      cache[k] = sols
+      sols = ParamODEs._allocate_solutions(u0,ncols)
+    end
+  end
+  return cache
+end
