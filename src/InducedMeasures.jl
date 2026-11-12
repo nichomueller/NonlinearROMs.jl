@@ -40,12 +40,6 @@ function compute_weights(f::FunctionSpace{<:FESpace})
   assemble_norm(L2(),f)
 end
 
-function compute_weights(f::FunctionSpace{<:MultiFieldFESpace})
-  nfields = num_fields(f.space)
-  op = BlockOperator(ntuple(_ -> L2(),nfields))
-  assemble_norm(op,f)
-end
-
 function compute_weights(f::GraphInducedSpace)
   graph = get_graph(f)
   deg = zeros(Int,nv(graph))
@@ -56,13 +50,7 @@ function compute_weights(f::GraphInducedSpace)
   return reshape(inv_deg,1,nv(graph),1)
 end
 
-function compute_weights(f::MultiGraphInducedSpace)
-  w = ()
-  for fi in f
-    w = (w...,compute_weights(fi))
-  end
-  return w
-end
+compute_weights(f::MultipleSpaces) = map(compute_weights,f.lspaces)
 
 struct InducedMeasure{A<:DiscreteSpace,B,C<:MPRule}
   space::A
@@ -102,30 +90,50 @@ get_src_ids(meas::GraphMeasure) = get_src_ids(get_space(meas))
 get_dst_ids(meas::GraphMeasure) = get_dst_ids(get_space(meas))
 get_edge_weights(meas::GraphMeasure) = get_edge_weights(get_space(meas))
 
-const MultiGraphMeasure = InducedMeasure{<:MultiGraphInducedSpace,<:Tuple}
+"""
+    const MultipleMeasure = InducedMeasure{<:MultipleSpaces,<:Tuple}
+
+Measure induced by a [`MultipleSpaces`](@ref) of [`FunctionSpace`](@ref)s or
+[`GraphInducedSpace`](@ref)s, `weights` holding one entry per local space. Its edges
+are those of the local measures (see [`get_local_measures`](@ref)), concatenated block
+by block and relabelled with the global vertex ids, so `gather_data`/`kv` work on
+the global, vertex-indexed data as for any other measure. Integration is carried out
+block by block on the local measures, then
+- summed over the blocks when the local spaces share their samples (multi-field);
+- concatenated along the sample axis otherwise (one block of samples per local space,
+  e.g. several PDEs on a moving geometry), so that every sample is integrated on its
+  own local measure only. The samples are then tied to the blocks, and cannot be
+  batched.
+"""
+const MultipleMeasure = InducedMeasure{<:MultipleSpaces,<:Tuple}
+
+function get_local_measures(meas::MultipleMeasure)
+  space = get_space(meas)
+  rule = get_message_rule(meas)
+  map((s,w) -> InducedMeasure(s,w,rule),space.lspaces,get_weights(meas))
+end
+
+num_vertices(meas::MultipleMeasure) = num_coords(get_space(meas))
+num_edges(meas::MultipleMeasure) = sum(num_edges,get_local_measures(meas))
+
+for F in (:get_src_ids,:get_dst_ids)
+  @eval begin
+    function $F(meas::MultipleMeasure)
+      l_to_lcoord_to_coords = get_space(meas).l_to_lcoord_to_coords
+      ids = map(enumerate(get_local_measures(meas))) do (l,m)
+        l_to_lcoord_to_coords[l][$F(m)]
+      end
+      reduce(vcat,ids)
+    end
+  end
+end
+
+get_edge_weights(meas::MultipleMeasure) = reduce(vcat,map(get_edge_weights,get_local_measures(meas)))
 
 function integration(a::AbstractInputData,meas::InducedMeasure)
   msg = "Integrand must be of size (latent_dim, num_edges, num_params), where num_edges == $(num_edges(meas)); got size $(size(a))"
   @check size(a,2) == num_edges(meas) msg
   _integration(a,meas)
-end
-
-function Base.iterate(meas::MultiGraphMeasure,i::Int=1)
-  space = get_space(meas)
-  i > length(space) && return nothing
-  m = InducedMeasure(space[i],get_weights(meas)[i];message_rule=get_message_rule(meas))
-  (m,i+1)
-end
-
-function integration(a::AbstractInputData,meas::MultiGraphMeasure)
-  space = get_space(meas)
-  out = fill!(similar(a),zero(eltype(a)))
-  for (i,m) in enumerate(meas)
-    ar = restrict_edge_data(space,a,i)
-    outr = integration(ar,m)
-    out += expand_vertex_data(space,outr,i)
-  end
-  return out
 end
 
 """
@@ -218,58 +226,50 @@ function attention(scores::AbstractVector{T},meas::InducedMeasure) where T
 end
 
 """
-    restrict_edge_data(space::MultiGraphInducedSpace,gdata::AbstractInputData,l::Int=1)
+    blockwise(f,meas::MultipleMeasure,edata::AbstractInputData...) -> AbstractInputData
 
-Gathers the global, vertex-indexed `gdata` (one column per point in
-`space`'s shared union of coordinates) onto block `l`'s own local graph
-edges (one column per edge, each holding its source vertex's global data,
-through `space.l_to_lcoord_to_coords[l]`'s local-to-global index map) --
-local counterpart of [`gather_data`](@ref), and built the same way, via
-`NNlib.gather` on plain (non-traced) integer index arrays computed from the
-graph structure alone, rather than a per-edge `setindex!` loop: at a few
-thousand edges per block (routine for a radius graph), such a loop gets
-unrolled into one MLIR op per edge, which is exactly what `gather_data`'s
-own docstring warns can exhaust Reactant's tracing budget.
+Evaluates `f(ldata...,m)` on every local measure `m` of `meas`, where `ldata` are the
+edge-indexed `edata` restricted to the edges (and, for sample-stacked spaces, to the
+samples) of `m`, and `f` returns local vertex-indexed data. The local results are then
+expanded onto the global vertices via `l_to_lcoord_to_coords` (a placement, these maps
+being injective, built on `NNlib.scatter` on plain index arrays so that nothing is
+unrolled per edge under a Reactant trace), and summed (shared samples) or concatenated
+along the sample axis (one block of samples per local space).
 """
-function restrict_edge_data(
-  space::MultiGraphInducedSpace,
-  gdata::AbstractInputData,
-  l::Int=1
-  )
-
-  lgraph = get_graph(space[l])
-  lcoord_to_coords = space.l_to_lcoord_to_coords[l]
-
-  ids = lcoord_to_coords[src.(edges(lgraph))]
-  g′ = permutedims(gdata,(1,3,2))
-  ldata′ = NNlib.gather(g′,ids)
-  permutedims(ldata′,(1,3,2))
+function blockwise(f,meas::MultipleMeasure,edata::AbstractInputData...)
+  space = get_space(meas)
+  l_to_sample_offset = space.l_to_sample_offset
+  _check_samples(l_to_sample_offset,first(edata))
+  lmeas = get_local_measures(meas)
+  N = num_vertices(meas)
+  eoff = 0
+  outs = map(enumerate(lmeas)) do (l,m)
+    edges = (eoff+1):(eoff+num_edges(m))
+    eoff += num_edges(m)
+    samples = _sample_range(l_to_sample_offset,l)
+    ldata = map(a -> a[:,edges,samples],edata)
+    expand_vertex_data(f(ldata...,m),space.l_to_lcoord_to_coords[l],N)
+  end
+  _combine_blocks(l_to_sample_offset,outs)
 end
 
-"""
-    expand_vertex_data(space::MultiGraphInducedSpace,ldata::AbstractInputData,l::Int=1)
-
-Scatters block `l`'s local, vertex-indexed `ldata` (the result of integrating
-over block `l`'s own local graph) back onto `space`'s shared global vertex
-indexing, through `space.l_to_lcoord_to_coords[l]`'s local-to-global index
-map (injective, so this amounts to a placement rather than an accumulation)
--- local counterpart of [`scatter_data`](@ref), and built the same way, via
-`NNlib.scatter` on a plain (non-traced) index array, for the same
-Reactant-tracing-budget reason as [`restrict_edge_data`](@ref).
-"""
-function expand_vertex_data(
-  space::MultiGraphInducedSpace,
-  ldata::AbstractInputData,
-  l::Int=1
-  )
-
-  ggraph = get_graph(space)
-  lcoord_to_coords = space.l_to_lcoord_to_coords[l]
-
+function expand_vertex_data(ldata::AbstractInputData,lcoord_to_coords::AbstractVector,N::Int)
   d,_,k = size(ldata)
   l′ = permutedims(ldata,(1,3,2))
-  out′ = NNlib.scatter(+,l′,lcoord_to_coords;dstsize=(d,k,nv(ggraph)))
+  out′ = NNlib.scatter(+,l′,collect(Int,lcoord_to_coords);dstsize=(d,k,N))
   permutedims(out′,(1,3,2))
+end
+
+_combine_blocks(::Nothing,outs) = reduce(+,outs)
+_combine_blocks(l_to_sample_offset::AbstractVector,outs) = cat(outs...;dims=3)
+
+_check_samples(::Nothing,a) = nothing
+
+function _check_samples(l_to_sample_offset::AbstractVector,a)
+  msg = """The data has $(size(a,3)) samples, but the measure expects $(last(l_to_sample_offset)-1),
+  one block per local space: the samples of a MultipleSpaces with sample offsets cannot be
+  batched (use a full batch, `batch_size=0`)"""
+  @check size(a,3) == last(l_to_sample_offset)-1 msg
 end
 
 # utils
@@ -287,6 +287,8 @@ function _integration(a::AbstractInputData,meas::GraphMeasure)
   w = get_weights(meas)
   scatter_data(a,meas) .* w
 end
+
+_integration(a::AbstractInputData,meas::MultipleMeasure) = blockwise(_integration,meas,a)
   
 function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
   D,N,K = size(x)

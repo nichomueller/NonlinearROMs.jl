@@ -36,7 +36,7 @@ function kv(k,v,meas::InducedMeasure)
   _kv(k,v)
 end
 
-function kv(k,v,meas::Union{GraphMeasure,FESpaceMeasure})
+function kv(k,v,meas::Union{GraphMeasure,FESpaceMeasure,MultipleMeasure})
   v′ = permutedims(v,(1,3,2))
   v′_src = NNlib.gather(v′,get_src_ids(meas))
   v_src = permutedims(v′_src,(1,3,2))
@@ -288,9 +288,15 @@ function replace_measure(k::MultipleAttentionKernel,meas::InducedMeasure)
 end
 
 function _check_measure(old::InducedMeasure,new::InducedMeasure)
-  msg = "The new measure must be of the same kind as the trained one: got $(nameof(typeof(get_space(new)))), trained on $(nameof(typeof(get_space(old))))"
-  @check (old isa GraphMeasure) == (new isa GraphMeasure) msg
+  kold,knew = _space_kind(get_space(old)),_space_kind(get_space(new))
+  msg = "The new measure must be of the same kind as the trained one: got $knew, trained on $kold"
+  @check kold == knew msg
 end
+
+# a MultipleSpaces is of the kind of its local spaces, so that e.g. a model trained on
+# several graphs can be evaluated on a single new one
+_space_kind(f::DiscreteSpace) = nameof(typeof(f))
+_space_kind(f::MultipleSpaces) = _space_kind(first(f.lspaces))
 
 # utils
 
@@ -345,6 +351,10 @@ end
 function attention_integral(scores,values,meas::GraphMeasure)
   α = attention(vec(scores),meas)
   scatter_data(α'.*values,meas)
+end
+
+function attention_integral(scores,values,meas::MultipleMeasure)
+  blockwise(attention_integral,meas,scores,values)
 end
 
 # reconstructs the (dout x din) matrix flattened into k's first axis and applies

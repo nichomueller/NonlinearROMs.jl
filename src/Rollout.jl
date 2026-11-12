@@ -36,8 +36,7 @@ end
 
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   data = collect(a)
-  item = first(data)
-  coords = _get_coords(x,num_params(item))
+  coords = _get_coords(x,num_params(first(data)))
   features = _get_features(data,x)
   InputSpace(coords,features)
 end

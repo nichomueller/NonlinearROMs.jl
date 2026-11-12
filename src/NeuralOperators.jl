@@ -143,8 +143,9 @@ end
 Returns `op` with every kernel's measure rebuilt on `space`, keeping the trained
 parameters, states and normalisation: this is how a kernel operator trained on
 some point cloud(s) is evaluated on a new one. `space` must be of the same kind as
-the training one (e.g. a `MultiGraphInducedSpace` for a model trained on a
-`MultiGraphInducedSpace`), and the inputs must then live on `get_coords(space)`.
+the training one (graph-induced for a model trained on graphs, also when the
+training space is a [`MultipleSpaces`](@ref) of graphs, e.g. a moving geometry), and
+the inputs must then live on `get_coords(space)`.
 """
 function replace_space(op::NeuralOperator,space::DiscreteSpace)
   chain = replace_measure(op.chain,InducedMeasure(space))
@@ -181,8 +182,8 @@ Returns a `NeuralOperator` containing the trained network, its optimized weights
 """
 function neural_operator(
   solver::NeuralSolver,
-  input_space::InputSpace,
-  output_space::OutputSpace
+  input_space::AbstractInputSpace,
+  output_space::AbstractOutputSpace
   )
   
   data,stats = fetch_data_and_stats(solver,input_space,output_space)
@@ -192,8 +193,8 @@ end
 function neural_operator(
   solver::NeuralSolver,
   old_op::NeuralOperator,
-  input_space::InputSpace,
-  output_space::OutputSpace
+  input_space::AbstractInputSpace,
+  output_space::AbstractOutputSpace
   )
   
   data,stats = fetch_data_and_stats(solver,old_op,input_space,output_space)
@@ -203,7 +204,7 @@ end
 function Algebra.solve(
   solver::NeuralSolver,
   op::NeuralOperator,
-  input_space::InputSpace
+  input_space::AbstractInputSpace
   )
 
   data = fetch_data_from_stats(solver,input_space,op.stats)
@@ -215,8 +216,8 @@ end
 function Algebra.solve(
   solver::NeuralSolver,
   op::NeuralOperator,
-  input_space::InputSpace,
-  output_space::OutputSpace
+  input_space::AbstractInputSpace,
+  output_space::AbstractOutputSpace
   )
 
   output = solve(solver,op,input_space)
@@ -231,8 +232,8 @@ merge_data(solver::NeuralSolver,args...) = merge_data(get_formatter(solver),args
 
 function fetch_data_and_stats(
   solver::NeuralSolver,
-  input_space::InputSpace,
-  output_space::OutputSpace
+  input_space::AbstractInputSpace,
+  output_space::AbstractOutputSpace
   )
 
   raw_in = fetch_data(solver,input_space)
@@ -248,7 +249,7 @@ end
 
 function fetch_data_and_stats(
   solver::NeuralSolver,
-  input_space::InputSpace
+  input_space::AbstractInputSpace
   )
 
   @notimplemented "Must provide output to properly build a normalisation factor"
@@ -256,8 +257,8 @@ end
 
 function fetch_data_from_stats(
   solver::NeuralSolver,
-  input_space::InputSpace,
-  output_space::OutputSpace,
+  input_space::AbstractInputSpace,
+  output_space::AbstractOutputSpace,
   stats::Normalisation
   )
 
@@ -274,7 +275,7 @@ end
 
 function fetch_data_from_stats(
   solver::NeuralSolver,
-  input_space::InputSpace,
+  input_space::AbstractInputSpace,
   stats::Normalisation
   )
 

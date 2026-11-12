@@ -80,17 +80,19 @@ uhμ = solve(fesolver,feop,μ)
 
 # on variable meshes, we need a graph-based approach
 
-gspace = MultiGraphInducedSpace(test1,test2;radius=2*hd)
+# training data of the two PDEs stacked sample-wise on the union of their points
+input_space = InputSpace(InputSpace(test1,features(μ_train1)),InputSpace(test2,features(μ_train2)))
+output_space = OutputSpace(uhμ_train1,uhμ_train2)
+# one local graph per PDE: every sample is integrated on its own graph only
+gspace = GraphInducedSpace(output_space;radius=2*hd)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(gmodel;epochs=200,print_every=50)
-input_space = InputSpace(get_coords(gspace),features(μ_train1),features(μ_train2))
-output_space = OutputSpace(uhμ_train1,uhμ_train2)
 op = neural_operator(solver,input_space,output_space)
 
 # evaluation on a new mesh: same trained network, kernels integrated on the new graph
-gspace_test = MultiGraphInducedSpace(test;radius=2*hd)
+gspace_test = GraphInducedSpace(test;radius=2*hd)
 op_test = replace_space(op,gspace_test)
-input_space = InputSpace(get_coords(gspace_test),features(μ))
+input_space = InputSpace(test,features(μ))
 pred_uμ = solve(solver,op_test,input_space)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")

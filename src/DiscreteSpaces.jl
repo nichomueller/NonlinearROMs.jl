@@ -1,13 +1,18 @@
-# case 1: only 1 space
-# case 2: multiple spaces, but all have the same mesh
-# -> several cell fields, only one measure
-# case 3: multiple spaces, each with a different mesh
-# -> several cell fields, several measures
-
 abstract type DiscreteSpace end
 
 get_coords(f::DiscreteSpace) = @abstractmethod
 num_coords(f::DiscreteSpace) = length(get_coords(f))
+
+"""
+    get_points(f) -> AbstractVector{<:Point}
+
+The point set underlying `f`. It coincides with [`get_coords`](@ref) for every
+space but [`InputSpace`](@ref), whose `get_coords` returns the `(D,N,K)` array
+fed to the network (the points are then read off its first sample).
+"""
+get_points(f) = get_coords(f)
+
+get_coords(x::AbstractVector{<:Point}) = x
 
 function get_coords(f::SingleFieldFESpace)
   x = get_free_dof_coordinates(f)
@@ -35,13 +40,6 @@ function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
   InputSpace(coords,features)
 end
 
-function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle...)
-  spaces = map(ai -> InputSpace(x,ai),a)
-  coords = cat(map(get_coords,spaces)...;dims=3)
-  features = cat(map(get_features,spaces)...;dims=3)
-  InputSpace(coords,features)
-end
-
 function InputSpace(space,args...)
   x = get_coords(space)
   InputSpace(x,args...)
@@ -49,6 +47,11 @@ end
 
 get_coords(f::InputSpace) = f.coords
 get_features(f::InputSpace) = f.features
+num_coords(f::InputSpace) = size(f.coords,2)
+
+function get_points(f::InputSpace)
+  _to_points(f.coords,Val(size(f.coords,1)))
+end
 
 function fetch_data(d::DataFormatter,f::InputSpace)
   input = (coords=f.coords,features=f.features)
@@ -67,66 +70,12 @@ function OutputSpace(uh::SingleFieldParamFEFunction)
   OutputSpace(f,values)
 end
 
-function OutputSpace(uh::MultiFieldParamFEFunction)
-  spaces = map(OutputSpace,uh)
-  join_spaces(spaces...)
-end
-
-function OutputSpace(uhs::ParamFEFunction...)
-  spaces = map(OutputSpace,uhs)
-  merge_spaces(spaces...)
-end
-
 function OutputSpace(space)
   OutputSpace(zero(space))
 end
 
-"""
-    join_spaces(spaces::OutputSpace...) -> OutputSpace{<:MultiFieldFESpace}
-
-Combines several single-field `OutputSpace`s -- sharing a triangulation, but not
-necessarily their own point set (e.g. a Taylor-Hood velocity/pressure pair: the
-lower-order field's points are a subset of the higher-order one's) -- into one
-`OutputSpace` over their `MultiFieldFESpace`, with `values` laid out on the shared
-*union* of every field's points ([`get_coords`](@ref), consistent with how
-[`FunctionSpace`](@ref)/[`GraphInducedSpace`](@ref) build their measure/graph for
-the same multi-field space), channels concatenated field-by-field. A point only
-one field reaches is zero-filled in every other field's channels.
-"""
-function join_spaces(spaces::OutputSpace...)
-  space = MultiFieldFESpace([s.space for s in spaces])
-  x = get_coords(space)
-  K = num_samples(first(spaces).values)
-  D = sum(s -> size(s.values,1),spaces)
-  values = zeros(TData,D,length(x),K)
-  off = 0
-  @inbounds @views for s in spaces
-    xi = get_coords(s.space)
-    pos = indexin(xi,x)
-    d = size(s.values,1)
-    values[off+1:off+d,pos,:] .= s.values
-    off += d
-  end
-  OutputSpace(space,values)
-end
-
-function merge_spaces(spaces::OutputSpace...)
-  D = size(first(spaces).values,1)
-  @check all(size(s.values,1)==D for s in spaces) "All output spaces must have the same number of channels"
-  space = MultiGraphInducedSpace(map(s -> s.space,spaces)...)
-  N = num_coords(space)
-  K = sum(s -> size(s.values,3),spaces)
-  values = zeros(TData,D,N,K)
-  off = 0
-  @inbounds @views for (s,lcoord_to_coords) in zip(spaces,space.l_to_lcoord_to_coords)
-    k = size(s.values,3)
-    for (lc,c) in enumerate(lcoord_to_coords)
-      values[:,c,off+1:off+k] .= s.values[:,lc,:]
-    end
-    off += k
-  end
-  OutputSpace(space,values)
-end
+get_coords(f::OutputSpace) = get_coords(f.space)
+get_values(f::OutputSpace) = f.values
 
 function fetch_data(d::DataFormatter,f::OutputSpace)
   output = f.values
@@ -149,22 +98,6 @@ function FunctionSpace(space)
   FunctionSpace(space,coords)
 end
 
-function FunctionSpace(space::MultiFieldFESpace)
-  trian = get_triangulation(first(space))
-  if !all(s -> trian === get_triangulation(s),space)
-    lcoords = map(get_coords,space)
-    sets = map(Set,lcoords)
-    !isempty(∩(sets...)) && return FunctionSpace(space...)
-  end
-  coords = get_coords(space)
-  FunctionSpace(space,coords)
-end
-
-function FunctionSpace(spaces...)
-  @warn "Returning the space induced by the graph of the union of the underlying meshes"
-  MultiGraphInducedSpace(spaces...)
-end
-
 get_coords(f::FunctionSpace) = f.coords
 
 function get_measure(f::FunctionSpace{<:FESpace};factor=2)
@@ -173,15 +106,8 @@ function get_measure(f::FunctionSpace{<:FESpace};factor=2)
   Measure(trian,degree)
 end
 
-abstract type AbstractGraphInducedSpace <: DiscreteSpace end
-
-get_src_ids(space::AbstractGraphInducedSpace) = @abstractmethod
-get_dst_ids(space::AbstractGraphInducedSpace) = @abstractmethod
-
-get_edge_ids(space::AbstractGraphInducedSpace) = (get_src_ids(space),get_dst_ids(space))
-
 """
-    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractVector{TData}} <: AbstractGraphInducedSpace
+    struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractVector{TData}} <: DiscreteSpace
       graph::A
       coords::B
       src_ids::C
@@ -194,7 +120,7 @@ No precomputed/cached scatter structure needed (see `scatter_data` in
 an active Reactant/Enzyme trace's call stack the way the old `setindex!`-based dense
 incidence matrix did, so there's nothing left to precompute here at construction time.
 """
-struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractVector{TData}} <: AbstractGraphInducedSpace
+struct GraphInducedSpace{A<:AbstractGraph,B<:AbstractVector{<:Point},C<:AbstractVector{Int},D<:AbstractVector{TData}} <: DiscreteSpace
   graph::A
   coords::B
   src_ids::C
@@ -219,30 +145,179 @@ get_graph(space::GraphInducedSpace) = space.graph
 get_coords(space::GraphInducedSpace) = space.coords
 get_src_ids(space::GraphInducedSpace) = space.src_ids
 get_dst_ids(space::GraphInducedSpace) = space.dst_ids
+get_edge_ids(space::GraphInducedSpace) = (get_src_ids(space),get_dst_ids(space))
 get_edge_weights(space::GraphInducedSpace) = space.edge_weights
 
-struct MultiGraphInducedSpace{N,A<:GraphInducedSpace,B<:AbstractGraph,C<:AbstractVector{<:Point},D<:Table} <: AbstractGraphInducedSpace
-  lspaces::NTuple{N,A}
-  graph::B
-  coords::C
-  l_to_lcoord_to_coords::D
+# multiple spaces
+
+"""
+    struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{Int}}} <: DiscreteSpace
+      gspace::A
+      lspaces::B
+      l_to_lcoord_to_coords::C
+      l_to_sample_offset::D
+    end
+
+`N` local spaces `lspaces` glued into the global space `gspace`, which lives on the
+union of the local point sets. Covers two scenarios:
+
+- **one PDE on a multi-field FE space** (`l_to_sample_offset === nothing`): every
+  local space (one per field) sees the same samples. Training data is laid out on the
+  global points, with channels concatenated field by field (a point only some fields
+  reach is zero-filled in every other field's channels);
+- **several PDEs** (e.g. on a moving geometry, `l_to_sample_offset isa AbstractVector`):
+  every local space comes with its own samples, and the global samples
+  `l_to_sample_offset[l]:l_to_sample_offset[l+1]-1` are those of `lspaces[l]`
+  (zero-filled outside of `lspaces[l]`'s points).
+
+`l_to_lcoord_to_coords[l]` maps the points of `lspaces[l]` to those of `gspace`.
+
+Built by [`InputSpace`](@ref)/[`OutputSpace`](@ref)/[`FunctionSpace`](@ref)/
+[`GraphInducedSpace`](@ref) out of a `MultiFieldFESpace`/`MultiFieldParamFEFunction`
+(first scenario), or out of several input/output spaces/`ParamFEFunction`s (second
+scenario). `FunctionSpace(f::MultipleSpaces)`/`GraphInducedSpace(f::MultipleSpaces)`
+build the integration spaces matching the layout (and samples) of `f`.
+"""
+struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{Int}}} <: DiscreteSpace
+  gspace::A
+  lspaces::B
+  l_to_lcoord_to_coords::C
+  l_to_sample_offset::D
 end
 
-function MultiGraphInducedSpace(spaces...;kwargs...)
-  lspaces = map(x -> GraphInducedSpace(x;kwargs...),spaces)
-  lcoords = map(get_coords,lspaces)
-  coords = collect(∪(lcoords...))
-  graph = build_graph(coords;kwargs...)
-  l_to_lcoord_to_coords = _lcoord_to_coords_map(lcoords,coords)
-  MultiGraphInducedSpace(lspaces,graph,coords,l_to_lcoord_to_coords)
+function MultipleSpaces(gspace::DiscreteSpace,lspaces::Tuple{Vararg{DiscreteSpace}})
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_points,lspaces),get_points(gspace))
+  MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,nothing)
 end
 
-get_coords(space::MultiGraphInducedSpace) = space.coords
-get_graph(space::MultiGraphInducedSpace) = space.graph
+get_coords(space::MultipleSpaces) = get_coords(space.gspace)
+get_points(space::MultipleSpaces) = get_points(space.gspace)
+num_coords(space::MultipleSpaces) = num_coords(space.gspace)
+get_graph(space::MultipleSpaces) = get_graph(space.gspace)
 
-Base.length(space::MultiGraphInducedSpace) = length(space.lspaces)
-Base.getindex(space::MultiGraphInducedSpace,i::Int) = space.lspaces[i]
-Base.iterate(space::MultiGraphInducedSpace,state...) = iterate(space.lspaces,state...)
+Base.length(space::MultipleSpaces) = length(space.lspaces)
+Base.getindex(space::MultipleSpaces,i::Int) = space.lspaces[i]
+Base.iterate(space::MultipleSpaces,state...) = iterate(space.lspaces,state...)
+
+const MultipleInputSpaces = MultipleSpaces{N,<:InputSpace} where N
+const MultipleOutputSpaces = MultipleSpaces{N,<:OutputSpace} where N
+
+# what the neural operators' API accepts as input/output
+const AbstractInputSpace = Union{InputSpace,MultipleInputSpaces}
+const AbstractOutputSpace = Union{OutputSpace,MultipleOutputSpaces}
+
+fetch_data(d::DataFormatter,f::MultipleSpaces) = fetch_data(d,f.gspace)
+
+function to_element(f::MultipleOutputSpaces,data::AbstractInputData)
+  _to_element(f,f.l_to_sample_offset,data)
+end
+
+# one FE function on the multi-field space: channels are stacked field by field
+function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
+  off = 0
+  us = map(f.lspaces,Tuple(f.l_to_lcoord_to_coords)) do s,lcoord_to_coords
+    d = size(get_values(s),1)
+    ldata = data[off+1:off+d,lcoord_to_coords,:]
+    off += d
+    _free_values(s,ldata)
+  end
+  u = reduce(vcat,us)
+  FEFunction(f.gspace.space,ConsecutiveParamArray(u))
+end
+
+# one FE function per PDE, each evaluated on its own samples
+function _to_element(f::MultipleOutputSpaces,l_to_sample_offset,data::AbstractInputData)
+  @check size(data,3) == last(l_to_sample_offset)-1 "Data does not match the number of samples of the output space"
+  ntuple(length(f)) do l
+    samples = _sample_range(l_to_sample_offset,l)
+    ldata = data[:,f.l_to_lcoord_to_coords[l],samples]
+    to_element(f.lspaces[l],ldata)
+  end
+end
+
+# multi-field constructors: shared samples, channels stacked field by field
+
+function InputSpace(space::MultiFieldFESpace,a::FeatureBundle)
+  x = get_coords(space)
+  fields = Tuple(space.spaces)
+  gspace = InputSpace(x,a)
+  lspaces = map(s -> InputSpace(s,a),fields)
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,fields),x)
+  MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,nothing)
+end
+
+function OutputSpace(uh::MultiFieldParamFEFunction)
+  space = get_fe_space(uh)
+  x = get_coords(space)
+  lspaces = Tuple(map(OutputSpace,uh))
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,lspaces),x)
+  values = _join_channels(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
+  MultipleSpaces(OutputSpace(space,values),lspaces,l_to_lcoord_to_coords,nothing)
+end
+
+function FunctionSpace(space::MultiFieldFESpace)
+  gspace = FunctionSpace(space,get_coords(space))
+  lspaces = map(FunctionSpace,Tuple(space.spaces))
+  MultipleSpaces(gspace,lspaces)
+end
+
+function GraphInducedSpace(space::MultiFieldFESpace;kwargs...)
+  gspace = GraphInducedSpace(get_coords(space);kwargs...)
+  lspaces = map(s -> GraphInducedSpace(s;kwargs...),Tuple(space.spaces))
+  MultipleSpaces(gspace,lspaces)
+end
+
+# multi-PDE constructors: one block of samples per local space
+
+"""
+    InputSpace(lspaces::InputSpace...) -> MultipleSpaces
+    OutputSpace(lspaces::OutputSpace...) -> MultipleSpaces
+    OutputSpace(uhs::ParamFEFunction...) -> MultipleSpaces
+
+Stacks the samples of several PDEs (one per local space) on the union of their
+points; see [`MultipleSpaces`](@ref). Input and output spaces built from local spaces
+listed in the same order share the same global layout.
+"""
+function InputSpace(lspaces::InputSpace...)
+  lpoints = map(get_points,lspaces)
+  x = collect(∪(lpoints...))
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(lpoints,x)
+  features,l_to_sample_offset = _stack_samples(map(get_features,lspaces),l_to_lcoord_to_coords,length(x))
+  coords = _get_coords(x,size(features,3))
+  gspace = InputSpace(coords,features)
+  MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,l_to_sample_offset)
+end
+
+function OutputSpace(lspaces::OutputSpace...)
+  lpoints = map(get_points,lspaces)
+  x = collect(∪(lpoints...))
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(lpoints,x)
+  values,l_to_sample_offset = _stack_samples(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
+  gspace = OutputSpace(x,values)
+  MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,l_to_sample_offset)
+end
+
+OutputSpace(uhs::ParamFEFunction...) = OutputSpace(map(OutputSpace,uhs)...)
+
+# integration spaces matching the layout (and the samples) of a multiple space
+
+function FunctionSpace(f::MultipleSpaces)
+  space = _fe_space(f.gspace)
+  gspace = FunctionSpace(space,get_coords(space))
+  lspaces = map(s -> FunctionSpace(_fe_space(s)),f.lspaces)
+  MultipleSpaces(gspace,lspaces,f.l_to_lcoord_to_coords,f.l_to_sample_offset)
+end
+
+function GraphInducedSpace(f::MultipleSpaces;kwargs...)
+  gspace = GraphInducedSpace(get_points(f.gspace);kwargs...)
+  lspaces = map(s -> GraphInducedSpace(get_points(s);kwargs...),f.lspaces)
+  MultipleSpaces(gspace,lspaces,f.l_to_lcoord_to_coords,f.l_to_sample_offset)
+end
+
+# the space a FunctionSpace is built on
+_fe_space(f::DiscreteSpace) = get_points(f)
+_fe_space(f::OutputSpace) = f.space
+_fe_space(f::FunctionSpace) = f.space
 
 # norms
 
@@ -255,9 +330,10 @@ point layout of the `(D,N,K)` data living on `f`, rather than on `f`'s dofs:
   norms are component-wise, so every component shares this same matrix);
 - multi-field: `(D*N,D*N)`, block-diagonal with one block per channel, each
   field's matrix being extended by zero from its own points to the union of
-  every field's points (see [`join_spaces`](@ref)).
+  every field's points (the layout of a multi-field [`MultipleSpaces`](@ref)).
 """
 assemble_norm(op::AssembleOperator,f::FunctionSpace) = assemble_norm(op,f.space)
+assemble_norm(op::AssembleOperator,f::MultipleSpaces) = assemble_norm(op,f.gspace)
 
 function assemble_norm(op::AssembleOperator,f::SingleFieldFESpace)
   mat = _assemble_dof_norm(op,f)
@@ -338,31 +414,6 @@ function get_free_dof_to_comp(f::UnconstrainedFESpace)
   comps
 end
 
-"""
-    get_free_dof_to_comp(f::MultiFieldFESpace)
-    get_free_dof_to_point(f::MultiFieldFESpace)
-
-Field-by-field concatenation of each field's own [`get_free_dof_to_comp`](@ref)/
-[`get_free_dof_to_point`](@ref), using Gridap's own per-field dof offsets
-(`compute_field_offsets`, valid for both `ConsecutiveMultiFieldStyle` and
-`BlockMultiFieldStyle`) to place each field's dofs at their actual position in
-the whole space's free-dof numbering. `get_free_dof_to_comp` keeps each dof's
-component index local to its own field (not merged across fields -- a field's
-component numbering is meaningless outside of it). `get_free_dof_to_point`
-necessarily looks up every dof's coordinate against `get_coords(f)` -- the
-*union* of every field's own points, since two different fields generally don't
-share the same point set -- rather than against any single field's own points.
-"""
-function get_free_dof_to_comp(f::MultiFieldFESpace)
-  comps = zeros(Int16,num_free_dofs(f))
-  offsets = compute_field_offsets(f)
-  for (i,space_i) in enumerate(f.spaces)
-    comps_i = get_free_dof_to_comp(space_i)
-    comps[offsets[i]+1:offsets[i]+length(comps_i)] .= comps_i
-  end
-  comps
-end
-
 for F in (:get_free_dof_to_comp,:get_free_dof_to_point)
   @eval begin
     function $F(f)
@@ -387,39 +438,6 @@ function get_free_dof_to_point(f::UnconstrainedFESpace)
   point
 end
 
-function get_free_dof_to_point(f::MultiFieldFESpace)
-  x = get_coords(f)
-  dict = Dict(xi => Int32(i) for (i,xi) in enumerate(x))
-  point = zeros(Int32,num_free_dofs(f))
-  offsets = compute_field_offsets(f)
-  for (i,space_i) in enumerate(f.spaces)
-    x_i = get_free_dof_coordinates(space_i)
-    off = offsets[i]
-    @inbounds for dof in eachindex(x_i)
-      point[off+dof] = dict[x_i[dof]]
-    end
-  end
-  point
-end
-
-function _a_to_b(a,b)
-  a2b = zeros(Int,length(a))
-  for (i,ai) in enumerate(a)
-    a2b[i] = findfirst(x -> x == ai,b)
-  end
-  a2b
-end
-
-function _lcoord_to_coords_map(lcoords,coords)
-  data = zeros(Int,length(lcoords)*length(coords))
-  ptrs = ones(Int32,length(lcoords)+1)
-  for (i,lc) in enumerate(lcoords)
-    ptrs[i+1] = ptrs[i] + length(lc)
-    @views data[ptrs[i]:(ptrs[i+1]-1)] .= _a_to_b(lc,coords)
-  end
-  Table(data,ptrs)
-end
-
 function _free_values(f::OutputSpace,data::AbstractInputData)
   msg = "Data does not match the output space's dof count"
   comps = get_free_dof_to_comp(f.space)
@@ -436,24 +454,59 @@ function _free_values(f::OutputSpace,data::AbstractInputData)
   u
 end
 
-function _free_values(f::OutputSpace{<:MultiFieldFESpace},data::AbstractInputData)
-  x = get_coords(f.space)
-  off = 0
-  us = ntuple(length(f.space)) do i
-    space_i = f.space[i]
-    d = maximum(get_free_dof_to_comp(space_i))
-    fi = OutputSpace(space_i,f.values)
-    xi = get_coords(space_i)
-    pos = indexin(xi,x)
-    vi = view(data,off+1:off+d,pos,:)
-    off += d
-    _free_values(fi,vi)
+function _to_points(coords::AbstractInputData,::Val{D}) where D
+  [Point(ntuple(d -> coords[d,i,1],Val(D))) for i in axes(coords,2)]
+end
+
+function _lcoord_to_coords_map(lcoords,coords)
+  coord_to_id = Dict(x => i for (i,x) in enumerate(coords))
+  ptrs = ones(Int32,length(lcoords)+1)
+  for (l,lc) in enumerate(lcoords)
+    ptrs[l+1] = ptrs[l] + length(lc)
   end
-  reduce(vcat,us)
+  data = zeros(Int,ptrs[end]-1)
+  for (l,lc) in enumerate(lcoords)
+    for (i,x) in enumerate(lc)
+      data[ptrs[l]+i-1] = coord_to_id[x]
+    end
+  end
+  Table(data,ptrs)
+end
+
+_sample_range(::Nothing,l::Int) = Colon()
+_sample_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)
+
+# shared samples: channels of the local data stacked on top of each other
+function _join_channels(ldata::Tuple,l_to_lcoord_to_coords::Table,N::Int)
+  K = size(first(ldata),3)
+  @check all(size(a,3) == K for a in ldata) "All local data must share the same samples"
+  D = sum(a -> size(a,1),ldata)
+  data = zeros(TData,D,N,K)
+  off = 0
+  @inbounds for (a,lcoord_to_coords) in zip(ldata,l_to_lcoord_to_coords)
+    d = size(a,1)
+    data[off+1:off+d,lcoord_to_coords,:] .= a
+    off += d
+  end
+  data
+end
+
+# one block of samples per local data
+function _stack_samples(ldata::Tuple,l_to_lcoord_to_coords::Table,N::Int)
+  D = size(first(ldata),1)
+  @check all(size(a,1) == D for a in ldata) "All local data must have the same number of channels"
+  l_to_sample_offset = ones(Int,length(ldata)+1)
+  for (l,a) in enumerate(ldata)
+    l_to_sample_offset[l+1] = l_to_sample_offset[l] + size(a,3)
+  end
+  data = zeros(TData,D,N,last(l_to_sample_offset)-1)
+  @inbounds for (l,(a,lcoord_to_coords)) in enumerate(zip(ldata,l_to_lcoord_to_coords))
+    data[:,lcoord_to_coords,_sample_range(l_to_sample_offset,l)] .= a
+  end
+  data,l_to_sample_offset
 end
 
 # agfem compatibility
-
 
 function FESpaces.gather_free_and_dirichlet_values!(
   fmdof_to_val::AbstractVector{T},

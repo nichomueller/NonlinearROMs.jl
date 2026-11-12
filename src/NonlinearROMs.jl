@@ -31,7 +31,9 @@ into its own repository, and plugs back into them via multiple dispatch:
 - **Mesh graph utilities** (`GraphsInterface.jl`/`WeightedSimpleDiGraphs.jl`) —
   `build_graph(coords;radius)` turns a point set into a radius-neighbourhood
   `WeightedSimpleDiGraph` (edge weights = Euclidean distance), wrapped in a
-  [`GraphInducedSpace`](@ref), for graph-based neural architectures.
+  [`GraphInducedSpace`](@ref), for graph-based neural architectures. Multi-field
+  problems and several PDEs (e.g. on a moving geometry) are handled by gluing
+  local spaces into a [`MultipleSpaces`](@ref).
 
 Usage: construct a `NNHyperReduction`/`NNRegression` (or their `Transient*`
 counterparts) and pass it to `RBSolver` wherever a steady/transient
@@ -132,7 +134,7 @@ export InputSpace
 export OutputSpace
 export FunctionSpace
 export GraphInducedSpace
-export MultiGraphInducedSpace
+export MultipleSpaces
 export get_coords
 export get_features
 export get_graph
