@@ -113,6 +113,71 @@ function merge_data(::DataFormatter{A,B,C},fixed_data,new_data,coord_dims::Int=0
   C ? _merge_data(base,new_data) : base
 end
 
+# concatenate along the channel axis (the first one)
+function cat_channels(ldata,args...)
+  offsets = compute_offsets(ldata;axis=1)
+  cat_channels(ldata,offsets,args...)
+end
+
+function cat_channels(
+  ldata::Tuple{Vararg{AbstractInputData{T}}},
+  offsets::AbstractVector{<:Integer},
+  lcoord_map::Table=_trivial_table(ldata),
+  N::Int=maximum(lcoord_map.data)
+  ) where T
+
+  K = size(first(ldata),3)
+  @check all(size(a,3) == K for a in ldata) "All local data must share the same samples"
+  @check length(ldata) == length(lcoord_map) "Local data and local coordinate maps must have the same length"
+  D = sum(a -> size(a,1),ldata)
+  data = zeros(T,D,N,K)
+  cache = array_cache(lcoord_map)
+  @inbounds for l in eachindex(ldata)
+    a = ldata[l]
+    coord_ids = getindex!(cache,lcoord_map,l)
+    for (p,ap) in enumerate(a)
+      i,j,k = Tuple(p)
+      data[offsets[l]+i,coord_ids[j],k] = ap
+    end
+  end
+  data
+end
+
+# concatenate along the sample axis (the last one)
+function cat_samples(
+  ldata::Tuple{Vararg{AbstractInputData{T}}},
+  lcoord_map::Table=_trivial_table(ldata),
+  N::Int=maximum(lcoord_map.data)
+  ) where T
+
+  D = size(first(ldata),1)
+  @check all(size(a,1) == D for a in ldata) "All local data must have the same number of channels"
+  offsets = ones(Int32,length(ldata)+1)
+  for (l,a) in enumerate(ldata)
+    offsets[l+1] = offsets[l] + size(a,3)
+  end
+  data = zeros(T,D,N,last(offsets)-1)
+  cache = array_cache(lcoord_map)
+  @inbounds for l in eachindex(ldata)
+    a = ldata[l]
+    coord_ids = getindex!(cache,lcoord_map,l)
+    range = _get_range(offsets,l)
+    for (p,ap) in enumerate(a)
+      i,j,k = Tuple(p)
+      data[i,coord_ids[j],range[k]] = ap
+    end
+  end
+  data,offsets
+end
+
+function compute_offsets(a;axis=1)
+  offsets = ones(Int32,length(a)+1)
+  for (l,al) in enumerate(a)
+    offsets[l+1] = offsets[l] + size(al,axis)
+  end
+  return offsets
+end
+
 # utils
 
 function _get_coords(x::AbstractVector{<:Point},K::Int)
@@ -192,3 +257,23 @@ _merge_data(a::Nothing,b::Nothing) = nothing
 _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
+
+function _trivial_table(a::Tuple{Vararg{AbstractInputData{T}}}) where T
+  ptrs = zeros(Int,length(a)+1)
+  @inbounds for (i,ai) in enumerate(a)
+    ptrs[i+1] = ptrs[i] + size(ai,2)
+  end
+  data = zeros(T,ptrs[end])
+  length_to_ptrs!(ptrs)
+  @inbounds for (i,ai) in enumerate(a)
+    pini = ptrs[i]
+    pend = ptrs[i+1]-1
+    for (k,p) in enumerate(pini:pend)
+      data[p] = k
+    end
+  end
+  Table(data,ptrs)
+end
+
+_get_range(::Nothing,::Int) = Colon()
+_get_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)

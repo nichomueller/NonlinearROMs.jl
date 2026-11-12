@@ -49,9 +49,7 @@ get_coords(f::InputSpace) = f.coords
 get_features(f::InputSpace) = f.features
 num_coords(f::InputSpace) = size(f.coords,2)
 
-function get_points(f::InputSpace)
-  _to_points(f.coords,Val(size(f.coords,1)))
-end
+get_points(f::InputSpace) = _to_points(f.coords)
 
 function fetch_data(d::DataFormatter,f::InputSpace)
   input = (coords=f.coords,features=f.features)
@@ -82,7 +80,7 @@ function fetch_data(d::DataFormatter,f::OutputSpace)
   fetch_data(d,output)
 end
 
-function to_element(f::OutputSpace,data::AbstractInputData)
+function to_element(f::OutputSpace,data)
   u = _free_values(f,data)
   pu = ConsecutiveParamArray(u)
   FEFunction(f.space,pu)
@@ -202,7 +200,6 @@ Base.iterate(space::MultipleSpaces,state...) = iterate(space.lspaces,state...)
 const MultipleInputSpaces = MultipleSpaces{N,<:InputSpace} where N
 const MultipleOutputSpaces = MultipleSpaces{N,<:OutputSpace} where N
 
-# what the neural operators' API accepts as input/output
 const AbstractInputSpace = Union{InputSpace,MultipleInputSpaces}
 const AbstractOutputSpace = Union{OutputSpace,MultipleOutputSpaces}
 
@@ -210,29 +207,6 @@ fetch_data(d::DataFormatter,f::MultipleSpaces) = fetch_data(d,f.gspace)
 
 function to_element(f::MultipleOutputSpaces,data::AbstractInputData)
   _to_element(f,f.l_to_sample_offset,data)
-end
-
-# one FE function on the multi-field space: channels are stacked field by field
-function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
-  off = 0
-  us = map(f.lspaces,Tuple(f.l_to_lcoord_to_coords)) do s,lcoord_to_coords
-    d = size(get_values(s),1)
-    ldata = data[off+1:off+d,lcoord_to_coords,:]
-    off += d
-    _free_values(s,ldata)
-  end
-  u = reduce(vcat,us)
-  FEFunction(f.gspace.space,ConsecutiveParamArray(u))
-end
-
-# one FE function per PDE, each evaluated on its own samples
-function _to_element(f::MultipleOutputSpaces,l_to_sample_offset,data::AbstractInputData)
-  @check size(data,3) == last(l_to_sample_offset)-1 "Data does not match the number of samples of the output space"
-  ntuple(length(f)) do l
-    samples = _sample_range(l_to_sample_offset,l)
-    ldata = data[:,f.l_to_lcoord_to_coords[l],samples]
-    to_element(f.lspaces[l],ldata)
-  end
 end
 
 # multi-field constructors: shared samples, channels stacked field by field
@@ -251,7 +225,7 @@ function OutputSpace(uh::MultiFieldParamFEFunction)
   x = get_coords(space)
   lspaces = Tuple(map(OutputSpace,uh))
   l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,lspaces),x)
-  values = _join_channels(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
+  values = cat_channels(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
   MultipleSpaces(OutputSpace(space,values),lspaces,l_to_lcoord_to_coords,nothing)
 end
 
@@ -282,7 +256,7 @@ function InputSpace(lspaces::InputSpace...)
   lpoints = map(get_points,lspaces)
   x = collect(∪(lpoints...))
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lpoints,x)
-  features,l_to_sample_offset = _stack_samples(map(get_features,lspaces),l_to_lcoord_to_coords,length(x))
+  features,l_to_sample_offset = cat_samples(map(get_features,lspaces),l_to_lcoord_to_coords,length(x))
   coords = _get_coords(x,size(features,3))
   gspace = InputSpace(coords,features)
   MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,l_to_sample_offset)
@@ -292,7 +266,7 @@ function OutputSpace(lspaces::OutputSpace...)
   lpoints = map(get_points,lspaces)
   x = collect(∪(lpoints...))
   l_to_lcoord_to_coords = _lcoord_to_coords_map(lpoints,x)
-  values,l_to_sample_offset = _stack_samples(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
+  values,l_to_sample_offset = cat_samples(map(get_values,lspaces),l_to_lcoord_to_coords,length(x))
   gspace = OutputSpace(x,values)
   MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,l_to_sample_offset)
 end
@@ -454,8 +428,13 @@ function _free_values(f::OutputSpace,data::AbstractInputData)
   u
 end
 
-function _to_points(coords::AbstractInputData,::Val{D}) where D
-  [Point(ntuple(d -> coords[d,i,1],Val(D))) for i in axes(coords,2)]
+function _to_points(coords::AbstractInputData{T}) where T
+  D = size(coords,1)
+  points = Vector{Point{D,T}}(undef,size(coords,2))
+  @inbounds for i in axes(coords,2)
+    points[i] = Point(ntuple(d -> coords[d,i,1],Val(D)))
+  end
+  points
 end
 
 function _lcoord_to_coords_map(lcoords,coords)
@@ -473,83 +452,25 @@ function _lcoord_to_coords_map(lcoords,coords)
   Table(data,ptrs)
 end
 
-_sample_range(::Nothing,l::Int) = Colon()
-_sample_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)
-
-# shared samples: channels of the local data stacked on top of each other
-function _join_channels(ldata::Tuple,l_to_lcoord_to_coords::Table,N::Int)
-  K = size(first(ldata),3)
-  @check all(size(a,3) == K for a in ldata) "All local data must share the same samples"
-  D = sum(a -> size(a,1),ldata)
-  data = zeros(TData,D,N,K)
+# one FE function on the multi-field space: channels are stacked field by field
+function _to_element(f::MultipleOutputSpaces,::Nothing,data::AbstractInputData)
   off = 0
-  @inbounds for (a,lcoord_to_coords) in zip(ldata,l_to_lcoord_to_coords)
-    d = size(a,1)
-    data[off+1:off+d,lcoord_to_coords,:] .= a
+  us = map(f.lspaces,Tuple(f.l_to_lcoord_to_coords)) do s,lcoord_to_coords
+    d = size(get_values(s),1)
+    ldata = data[off+1:off+d,lcoord_to_coords,:]
     off += d
+    _free_values(s,ldata)
   end
-  data
+  u = reduce(vcat,us)
+  FEFunction(f.gspace.space,ConsecutiveParamArray(u))
 end
 
-# one block of samples per local data
-function _stack_samples(ldata::Tuple,l_to_lcoord_to_coords::Table,N::Int)
-  D = size(first(ldata),1)
-  @check all(size(a,1) == D for a in ldata) "All local data must have the same number of channels"
-  l_to_sample_offset = ones(Int,length(ldata)+1)
-  for (l,a) in enumerate(ldata)
-    l_to_sample_offset[l+1] = l_to_sample_offset[l] + size(a,3)
-  end
-  data = zeros(TData,D,N,last(l_to_sample_offset)-1)
-  @inbounds for (l,(a,lcoord_to_coords)) in enumerate(zip(ldata,l_to_lcoord_to_coords))
-    data[:,lcoord_to_coords,_sample_range(l_to_sample_offset,l)] .= a
-  end
-  data,l_to_sample_offset
-end
-
-# agfem compatibility
-
-function FESpaces.gather_free_and_dirichlet_values!(
-  fmdof_to_val::AbstractVector{T},
-  dmdof_to_val::AbstractVector{T},
-  f::FESpaceWithLinearConstraints,
-  cell_to_ludof_to_val
-  ) where T
-
-  fdof_to_val = Vector{T}(undef,num_free_dofs(f.space))
-  ddof_to_val = Vector{T}(undef,num_dirichlet_dofs(f.space))
-  gather_free_and_dirichlet_values!(fdof_to_val,ddof_to_val,f.space,cell_to_ludof_to_val)
-  FESpaces._setup_mdof_to_val!(
-    fmdof_to_val,
-    dmdof_to_val,
-    fdof_to_val,
-    ddof_to_val,
-    f.mDOF_to_DOF,
-    f.n_fdofs,
-    f.n_fmdofs)
-  fmdof_to_val,dmdof_to_val
-end
-
-function get_mfdof_to_fdof(f::FESpaceWithLinearConstraints)
-  T = eltype(f.mDOF_to_DOF)
-  mfdof_to_fdof = zeros(T,num_free_dofs(f))
-  for mDOF in 1:length(f.mDOF_to_DOF)
-    DOF = f.mDOF_to_DOF[mDOF]
-    mdof = FESpaces._DOF_to_dof(mDOF,f.n_fmdofs)
-    dof = FESpaces._DOF_to_dof(DOF,f.n_fdofs)
-    if mdof > 0
-      @check dof > 0
-      mfdof_to_fdof[mdof] = dof
-    end
-  end
-  return mfdof_to_fdof
-end
-
-for F in (:get_free_dof_to_comp,:get_free_dof_to_point)
-  @eval begin
-    function $F(f::FESpaceWithLinearConstraints)
-      mfdof_to_fdof = get_mfdof_to_fdof(f)
-      fdof_to_q = $F(f.space)
-      view(fdof_to_q,mfdof_to_fdof)
-    end
+# one FE function per PDE, each evaluated on its own samples
+function _to_element(f::MultipleOutputSpaces,l_to_sample_offset,data::AbstractInputData)
+  @check size(data,3) == last(l_to_sample_offset)-1 "Data does not match the number of samples of the output space"
+  ntuple(length(f)) do l
+    samples = _get_range(l_to_sample_offset,l)
+    ldata = data[:,f.l_to_lcoord_to_coords[l],samples]
+    to_element(f.lspaces[l],ldata)
   end
 end

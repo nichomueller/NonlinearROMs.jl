@@ -71,14 +71,12 @@ function (l::FourierKernel)((fixed_data,x),ps,st)
   return (fixed_data,y),st
 end
 
-# we potentially want to replace the space with a new one during the online phase
-# thus we make this struct mutable
 """
-    mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
-      const kernel::A
+    struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
+      kernel::A
       measure::B
-      const formatter::C
-      const coord_dims::Int
+      formatter::C
+      coord_dims::Int
     end
 
 Wraps a plain network `kernel` into a non-local integral operator
@@ -95,11 +93,11 @@ leading rows are coordinates (vs. features), which `formatter`'s
 (see [`DataInterface.merge_data`](@ref)). `fixed_data` passes through unchanged
 so the next layer can use it too.
 """
-mutable struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
-  const kernel::A
+struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
+  kernel::A
   measure::B
-  const formatter::C
-  const coord_dims::Int
+  formatter::C
+  coord_dims::Int
 end
 
 IntegralKernel(kernel,measure,formatter) = IntegralKernel(kernel,measure,formatter,0)
@@ -124,11 +122,11 @@ function (l::IntegralKernel)((fixed_data,v),ps,st)
   return (fixed_data,z),st
 end
 
-mutable struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel
-  const score::A
-  const value::B
+struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel
+  score::A
+  value::B
   measure::C
-  const formatter::D
+  formatter::D
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::AttentionKernel)
@@ -154,12 +152,12 @@ function (l::AttentionKernel)((fixed_data,v),ps,st)
   return (fixed_data,y),(score=st_score,value=st_value)
 end
 
-mutable struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure,E<:DataFormatter} <: AbstractIntegralKernel
-  const scores::A
-  const values::B
-  const aggregation::C
+struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure,E<:DataFormatter} <: AbstractIntegralKernel
+  scores::A
+  values::B
+  aggregation::C
   measure::D
-  const formatter::E
+  formatter::E
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::MultipleAttentionKernel{N}) where N

@@ -391,3 +391,65 @@ function _push_fields!(fields,uhip::MultiFieldFEFunction,ûhip::MultiFieldFEFunc
     _push_fields!(fields,uhip[i],ûhip[i],"$(name)_field$(i)")
   end
 end
+
+# agfem compatibility
+
+function FESpaces.gather_free_and_dirichlet_values!(
+  fmdof_to_val::AbstractVector{T},
+  dmdof_to_val::AbstractVector{T},
+  f::FESpaceWithLinearConstraints,
+  cell_to_ludof_to_val
+  ) where T
+
+  fdof_to_val = Vector{T}(undef,num_free_dofs(f.space))
+  ddof_to_val = Vector{T}(undef,num_dirichlet_dofs(f.space))
+  gather_free_and_dirichlet_values!(fdof_to_val,ddof_to_val,f.space,cell_to_ludof_to_val)
+  FESpaces._setup_mdof_to_val!(
+    fmdof_to_val,
+    dmdof_to_val,
+    fdof_to_val,
+    ddof_to_val,
+    f.mDOF_to_DOF,
+    f.n_fdofs,
+    f.n_fmdofs)
+  fmdof_to_val,dmdof_to_val
+end
+
+function get_mfdof_to_fdof(f::FESpaceWithLinearConstraints)
+  T = eltype(f.mDOF_to_DOF)
+  mfdof_to_fdof = zeros(T,num_free_dofs(f))
+  for mDOF in 1:length(f.mDOF_to_DOF)
+    DOF = f.mDOF_to_DOF[mDOF]
+    mdof = FESpaces._DOF_to_dof(mDOF,f.n_fmdofs)
+    dof = FESpaces._DOF_to_dof(DOF,f.n_fdofs)
+    if mdof > 0
+      @check dof > 0
+      mfdof_to_fdof[mdof] = dof
+    end
+  end
+  return mfdof_to_fdof
+end
+
+for F in (:get_free_dof_to_comp,:get_free_dof_to_point)
+  @eval begin
+    function $F(f::FESpaceWithLinearConstraints)
+      mfdof_to_fdof = get_mfdof_to_fdof(f)
+      fdof_to_q = $F(f.space)
+      view(fdof_to_q,mfdof_to_fdof)
+    end
+  end
+end
+
+#TODO remove this eventually!
+
+function Algebra.solve(
+  fesolver::LinearFESolver,
+  feop::ParamFEOperator,
+  r::Realisation
+  )
+
+  U = get_trial(feop)(r)
+  uh = zero(U)
+  solve!(uh,fesolver,feop,r)
+  FEFunction(U,get_free_dof_values(uh))
+end

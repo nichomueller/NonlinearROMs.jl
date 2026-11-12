@@ -34,6 +34,10 @@ function Base.collect(a::RolloutData{<:Function})
   end
 end
 
+function to_rollout_data(a::AbstractInputData,)
+  
+end
+
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   data = collect(a)
   coords = _get_coords(x,num_params(first(data)))
@@ -41,15 +45,27 @@ function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   InputSpace(coords,features)
 end
 
-function InputSpace(x::AbstractVector{<:Point},a::RolloutData...)
-  spaces = map(ai -> InputSpace(x,ai),a)
-  coords = cat(map(get_coords,spaces)...;dims=3)
-  features = cat(map(get_features,spaces)...;dims=3)
-  InputSpace(coords,features)
+function InputSpace(space::MultiFieldFESpace,a::RolloutData)
+  data = collect(a)
+  x = get_coords(space)
+  fields = Tuple(space.spaces)
+  gspace = InputSpace(x,data)
+  lspaces = map(s -> InputSpace(s,data),fields)
+  l_to_lcoord_to_coords = _lcoord_to_coords_map(map(get_coords,fields),x)
+  MultipleSpaces(gspace,lspaces,l_to_lcoord_to_coords,nothing)
 end
 
-function OutputSpace()
-  
+function OutputSpace(uh::RolloutData{<:TransientParamFESolution})
+  f = get_fe_space(uh)
+  x = get_coords(f)
+  values = _get_values(uh,x)
+  OutputSpace(f,values)
+end
+
+function OutputSpace(sol::TransientParamFESolution,args...)
+  times = get_times(sol.odesol.r)
+  data = RolloutData(sol,times,args...)
+  OutputSpace(data)
 end
 
 # function rollout_data(
@@ -125,6 +141,27 @@ end
 
 # utils
 
-function _get_features(a::AbstractVector{<:FeatureBundle},x::AbstractVector{<:Point})
-  #TODO
+for (F,T) in zip((:_get_features,:get_values),(:FeatureBundle,:ParamFEFunction))
+  @eval function $F(data::AbstractVector{<:$T},x::AbstractVector{<:Point})
+    ax = map(data) do a
+      $F(a,x)
+    end
+    cat(ax...;dims=1)
+  end
+end
+
+function _free_values(f::OutputSpace,data::RolloutData{<:AbstractInputData})
+  msg = "Data does not match the output space's dof count"
+  comps = get_free_dof_to_comp(f.space)
+  points = get_free_dof_to_point(f.space)
+  ids = findall(get_node_masks(f.space)) # representative dof ids
+  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+  @check size(data,1)*size(data,2) == length(comps) msg
+  T = eltype2(get_vector_type(f.space))
+  u = zeros(T,length(comps),size(data,3))
+  @inbounds @views for dof in eachindex(comps)
+    pos = point_to_pos[points[dof]]
+    u[dof,:] .= data[comps[dof],pos,:]
+  end
+  u
 end

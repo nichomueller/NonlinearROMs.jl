@@ -246,7 +246,7 @@ function blockwise(f,meas::MultipleMeasure,edata::AbstractInputData...)
   outs = map(enumerate(lmeas)) do (l,m)
     edges = (eoff+1):(eoff+num_edges(m))
     eoff += num_edges(m)
-    samples = _sample_range(l_to_sample_offset,l)
+    samples = _get_range(l_to_sample_offset,l)
     ldata = map(a -> a[:,edges,samples],edata)
     expand_vertex_data(f(ldata...,m),space.l_to_lcoord_to_coords[l],N)
   end
@@ -261,7 +261,7 @@ function expand_vertex_data(ldata::AbstractInputData,lcoord_to_coords::AbstractV
 end
 
 _combine_blocks(::Nothing,outs) = reduce(+,outs)
-_combine_blocks(l_to_sample_offset::AbstractVector,outs) = cat(outs...;dims=3)
+_combine_blocks(::AbstractVector,outs) = cat(outs...;dims=3)
 
 _check_samples(::Nothing,a) = nothing
 

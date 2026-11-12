@@ -112,6 +112,8 @@ export FeatureKernelFormatter
 export StateKernelFormatter
 export FullKernelFormatter
 export Sampler
+export cat_channels
+export cat_samples
 include("DataInterface.jl")
 
 export WeightedSimpleDiGraph

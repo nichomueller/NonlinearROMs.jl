@@ -28,7 +28,7 @@ aμ(μ) = parameterise(a,μ)
 f(μ) = x -> μ[2]
 fμ(μ) = parameterise(f,μ)
 
-g(μ) = x -> μ[3]
+g(μ) = x -> 0.0
 gμ(μ) = parameterise(g,μ)
 
 function pde(R,x0)
@@ -90,7 +90,7 @@ solver = NeuralSolver(gmodel;epochs=200,print_every=50)
 op = neural_operator(solver,input_space,output_space)
 
 # evaluation on a new mesh: same trained network, kernels integrated on the new graph
-gspace_test = GraphInducedSpace(test;radius=2*hd)
+gspace_test = GraphInducedSpace(test;radius=1.2*hd)
 op_test = replace_space(op,gspace_test)
 input_space = InputSpace(test,features(μ))
 pred_uμ = solve(solver,op_test,input_space)
