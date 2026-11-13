@@ -1,11 +1,14 @@
-# function Base.collect(sol::TransientParamFESolution)
-#   r = sol.odesol.r
-#   vals = collect(sol.odesol)
-#   trial = sol.trial(r)
-#   FEFunction(trial,vals)
-# end
+struct TwoStageBuckets{A<:AbstractInputData}
+  first_stage::Vector{A}
+  second_stage::Vector{A}
+end
 
-# Gridap.FESpaces.get_fe_space(sol::TransientParamFESolution) = sol.trial(sol.odesol.r)
+function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector})
+  r1 = stage_ranges(steps;stage=:first)
+  r2 = stage_ranges(steps;stage=:second)
+  s1,s2 = split_stages(data,r1,r2)
+  TwoStageBuckets(s1,s2)
+end
 
 """
     struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
@@ -33,43 +36,27 @@ function RolloutData(data,times::AbstractVector,step::Int=2)
   RolloutData(data,times,steps)
 end
 
-# Gridap.FESpaces.get_fe_space(a::RolloutData) = get_fe_space(a.data)
+function TwoStageBuckets(a::RolloutData)
+  TwoStageBuckets(a,a.steps)
+end
 
-function Base.collect(a::RolloutData)
-  data = collect(a.data)
-  T = typeof(data)
-  rollout = Vector{T}(undef,length(a.steps)-1)
-  for k in eachindex(rollout)
-    rollout[k] = data[a.steps[k]:a.steps[k+1]]
-  end
-  return rollout
+function stage_ranges(a::RolloutData;kwargs...)
+  stage_ranges(a.steps;kwargs...)
 end
 
 function Base.collect(a::RolloutData{<:TransientParamFESolution})
-  _collect_trajectory(a.data,a.steps)
-end
-
-# function Base.collect(a::RolloutData{<:TransientParamFESolution})
-#   states = [xh for (_,xh) in a.data]
-#   T = eltype(states)
-#   rollout = Vector{Vector{T}}(undef,length(a.steps)-1)
-#   for k in eachindex(rollout)
-#     rollout[k] = states[a.steps[k]:a.steps[k+1]]
-#   end
-#   rollout
-# end
-
-function Base.collect(a::RolloutData{<:Function})
+  sol = a.data
+  μ = get_params(sol.odesol.r)
+  vals = collect(sol.odesol)
+  np = length(μ)
   map(1:length(a.steps)-1) do k
-    ts = a.times[a.steps[k]:a.steps[k+1]]
-    [a.data(t) for t in ts]
+    ik = a.steps[k]:a.steps[k+1]
+    ipk = (a.steps[k]-1)*np+1:a.steps[k+1]*np
+    tk = a.times[ik]
+    vk = @views vals[ipk] 
+    trial = sol.trial(μ,tk)
+    FEFunction(trial,vk)
   end
-end
-
-# the regular (non-ragged) cluster size K, and the clusters that actually have it
-function _full_clusters(clusters::AbstractVector)
-  K = maximum(c -> length(c)-1,clusters)
-  filter(c -> length(c)-1 == K,clusters)
 end
 
 """
@@ -225,56 +212,123 @@ GraphInducedSpace(a::RolloutData;kwargs...) = GraphInducedSpace(get_fe_space(a);
 
 # utils
 
-for (F,T) in zip((:_get_features,:_get_values),(:FeatureBundle,:ParamFEFunction))
-  @eval function $F(data::AbstractVector{<:$T},x::AbstractVector{<:Point})
-    ax = map(data) do a
-      $F(a,x)
+function stage_ranges(steps;stage=:first)
+  t = ()
+  for k in 1:length(steps)-1
+    ak = steps[k]
+    bk = steps[k+1]
+    mk = div((ak - 1) + bk,2)
+    if stage==:first
+      t = (t...,ak:mk)
+    elseif stage==:second
+      t = (t...,mk+1:bk)
+    else
+      @notimplemented "stage must be :first or :second"
     end
-    cat(ax...;dims=1)
+  end
+  return t
+end
+
+function split_stages(a,r1,r2)
+  @check length(r1) == length(r2) "r1 and r2 must have the same length"
+  _split_stages(a,r1,r2)
+end
+
+function _split_stages(a,r1,r2)
+  @abstractmethod
+end
+
+function _split_stages(a::RolloutData,r1,r2)
+  data = collect(a.data)
+  T = typeof(data)
+  stage1 = Vector{T}(undef,length(r1)-1)
+  stage2 = Vector{T}(undef,length(r2)-1)
+  for k in eachindex(r1)
+    stage1[k] = data[r1[k]:r1[k+1]]
+    stage2[k] = data[r2[k]:r2[k+1]]
+  end
+  return stage1,stage2
+end
+
+function _split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVector{<:Point})
+  @check length(r1) == length(r2) "r1 and r2 must have the same length"
+  np = num_params(a.data)
+  features,offsets = _init_data(a,x)
+
+  T = typeof(features)
+  stage1 = Vector{T}(undef,length(r1))
+  stage2 = Vector{T}(undef,length(r2))
+  for k in eachindex(r1)
+    stage1[k] = similar(features)
+    stage2[k] = similar(features)
+  end
+
+  Δ = length(first(r1))
+  
+  @inbounds for (j,aj) in enumerate(a.data.bundle)
+    ax = lazy_map(aj,x)
+    cache = array_cache(ax)
+    for i in eachindex(ax)
+      axi = getindex!(cache,ax,i)
+      for k in eachindex(r1)
+        o = offsets[j+(k-1)*Δ]
+        _fill_stage!(stage1[k],axi,o,r1[k],i,np)
+        _fill_stage!(stage2[k],axi,o,r2[k],i,np)
+      end
+    end
+  end
+
+  stage1,stage2
+end
+
+function _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::AbstractVector{<:Point})
+  @check length(r1) == length(r2) "r1 and r2 must have the same length"
+  np = num_params(a.data)
+  features,offsets = _init_data(a,x)
+
+  T = typeof(features)
+  stage1 = Vector{T}(undef,length(r1))
+  stage2 = Vector{T}(undef,length(r2))
+  for k in eachindex(r1)
+    stage1[k] = similar(features)
+    stage2[k] = similar(features)
+  end
+
+  Δ = length(first(r1))
+  
+  @inbounds for (j,aj) in enumerate(a.data.bundle)
+    ax = lazy_map(aj,x)
+    cache = array_cache(ax)
+    for i in eachindex(ax)
+      axi = getindex!(cache,ax,i)
+      for k in eachindex(r1)
+        o = offsets[j+(k-1)*Δ]
+        _fill_stage!(stage1[k],axi,o,r1[k],i,np)
+        _fill_stage!(stage2[k],axi,o,r2[k],i,np)
+      end
+    end
+  end
+
+  stage1,stage2
+end
+
+function _fill_stage!(stage,axi,o,trange,i,np)
+  for it in enumerate(trange), p in 1:np
+    ipt = (it-1)*np+p
+    _set_data!(stage,param_getindex(axi,ipt),o,i,p)
   end
 end
 
-function _collect_trajectory(fesol::TransientParamFESolution,steps)
-  sol = fesol.odesol
-  u0 = first(sol.us0)
-  nsteps = length(steps)
-  step = steps[2] - steps[1]
-  ncols = num_params(sol.r)*step
-  cache = Vector{typeof(u0)}(undef,nsteps)
-  for (k,(rk,uk)) in enumerate(sol)
-    k > last(steps) && break
-    sols = ParamODEs._allocate_solutions(u0,ncols)
-    ParamODEs._collect_solutions!(sols,uk,k)
-    if (k+1) in steps
-      cache[k] = sols
-      sols = ParamODEs._allocate_solutions(u0,ncols)
-    end
+function _offsets(a::RolloutData{<:FeatureBundle},x::Point)
+  ranges = stage_ranges(a)
+  Δ = length(first(ranges))
+  o = zeros(Int,length(a.bundle))
+  for (i,f) in enumerate(a.bundle)
+    T = return_type(f,x)
+    o[i] = num_components(eltype(T))
   end
-  return cache
-end
-
-function _collect_trajectory(sol::ODEParamSolution,steps)
-  msg = """ 
-  The values should be consecutive for efficiency. Deactivate 
-  BlockMultiFieldStyle() in the MultiFieldFESpace!
-  """
-  @notimplemented msg
-end
-
-function _collect_trajectory(sol::ODEParamSolution{<:ConsecutiveParamVector},steps)
-  u0 = first(sol.us0)
-  nsteps = length(steps)
-  step = steps[2] - steps[1]
-  ncols = num_params(sol.r)*step
-  cache = Vector{typeof(u0)}(undef,nsteps)
-  for (k,(rk,uk)) in enumerate(sol)
-    k > last(steps) && break
-    sols = ParamODEs._allocate_solutions(u0,ncols)
-    ParamODEs._collect_solutions!(sols,uk,k)
-    if (k+1) in steps
-      cache[k] = sols
-      sols = ParamODEs._allocate_solutions(u0,ncols)
-    end
-  end
-  return cache
+  offsets = repeat(o,Δ)
+  pushfirst!(offsets,0)
+  length_to_ptrs!(offsets)
+  return offsets
 end

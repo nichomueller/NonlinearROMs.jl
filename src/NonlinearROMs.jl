@@ -194,6 +194,8 @@ export GNOReduction
 include("NeuralReductions.jl")
 
 export RolloutData
+export RolloutInputSpace
+export RolloutOutputSpace
 export collect_trajectory
 export rollout_data
 export rollout

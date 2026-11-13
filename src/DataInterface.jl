@@ -11,10 +11,10 @@ struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
 end
 
 function ParamDataStructures.num_params(a::FeatureBundle)
-  dict = OrderedDict{UInt64,AbstractRealisation}()
+  dict = OrderedDict{UInt,AbstractRealisation}()
   for f in a.bundle
     μ = get_params(f)
-    dict[objectid(μ)] = μ
+    dict[hash(μ)] = μ
   end
   np = 0
   for μ in values(dict)

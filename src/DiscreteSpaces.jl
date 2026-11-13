@@ -29,9 +29,9 @@ abstract type TrainingSpace <: DiscreteSpace end
 
 fetch_data(d::DataFormatter,f::TrainingSpace) = @abstractmethod
 
-struct InputSpace{A<:AbstractInputData,B<:AbstractInputData} <: TrainingSpace
-  coords::B
-  features::A
+struct InputSpace{A<:AbstractInputData,B} <: TrainingSpace
+  coords::A
+  features::B
 end
 
 function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
@@ -56,7 +56,7 @@ function fetch_data(d::DataFormatter,f::InputSpace)
   fetch_data(d,input)
 end
 
-struct OutputSpace{A,B<:AbstractInputData} <: TrainingSpace
+struct OutputSpace{A,B} <: TrainingSpace
   space::A
   values::B
 end
