@@ -24,6 +24,7 @@ function ParamDataStructures.num_params(a::FeatureBundle)
 end
 
 ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
+ParamDataStructures.num_params(a::TransientParamFESolution) = num_params(a.odesol.r)
 
 struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_coords::Val{A}
@@ -269,8 +270,9 @@ function _offsets(a::FeatureBundle,x::Point)
   offsets = zeros(Int,length(a.bundle)+1)
   for (i,f) in enumerate(a.bundle)
     T = return_type(f,x)
-    offsets[i+1] = offsets[i] + num_components(eltype(T))
+    offsets[i+1] = num_components(eltype(T))
   end
+  length_to_ptrs!(offsets)
   return offsets
 end
 
@@ -278,6 +280,7 @@ function _offsets(a::ParamFEFunction,x::Point)
   offsets = zeros(Int,2)
   T = return_type(a,x)
   offsets[2] = num_components(eltype(T))
+  length_to_ptrs!(offsets)
   return offsets
 end
 
@@ -292,11 +295,11 @@ function _set_data!(data,vals,o)
   data
 end
 
-_set_data!(data,valsik,o,i,k) = (data[o+1,i,k] = valsik)
+_set_data!(data,valsik,o,i,k) = (data[o,i,k] = valsik)
 
 function _set_data!(data,valsik::Point{D},o,i,k) where D
   for d in 1:D
-    data[o+d,i,k] = valsik.data[d]
+    data[o-1+d,i,k] = valsik.data[d]
   end
 end
 
@@ -313,7 +316,7 @@ function _trivial_table(a::Tuple{Vararg{AbstractInputData{T}}}) where T
   end
   data = zeros(T,ptrs[end])
   length_to_ptrs!(ptrs)
-  @inbounds for (i,ai) in enumerate(a)
+  @inbounds for i in eachindex(a)
     pini = ptrs[i]
     pend = ptrs[i+1]-1
     for (k,p) in enumerate(pini:pend)

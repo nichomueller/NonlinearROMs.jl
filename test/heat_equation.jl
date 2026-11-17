@@ -78,3 +78,17 @@ op = neural_operator(solver,input_space,output_space)
 # online phase: roll the trained operator out over the whole trajectory, starting
 # from the true initial condition -- each step only ever sees its own prediction
 predicted_states = rollout(solver,op,fspace,features,times,states[1])
+
+# 
+
+A = NonlinearROMs.RolloutData(uhμ)
+
+using Gridap.ODEs
+using Gridap.Arrays
+
+x = [Point(0.1,0.1),Point(0.5,0.5),Point(0.9,0.9)]
+np = num_params(A.data.odesol.r)
+features,offsets = NonlinearROMs._init_data(A,x)
+(r,ah),state = iterate(A.data)
+ax = lazy_map(ah,x)
+cache = array_cache(ax)
