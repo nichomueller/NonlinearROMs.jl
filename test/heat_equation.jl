@@ -58,37 +58,54 @@ feop = TransientLinearParamFEOperator(rhs,(stiffness,mass),ptspace,trial,test)
 μt = TransientRealisation(μ,collect(tdomain))
 uhμ = solve(fesolver,feop,μt,uh0μ)
 
-using GridapROMs.ParamDataStructures
-using Gridap.Algebra
-
-fspace = FunctionSpace(test)
-gspace = GraphInducedSpace(fspace;radius=0.3)
-
-times = collect(tdomain)
-states = vcat(uh0μ(μ),collect(uhμ)...)
-features(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
-input_space,output_space = rollout_data(fspace,features,times,states)
-
-model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(model;epochs=200,print_every=50)
-
-# offline phase: train the one-step (autoregressive) operator
-op = neural_operator(solver,input_space,output_space)
-
-# online phase: roll the trained operator out over the whole trajectory, starting
-# from the true initial condition -- each step only ever sees its own prediction
-predicted_states = rollout(solver,op,fspace,features,times,states[1])
-
-# 
-
-A = NonlinearROMs.RolloutData(uhμ)
-
-using Gridap.ODEs
 using Gridap.Arrays
+using GridapROMs.ParamDataStructures
 
-x = [Point(0.1,0.1),Point(0.5,0.5),Point(0.9,0.9)]
-np = num_params(A.data.odesol.r)
-features,offsets = NonlinearROMs._init_data(A,x)
-(r,ah),state = iterate(A.data)
+A = RolloutData(uhμ)
+x = get_coords(test)
+
+sol = A.data
+np = num_params(sol)
+N = length(x)
+r1 = NonlinearROMs.stage_ranges(A;stage=:first)
+r2 = NonlinearROMs.stage_ranges(A;stage=:second)
+Δ = length(first(r1))
+
+o = NonlinearROMs._offsets(sol,testitem(x))
+D = o[end]-1
+
+stage1 = [zeros(Float32,D*Δ,N,np) for _ in eachindex(r1)]
+stage2 = [zeros(Float32,D*Δ,N,np) for _ in eachindex(r2)]
+
+Tmax = last(A.steps)-1
+
+np = num_params(A.data)
+values,offsets = NonlinearROMs._init_data(A,x)
+
+T = typeof(values)
+s1 = Vector{T}(undef,length(r1))
+s2 = Vector{T}(undef,length(r2))
+@inbounds for k in eachindex(r1)
+  s1[k] = similar(values)
+  s2[k] = similar(values)
+end
+
+ah,state = iterate(A.data)
 ax = lazy_map(ah,x)
 cache = array_cache(ax)
+
+k = 1
+i = 1
+axi = getindex!(cache,ax,i)
+_fill_stage!(stage,axi,o,k,i,np)
+# for k in 1:last(a.steps)-1
+#   for i in eachindex(ax)
+#     axi = getindex!(cache,ax,i)
+#     _fill_stage!(stage,axi,o,k,i,np)
+#   end
+#   (r,ah),state = iterate(a.data,state)
+#   ax = lazy_map(ah,x)
+# end
+
+stage1,stage2 = NonlinearROMs._split_stages(A,r1,r2,x)
+ostage1,ostage2 = NonlinearROMs._old_split_stages(A,r1,r2,x)

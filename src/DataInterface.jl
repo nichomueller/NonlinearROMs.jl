@@ -224,9 +224,9 @@ function points_to_coords(x::AbstractVector{<:Point},K::Int=1)
   D = num_components(eltype(x))
   N = length(x)
   coords = zeros(TData,D,N,K)
-  for (i,xi) in enumerate(x)
+  @inbounds @views for (i,xi) in enumerate(x)
     for d in 1:D 
-      @views coords[d,i,:] .= xi.data[d]
+      coords[d,i,:] .= xi.data[d]
     end
   end
   return coords
@@ -259,7 +259,7 @@ end
 
 function _init_data(a,x)
   offsets = _offsets(a,testitem(x))
-  D = offsets[end]
+  D = offsets[end]-1
   N = length(x)
   K = num_params(a)
   data = zeros(TData,D,N,K)

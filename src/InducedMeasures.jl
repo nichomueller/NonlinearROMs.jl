@@ -2,7 +2,7 @@
 
 abstract type MPRule end
 
-MPRule() = DifferenceMP()
+MPRule() = PlainMP()
 
 combine_message(::MPRule,src,dst,args...) = @abstractmethod
 

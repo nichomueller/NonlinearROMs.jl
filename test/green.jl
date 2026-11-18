@@ -69,9 +69,8 @@ input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
 gspace = GraphInducedSpace(test;radius=1.0)
-style = IntegralStyle(InducedMeasure(gspace;message_rule=PlainMP()))
 gmodel = KernelNeuralModel(
-  style;
+  gspace;
   hidden_layers=(64,64),
   activation=identity,
   kernel_activation=tanh,

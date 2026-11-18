@@ -8,10 +8,10 @@ pdomain = (1,10,1,10,1,10)
 pspace = ParamSpace(pdomain)
 
 domain = (0,1,0,1)
-partition = (50,50)
+partition = (5,5)
 model = CartesianDiscreteModel(domain,partition)
 
-order = 2
+order = 1
 degree = 2*order
 
 Ω = Triangulation(model)
@@ -70,7 +70,7 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
 # test 2: GNOs
 
-mesh_size = 1/50
+mesh_size = 1/5
 gspace = GraphInducedSpace(test;radius=2*mesh_size)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(gmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)

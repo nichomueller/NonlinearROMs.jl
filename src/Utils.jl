@@ -95,6 +95,13 @@ function tuple_of_arrays(a)
   take(a,eltype(a))
 end
 
+function ptrs_to_length!(ptrs::AbstractArray{<:Integer})
+  @inbounds for i in (length(ptrs)-1):-1:1
+    ptrs[i+1] -= ptrs[i]
+  end
+  ptrs[1] = 0
+end
+
 # input data type 
 
 const TData = Float32
