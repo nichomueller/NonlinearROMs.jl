@@ -1,10 +1,16 @@
 using Gridap 
 using GridapROMs
+using GridapROMs.ParamDataStructures
 using GridapROMs.RBSteady
 using NonlinearROMs
 
+θ = 0.5
+dt = 0.01
+t0 = 0.0
+tf = 10*dt
+tdomain = t0:dt:tf
 pdomain = (1,10,1,10,1,10)
-pspace = ParamSpace(pdomain)
+ptspace = TransientParamSpace(pdomain,tdomain)
 
 domain = (0,1,0,1)
 partition = (5,5)
@@ -43,69 +49,37 @@ trial = TransientTrialParamFESpace(test,gμt)
 
 uh0μ(μ) = interpolate_everywhere(u0μ(μ),trial(μ,t0))
 
-θ = 0.5
-dt = 0.01
-t0 = 0.0
-tf = 10*dt
-tdomain = t0:dt:tf
-
-ptspace = TransientParamSpace(pdomain,tdomain)
-
 fesolver = ThetaMethod(LUSolver(),dt,θ)
 feop = TransientLinearParamFEOperator(rhs,(stiffness,mass),ptspace,trial,test)
 
-μ = realisation(pspace;nparams=50)
-μt = TransientRealisation(μ,collect(tdomain))
+μt_train = realisation(ptspace;nparams=50)
+μ_train = get_params(μt_train)
+uhμ_train = solve(fesolver,feop,μt_train,uh0μ)
+
+μt = realisation(ptspace;nparams=50)
+μ = get_params(μt)
 uhμ = solve(fesolver,feop,μt,uh0μ)
 
-using Gridap.Arrays
-using GridapROMs.ParamDataStructures
-
-A = RolloutData(uhμ)
 x = get_coords(test)
+times = collect(dt:dt:tf)
 
-sol = A.data
-np = num_params(sol)
-N = length(x)
-r1 = NonlinearROMs.stage_ranges(A;stage=:first)
-r2 = NonlinearROMs.stage_ranges(A;stage=:second)
-Δ = length(first(r1))
+features(μ) = RolloutData(
+  FeatureBundle((aμt(μ,times),fμt(μ,times),gμt(μ,times),hμt(μ,times))),
+  times,2
+)
+input_space(μ) = InputSpace(x,features(μ))
+output_space = OutputSpace(RolloutData(uhμ_train,times,2))
 
-o = NonlinearROMs._offsets(sol,testitem(x))
-D = o[end]-1
+# test 1: Gridap-based spaces
 
-stage1 = [zeros(Float32,D*Δ,N,np) for _ in eachindex(r1)]
-stage2 = [zeros(Float32,D*Δ,N,np) for _ in eachindex(r2)]
+fspace = FunctionSpace(test)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-Tmax = last(A.steps)-1
-
-np = num_params(A.data)
-values,offsets = NonlinearROMs._init_data(A,x)
-
-T = typeof(values)
-s1 = Vector{T}(undef,length(r1))
-s2 = Vector{T}(undef,length(r2))
-@inbounds for k in eachindex(r1)
-  s1[k] = similar(values)
-  s2[k] = similar(values)
-end
-
-ah,state = iterate(A.data)
-ax = lazy_map(ah,x)
-cache = array_cache(ax)
-
-k = 1
-i = 1
-axi = getindex!(cache,ax,i)
-_fill_stage!(stage,axi,o,k,i,np)
-# for k in 1:last(a.steps)-1
-#   for i in eachindex(ax)
-#     axi = getindex!(cache,ax,i)
-#     _fill_stage!(stage,axi,o,k,i,np)
-#   end
-#   (r,ah),state = iterate(a.data,state)
-#   ax = lazy_map(ah,x)
-# end
-
-stage1,stage2 = NonlinearROMs._split_stages(A,r1,r2,x)
-ostage1,ostage2 = NonlinearROMs._old_split_stages(A,r1,r2,x)
+data,stats = NonlinearROMs.fetch_data_and_stats(
+  solver,input_space(μ_train),output_space
+)

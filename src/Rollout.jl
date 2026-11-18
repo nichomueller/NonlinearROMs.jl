@@ -10,6 +10,8 @@ function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector})
   TwoStageBuckets(s1,s2)
 end
 
+Base.copy(a::TwoStageBuckets) = TwoStageBuckets(copy(a.first_stage),copy(a.second_stage))
+
 """
     struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
       data::A
@@ -43,10 +45,6 @@ function RolloutData(data::TransientParamFESolution,step::Int=2)
   RolloutData(data,times,step)
 end
 
-function TwoStageBuckets(a::RolloutData)
-  TwoStageBuckets(a,a.steps)
-end
-
 ParamDataStructures.num_params(a::RolloutData) = num_params(a.data)
 
 function stage_ranges(a::RolloutData;kwargs...)
@@ -57,7 +55,7 @@ num_clusters(a::RolloutData) = length(a.steps)-1
 
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   coords = points_to_coords(x,num_params(a)*num_clusters(a))
-  features = _rollout_data(a,x)
+  features = _get_features(a,x)
   InputSpace(coords,features)
 end
 
@@ -74,7 +72,7 @@ function OutputSpace(a::RolloutData{<:TransientParamFESolution})
   r = a.data.odesol.r
   f = a.data.trial(r)
   x = get_coords(f)
-  values = _rollout_data(a,x)
+  values = _get_values(a,x)
   OutputSpace(f,values)
 end
 
@@ -83,8 +81,6 @@ function OutputSpace(sol::TransientParamFESolution,args...)
   data = RolloutData(sol,times,args...)
   OutputSpace(data)
 end
-
-# utils
 
 function stage_ranges(steps;stage=:first)
   t = ()
@@ -140,143 +136,7 @@ function _split_stages(a::RolloutData,r1,r2)
   return stage1,stage2
 end
 
-"""
-    _split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x) -> (stage1,stage2)
-
-Per cluster `k`, channel-stacks the bundle's features over the `Δ = length(r1[k])`
-global times in `r1[k]` into `stage1[k]` (shape `(D*Δ,N,np)`), and likewise `r2[k]`
-into `stage2[k]`. `o[j]` is bundle element `j`'s own channel offset *within one
-time slice* (from `_offsets(a.data,x)`); `_fill_stage!` shifts it by `D*(pos-1)`
-for the time slice's stage-local position `pos`, and reads bundle element `j`'s
-flat (time-major, param-minor) value at global time `t` via `(t-1)*np+p`.
-"""
 function _split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVector{<:Point})
-  @check length(r1) == length(r2) "r1 and r2 must have the same length"
-  np = num_params(a.data)
-  N = length(x)
-  Δ = length(first(r1))
-
-  o = _offsets(a.data,testitem(x))
-  D = o[end]-1
-
-  stage1 = [zeros(TData,D*Δ,N,np) for _ in eachindex(r1)]
-  stage2 = [zeros(TData,D*Δ,N,np) for _ in eachindex(r2)]
-
-  @inbounds for (j,aj) in enumerate(a.data.bundle)
-    oj = o[j]
-    ax = lazy_map(aj,x)
-    cache = array_cache(ax)
-    for i in eachindex(ax)
-      axi = getindex!(cache,ax,i)
-      for k in eachindex(r1)
-        _fill_stage!(stage1[k],axi,oj,r1[k],i,np,D)
-        _fill_stage!(stage2[k],axi,oj,r2[k],i,np,D)
-      end
-    end
-  end
-
-  stage1,stage2
-end
-
-"""
-    _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x) -> (stage1,stage2)
-
-Streams the solution once via `Base.iterate` (never materialising all time
-steps at once) and, for every global time `t`, scatters its point-evaluated
-state directly into whichever `stage1[k]`/`stage2[k]` slot owns it -- skipping
-evaluation for any time beyond the last cluster entirely.
-"""
-function _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::AbstractVector{<:Point})
-  @check length(r1) == length(r2) "r1 and r2 must have the same length"
-  sol = a.data
-  np = num_params(sol)
-  N = length(x)
-  Δ = length(first(r1))
-
-  o = _offsets(sol,testitem(x))
-  D = o[end]-1
-
-  stage1 = [zeros(TData,D*Δ,N,np) for _ in eachindex(r1)]
-  stage2 = [zeros(TData,D*Δ,N,np) for _ in eachindex(r2)]
-
-  Tmax = last(a.steps)-1
-  targets = Vector{Union{Nothing,Tuple{Array{TData,3},Int}}}(nothing,Tmax)
-  for k in eachindex(r1)
-    for (pos,t) in enumerate(r1[k])
-      targets[t] = (stage1[k],pos)
-    end
-    for (pos,t) in enumerate(r2[k])
-      targets[t] = (stage2[k],pos)
-    end
-  end
-
-  it = iterate(sol)
-  t = 1
-  while !isnothing(it)
-    ah,state = it
-    tgt = targets[t]
-    if !isnothing(tgt)
-      dest,pos = tgt
-      ax = lazy_map(ah,x)
-      cache = array_cache(ax)
-      for i in eachindex(ax)
-        axi = getindex!(cache,ax,i)
-        _fill_stage!(dest,axi,1,pos,i,np,D)
-      end
-    end
-    t == Tmax && break
-    it = iterate(sol,state)
-    t += 1
-  end
-
-  stage1,stage2
-end
-
-function _fill_stage!(stage,axi,o,trange::AbstractVector,i,np,D=1)
-  for (it,ti) in enumerate(trange), p in 1:np
-    ipt = (ti-1)*np+p
-    _set_data!(stage,param_getindex(axi,ipt),o+(it-1)*D,i,p)
-  end
-end
-
-function _fill_stage!(stage,axi,o,it::Int,i,np,D=1)
-  for p in 1:np
-    _set_data!(stage,param_getindex(axi,p),o+(it-1)*D,i,p)
-  end
-end
-
-# un-splits each cluster (stage1 ++ stage2 along the channel axis, restoring
-# the full `(D*step,N,np)` cluster) then stacks every cluster along the
-# sample axis -- one sample per (original parameter,cluster) pair
-function _rollout_data(a::RolloutData,x::AbstractVector{<:Point})
-  buckets = TwoStageBuckets(a,x)
-  per_cluster = map((s1,s2) -> cat(s1,s2;dims=1),buckets.first_stage,buckets.second_stage)
-  cat(per_cluster...;dims=3)
-end
-
-function _offsets(a::TransientParamFESolution,x::Point)
-  trial = a.trial(a.odesol.r)
-  _offsets(zero(trial),x)
-end
-
-#TODO remove? 
-
-function _offsets(a::RolloutData,x::Point)
-  ranges = stage_ranges(a)
-  Δ = length(first(ranges))
-  o = _offsets(a.data,x)
-  ptrs_to_length!(o)
-  offsets = repeat(o,Δ)
-  length_to_ptrs!(offsets)
-  return offsets
-end
-
-function _offsets(a::TransientParamFESolution,x::Point)
-  trial = a.trial(a.odesol.r)
-  _offsets(zero(trial),x)
-end
-
-function _old_split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVector{<:Point})
   np = num_params(a.data)
   features,offsets = _init_data(a,x)
 
@@ -288,7 +148,7 @@ function _old_split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVect
     stage2[k] = similar(features)
   end
 
-  Δ = length(first(r1))
+  nel = length(a.data.bundle)
   
   @inbounds for (j,aj) in enumerate(a.data.bundle)
     ax = lazy_map(aj,x)
@@ -296,9 +156,11 @@ function _old_split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVect
     for i in eachindex(ax)
       axi = getindex!(cache,ax,i)
       for k in eachindex(r1)
-        o = offsets[j+(k-1)*Δ]
-        _old_fill_stage!(stage1[k],axi,o,r1[k],i,np)
-        _old_fill_stage!(stage2[k],axi,o,r2[k],i,np)
+        for (ik,(t1,t2)) in enumerate(zip(r1[k],r2[k]))
+          o = offsets[(ik-1)*(nel+1)+j]
+          _fill_stage!(stage1[k],axi,o,t1,i,np)
+          _fill_stage!(stage2[k],axi,o,t2,i,np)
+        end
       end
     end
   end
@@ -306,7 +168,7 @@ function _old_split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVect
   stage1,stage2
 end
 
-function _old_split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::AbstractVector{<:Point})
+function _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::AbstractVector{<:Point})
   np = num_params(a.data)
   values,offsets = _init_data(a,x)
 
@@ -318,34 +180,79 @@ function _old_split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::A
     stage2[k] = similar(values)
   end
 
-  Δ = length(first(r1))
-
-  ah,state = iterate(a.data)
-  ax = lazy_map(ah,x)
-  cache = array_cache(ax)
+  it = iterate(a.data)
   for k in eachindex(r1)
-    o = offsets[1+(k-1)*Δ]
-    for i in eachindex(ax)
-      axi = getindex!(cache,ax,i)
-      _old_fill_stage!(stage1[k],axi,o,r1[k],i,np)
-      _old_fill_stage!(stage2[k],axi,o,r2[k],i,np)
+    for (stage,rk) in ((stage1[k],r1[k]),(stage2[k],r2[k]))
+      for ik in eachindex(rk)
+        ah,state = it
+        o = offsets[2*ik-1]
+        ax = lazy_map(ah,x)
+        cache = array_cache(ax)
+        for i in eachindex(ax)
+          axi = getindex!(cache,ax,i)
+          _fill_stage!(stage,axi,o,i,np)
+        end
+        it = iterate(a.data,state)
+      end
     end
-    ah,state = iterate(a.data,state)
-    ax = lazy_map(ah,x)
   end
 
   stage1,stage2
 end
 
-function _old_fill_stage!(stage,axi,o,trange::AbstractVector,ix,np)
-  for ti in trange, ip in 1:np
-    ipt = (ti-1)*np+ip
+function _fill_stage!(stage,axi,o,t::Integer,ix,np)
+  for ip in 1:np
+    ipt = (t-1)*np+ip
     _set_data!(stage,param_getindex(axi,ipt),o,ix,ip)
   end
 end
 
-function _old_fill_stage!(stage,axi,o,ix,np)
+function _fill_stage!(stage,axi,o,ix,np)
   for ip in 1:np
     _set_data!(stage,param_getindex(axi,ip),o,ix,ip)
   end
+end
+
+for f in (:_get_features,:_get_values)
+  @eval begin
+    function $f(a::RolloutData,x::AbstractVector{<:Point})
+      TwoStageBuckets(a,x)
+    end
+  end
+end
+
+function _offsets(a::TransientParamFESolution,x::Point)
+  trial = a.trial(a.odesol.r)
+  _offsets(zero(trial),x)
+end
+
+function _offsets(a::RolloutData,x::Point)
+  ranges = stage_ranges(a)
+  Δ = length(first(ranges))
+  o = _offsets(a.data,x)
+  ptrs_to_length!(o)
+  offsets = repeat(o,Δ)
+  length_to_ptrs!(offsets)
+  return offsets
+end
+
+function sample(s::Sampler,a::TwoStageBuckets)
+  TwoStageBuckets(
+    map(x -> sample(s,x),a.first_stage),
+    map(x -> sample(s,x),a.second_stage)
+  )
+end
+
+function fetch_data(d::DataFormatter,a::TwoStageBuckets)
+  TwoStageBuckets(
+    map(x -> fetch_data(d,x),a.first_stage),
+    map(x -> fetch_data(d,x),a.second_stage)
+  )
+end
+
+function _merge_data(a::TwoStageBuckets,b::TwoStageBuckets)
+  TwoStageBuckets(
+    map(_merge_data,a.first_stage,b.first_stage),
+    map(_merge_data,a.second_stage,b.second_stage)
+  )
 end
