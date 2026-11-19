@@ -114,31 +114,28 @@ num_samples(data::AbstractInputData) = size(data,3)
 struct TwoStageBuckets{A<:AbstractInputData}
   first_stage::A
   second_stage::A
-  function TwoStageBuckets(first_stage::A,second_stage::A) where A<:AbstractInputData
+  num_clusters::Int
+  function TwoStageBuckets(first_stage::A,second_stage::A,num_clusters=1) where A<:AbstractInputData
     msg = "First and second stage data must have the same dimensions"
     @check size(first_stage) == size(second_stage) msg
-    new{A}(first_stage,second_stage)
+    new{A}(first_stage,second_stage,num_clusters)
   end
 end
 
-function Base.copy(a::TwoStageBuckets)
-  TwoStageBuckets(copy(a.first_stage),copy(a.second_stage))
+function Base.copy(data::TwoStageBuckets)
+  TwoStageBuckets(
+    copy(data.first_stage),
+    copy(data.second_stage),
+    data.num_clusters
+  )
 end
 
 dimension(data::TwoStageBuckets) = dimension(data.first_stage)
 num_coords(data::TwoStageBuckets) = num_coords(data.first_stage)
 num_samples(data::TwoStageBuckets) = num_samples(data.first_stage)
+num_clusters(data::TwoStageBuckets) = data.num_clusters
 
-merge_data(a::TwoStageBuckets) = _merge_data(a.first_stage,a.second_stage)
-
-MLUtils.numobs(a::TwoStageBuckets) = num_samples(a)
-
-function MLUtils.getobs(a::TwoStageBuckets,args...)
-  (
-    MLUtils.getobs(a.first_stage,args...),
-    MLUtils.getobs(a.second_stage,args...)
-  )
-end
+merge_data(data::TwoStageBuckets) = _merge_data(data.first_stage,data.second_stage)
 
 # normalisation handling
 

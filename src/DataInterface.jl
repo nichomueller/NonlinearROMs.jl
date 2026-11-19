@@ -7,7 +7,11 @@ Sampler() = Sampler(:)
 sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
 function sample(s::Sampler,a::TwoStageBuckets)
-  TwoStageBuckets(sample(s,a.first_stage),sample(s,a.second_stage))
+  TwoStageBuckets(
+    sample(s,a.first_stage),
+    sample(s,a.second_stage),
+    a.num_clusters
+  )
 end
 
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
@@ -95,7 +99,9 @@ end
 # output
 function fetch_data(d::DataFormatter,values::TwoStageBuckets)
   TwoStageBuckets(
-    fetch_data(d,values.first_stage),fetch_data(d,values.second_stage)
+    fetch_data(d,values.first_stage),
+    fetch_data(d,values.second_stage),
+    values.num_clusters
   )
 end
 
@@ -321,7 +327,9 @@ _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
 
 function _merge_data(a::AbstractInputData,b::TwoStageBuckets)
   TwoStageBuckets(
-    _merge_data(a,b.first_stage),_merge_data(a,b.second_stage)
+    _merge_data(a,b.first_stage),
+    _merge_data(a,b.second_stage),
+    b.num_clusters
   )
 end
 
@@ -344,3 +352,15 @@ end
 
 _get_range(::Nothing,::Int) = Colon()
 _get_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)
+
+function _get_clusters(a::AbstractInputData,r::UnitRange{Int},nc::Int=1)
+  K = num_samples(a)
+  @check K % nc == 0 "Number of samples must be divisible by the number of clusters"
+  Δ = K ÷ nc
+  inds = (r.start-1)*Δ+1:r.stop*Δ
+  TwoStageBuckets(
+    view(a.first_stage,:,inds,:),
+    view(a.second_stage,:,inds,:),
+    length(r)
+  )
+end

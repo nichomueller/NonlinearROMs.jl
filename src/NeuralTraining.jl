@@ -119,9 +119,14 @@ function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
+resolve_data_loader(a) = MLUtils.DataLoader
+resolve_data_loader(a::TwoStageBuckets) = AutoregressiveDataLoader
+resolve_data_loader((input,output)) = resolve_data_loader(input)
+
 function get_data_loader(solver::NeuralSolver,data;kwargs...)
   batchsize = resolve_batch_size(solver,data)
-  MLUtils.DataLoader(data;batchsize,kwargs...)
+  dloader = resolve_data_loader(data)
+  dloader(data;batchsize,kwargs...)
 end
 
 function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
@@ -173,65 +178,60 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_b
   return NeuralOperator(train_state,stats)
 end
 
-# rollout training (temporal bundling + pushforward trick, Brandstetter et al.)
-#
-# sample (c,ip) of the buckets stores, for cluster c and parameter ip:
-#   input  = ([coords;F₁ᶜ],[coords;F₂ᶜ])   features at the stage-1/stage-2 times
-#   output = (s₁ᶜ,s₂ᶜ)                     states at the stage-1/stage-2 times
-# the network always sees [coords; features at the predicted times; previous state]:
-#   one-step:    N([coords;F₂ᶜ;s₁ᶜ]) ≈ s₂ᶜ
-#   pushforward: N([coords;F₁ᶜ;sg(ŝ₂ᶜ⁻¹)]) ≈ s₁ᶜ,  ŝ₂ᶜ⁻¹ = N([coords;F₂ᶜ⁻¹;s₁ᶜ⁻¹]),  c ≥ 2
-# samples are stored cluster by cluster (index (c-1)*np+ip), so the same parameter
-# in cluster c-1 sits np = K/num_clusters indices earlier
+# rollout 
 
-const RolloutBuckets = NamedTuple{(:input,:output),<:Tuple{TwoStageBuckets,TwoStageBuckets}}
-const RolloutLoader = MLUtils.DataLoader{<:Any,<:Any,<:Any,<:Any,<:RolloutBuckets}
-
-function rollout_data((input,output)::RolloutBuckets,num_clusters::Int)
-  K = num_samples(output)
-  @check K % num_clusters == 0 "Number of samples must be a multiple of the number of clusters"
-  np = K ÷ num_clusters
-  prev = vcat(1:np,1:K-np) # predecessor of each sample (dummy for the first cluster)
-  x = _merge_data(input.second_stage,output.first_stage)
-  w = ones(TData,1,1,K)
-  w[:,:,1:np] .= 0         # the first cluster has no predecessor
+function AutoregressiveDataLoader((input,output);kwargs...)
+  one_step_data,pushforward_data = rollout_data(input,output)
   (
-    x = x,                  # one-step input
-    y = output.second_stage,# one-step target
-    xp = x[:,:,prev],       # one-step input of the previous cluster
-    f = input.first_stage,  # fixed data at the pushforward target times
-    yp = output.first_stage,# pushforward target
-    w = w
+    one_step = MLUtils.DataLoader(one_step_data;kwargs...),
+    pushforward = MLUtils.DataLoader(pushforward_data;kwargs...)
   )
+end
+
+function rollout_data(input::TwoStageBuckets,output::TwoStageBuckets)
+  nc = input.num_clusters
+  @check output.num_clusters == nc "Input and output must have the same number of clusters"
+  one_step_data = (
+    input = _merge_data(input.second_stage,output.first_stage),
+    output = output.second_stage
+  )
+  
+  in_first_forward = _get_clusters(input.first_stage,2:nc,nc)
+  in_back = _get_clusters(one_step_data.input,1:(nc-1),nc)
+  out_first_back = _get_clusters(output.first_stage,1:(nc-1),nc)
+  pushforward_data = (
+    input = in_first_forward,
+    output = out_first_back,
+    metadata = in_back
+  )
+  return (one_step_data,pushforward_data)
 end
 
 function train_model!(
   train_state,
-  dataloader::RolloutLoader,
+  (one_step,pushforward)::NamedTuple,
   stats,
   lr_scheduler,
-  loss::Lux.AbstractLossFunction,
-  to_device_batch=nothing;
-  logger,num_clusters::Int,λ=TData(1),warmup_epochs=0
+  loss,
+  to_device_batch;
+  logger,λ=TData(1),warmup_epochs=0
   )
-
-  init!(logger)
-
-  # rebuild the loader on the paired data: all the arrays are batched with the
-  # same indices, so every batch mixes clusters and keeps (c-1,c) pairs aligned.
-  # partial=false: fixed batch shape, so each step is compiled once
-  data = rollout_data(dataloader.data,num_clusters)
-  loader = MLUtils.DataLoader(data;
-    batchsize=dataloader.batchsize,shuffle=dataloader.shuffle,rng=dataloader.rng,partial=false)
 
   # one-step term + pushforward term; ŷp is passed as data, so it is constant
   # for Enzyme (stop-gradient)
-  function rollout_loss(model,ps,st,(x,y,f,ŷp,yp,w))
-    l1,st,_ = loss(model,ps,st,(x,y))
-    ŷ,st = model(_merge_data(f,ŷp),ps,st)
-    l2 = loss(ŷ .* w,yp .* w)
-    return l1 + TData(λ)*l2,st,(;)
+  function rollout_loss(model,ps,st,(one_step,pushforward,pred))
+    updated_pushforward = (
+      input = _merge_data(pushforward.input,pred),
+      output = pushforward.output
+    )
+
+    l_one_step,st,_ = loss(model,ps,st,one_step)
+    ŷ,st = model(updated_pushforward,ps,st)
+    l_pushforward = loss(ŷ,pushforward.output)
+    return l_one_step + TData(λ)*l_pushforward,st,(;)
   end
+
+  init!(logger)
 
   predict = nothing
 
@@ -240,13 +240,15 @@ function train_model!(
       local current_loss = zero(TData)
 
       for raw_batch in loader
-        b = raw_batch |> XDEV
+        raw_one_step,raw_pushforward = raw_batch
+        one_step_batch = to_device_batch(raw_one_step)
+        pushforward_batch = to_device_batch(raw_pushforward)
 
         if epoch ≤ warmup_epochs
           _,loss_val,_,train_state = Lux.Training.single_train_step!(
             Lux.AutoEnzyme(),
             loss,
-            (b.x,b.y),
+            one_step_batch,
             train_state;
             return_gradients=Val(false)
           )
@@ -254,14 +256,14 @@ function train_model!(
           ps = train_state.parameters
           st = Lux.testmode(train_state.states)
           if isnothing(predict)
-            predict = Reactant.@compile train_state.model(b.xp,ps,st)
+            predict = Reactant.@compile train_state.model(pushforward_batch.metadata,ps,st)
           end
           # plain forward pass outside the differentiated call
-          ŷp, = predict(b.xp,ps,st)
+          ŷ, = predict(pushforward_batch.metadata,ps,st)
           _,loss_val,_,train_state = Lux.Training.single_train_step!(
             Lux.AutoEnzyme(),
             rollout_loss,
-            (b.x,b.y,b.f,ŷp,b.yp,b.w),
+            (one_step_batch,pushforward_batch,ŷ),
             train_state;
             return_gradients=Val(false)
           )

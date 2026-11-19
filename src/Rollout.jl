@@ -31,10 +31,6 @@ function RolloutData(data::TransientParamFESolution,step::Int=2)
   RolloutData(data,times,step)
 end
 
-function TwoStageBuckets(a::RolloutData,x::AbstractVector{<:Point})
-  TwoStageBuckets(split_stages(a,x)...)
-end
-
 num_clusters(a::RolloutData) = length(a.steps)-1
 
 cluster_size(a::RolloutData) = div(length(a.times),num_clusters(a))
@@ -151,7 +147,9 @@ end
 for f in (:_get_features,:_get_values)
   @eval begin
     function $f(a::RolloutData,x::AbstractVector{<:Point})
-      TwoStageBuckets(a,x)
+      s1,s2 = split_stages(a,x)
+      nc = num_clusters(a)
+      TwoStageBuckets(s1,s2,nc)
     end
   end
 end
