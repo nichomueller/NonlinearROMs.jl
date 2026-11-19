@@ -131,7 +131,7 @@ end
 get_edge_weights(meas::MultipleMeasure) = reduce(vcat,map(get_edge_weights,get_local_measures(meas)))
 
 function integration(a::AbstractInputData,meas::InducedMeasure)
-  msg = "Integrand must be of size (latent_dim, num_edges, num_params), where num_edges == $(num_edges(meas)); got size $(size(a))"
+  msg = "Integrand must be of size (latent_dim, num_edges, num_samples), where num_edges == $(num_edges(meas)); got size $(size(a))"
   @check size(a,2) == num_edges(meas) msg
   _integration(a,meas)
 end

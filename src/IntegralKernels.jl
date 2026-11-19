@@ -356,7 +356,7 @@ function attention_integral(scores,values,meas::MultipleMeasure)
 end
 
 # reconstructs the (dout x din) matrix flattened into k's first axis and applies
-# it to v, batched over the (N,K) = (num_points,num_params) trailing axes
+# it to v, batched over the (N,K) = (num_points,num_samples) trailing axes
 function _kv(k::AbstractInputData,v::AbstractInputData)
   din,N,nbatch = size(v)
   kdim = size(k,1)

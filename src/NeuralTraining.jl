@@ -178,6 +178,73 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_b
   return NeuralOperator(train_state,stats)
 end
 
+# rollout training
+
+function MLUtils.DataLoader(data::TwoStageBuckets;kwargs...)
+  (
+    first_stage = MLUtils.DataLoader(data.first_stage;kwargs...),
+    second_stage = MLUtils.DataLoader(data.second_stage;kwargs...)
+  )
+end
+
+function train_model!(
+  train_state,
+  (first_stage,second_stage)::NamedTuple,
+  stats,
+  lr_scheduler,
+  loss,
+  to_device_batch;
+  logger,λ=1.0,warmup_epochs=0
+  )
+
+  init!(logger)
+
+  nclusters = length(first_stage)
+  @check length(second_stage) == nclusters 
+  
+  Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
+    for epoch in 1:logger.max_epochs
+      local current_loss = zero(TData)
+      local prev_first_batch_dev
+
+      for k in 1:nclusters
+        first_loader = first_stage[k]
+        second_loader = second_stage[k]
+
+        for (first_raw,second_raw) in zip(first_loader,second_loader)
+          first_batch_dev = to_device_batch(first_raw)
+          second_batch_dev = to_device_batch(second_raw)
+          if k > 1 && epoch > warmup_epochs
+            ps = train_state.parameters
+            st = train_state.states
+            ŷ = train_state.model(prev_first_batch_dev,ps,st)
+            # current_loss += TData(loss_val)
+          end 
+          
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            loss,
+            first_batch_dev,
+            train_state;
+            return_gradients=Val(false)
+          )
+
+          current_loss += TData(loss_val)
+          prev_first_batch_dev = first_batch_dev
+        end
+      end
+      current_loss /= length(dataloader)
+
+      step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
+
+      update!(logger,epoch,current_loss)
+    end
+  end
+
+  finalise!(logger)
+  return NeuralOperator(train_state,stats)
+end
+
 # utils
 
 _shape_factor(::KernelStyle) = 1

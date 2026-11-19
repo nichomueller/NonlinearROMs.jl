@@ -35,7 +35,7 @@ struct InputSpace{A<:AbstractInputData,B} <: TrainingSpace
 end
 
 function InputSpace(x::AbstractVector{<:Point},a::FeatureBundle)
-  coords = points_to_coords(x,num_params(a))
+  coords = points_to_coords(x,num_samples(a))
   features = _get_features(a,x)
   InputSpace(coords,features)
 end

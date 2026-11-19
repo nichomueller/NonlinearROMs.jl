@@ -112,8 +112,8 @@ num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
 
 struct TwoStageBuckets{A<:AbstractInputData}
-  first_stage::Vector{A}
-  second_stage::Vector{A}
+  first_stage::A
+  second_stage::A
 end
 
 function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector},args...)
@@ -127,9 +127,37 @@ function Base.copy(a::TwoStageBuckets)
   TwoStageBuckets(copy(a.first_stage),copy(a.second_stage))
 end
 
-dimension(data::TwoStageBuckets) = dimension(first(data.first_stage))
-num_coords(data::TwoStageBuckets) = num_coords(first(data.first_stage))
-num_samples(data::TwoStageBuckets) = num_samples(first(data.first_stage))
+dimension(data::TwoStageBuckets) = dimension(data.first_stage)
+num_coords(data::TwoStageBuckets) = num_coords(data.first_stage)
+num_samples(data::TwoStageBuckets) = num_samples(data.first_stage)
+
+merge_data(a::TwoStageBuckets) = _merge_data(a.first_stage,a.second_stage)
+
+function stage_ranges(steps;stage=:first)
+  t = ()
+  for k in 1:length(steps)-1
+    ak = steps[k]
+    bk = steps[k+1]
+    mk = div(ak + bk,2)
+    if stage==:first
+      t = (t...,ak:mk-1)
+    elseif stage==:second
+      t = (t...,mk:bk-1)
+    else
+      @notimplemented "stage must be :first or :second"
+    end
+  end
+  return t
+end
+
+function split_stages(a,r1,r2,args...)
+  @check length(r1) == length(r2) "r1 and r2 must have the same length"
+  _split_stages(a,r1,r2,args...)
+end
+
+function _split_stages(a,r1,r2,args...)
+  @abstractmethod
+end
 
 # normalisation handling
 
@@ -145,13 +173,7 @@ Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
 Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
 
 function Score(style::ScoreStyle,data::TwoStageBuckets;kwargs...)
-  item = first(data.first_stage)
-  sample_size = size(item,2)*size(item,3)
-  c(args...) = combine_scores(args...;sample_size)
-  
-  scores1 = map(x -> Score(style,x;kwargs...),data.first_stage) |> c
-  scores2 = map(x -> Score(style,x;kwargs...),data.second_stage) |> c
-  return c(scores1,scores2)
+  merge_data(style,merge_data(data);kwargs...)
 end
 
 function Score(style::NamedTuple,data::NamedTuple;kwargs...)
@@ -319,13 +341,6 @@ function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
   end
-end
-
-function Score(style::ZScoreStyle,data::TwoStageBuckets;kwargs...)
-  mdata1 = cat(data.first_stage...,dims=3)
-  mdata2 = cat(data.second_stage...,dims=3)
-  mdata = cat(mdata1,mdata2,dims=3)
-  return Score(style,mdata;kwargs...)
 end
 
 struct NamedScores{A} <: AbstractScore

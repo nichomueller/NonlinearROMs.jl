@@ -7,17 +7,14 @@ Sampler() = Sampler(:)
 sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
 function sample(s::Sampler,a::TwoStageBuckets)
-  TwoStageBuckets(
-    map(x -> sample(s,x),a.first_stage),
-    map(x -> sample(s,x),a.second_stage)
-  )
+  TwoStageBuckets(sample(s,a.first_stage),sample(s,a.second_stage))
 end
 
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
 end
 
-function ParamDataStructures.num_params(a::FeatureBundle)
+function num_samples(a::FeatureBundle)
   dict = OrderedDict{UInt,AbstractRealisation}()
   for f in a.bundle
     μ = get_params(f)
@@ -30,8 +27,7 @@ function ParamDataStructures.num_params(a::FeatureBundle)
   return np
 end
 
-ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
-ParamDataStructures.num_params(a::TransientParamFESolution) = num_params(a.odesol.r)
+num_samples(a::ParamFEFunction) = param_length(a)
 
 struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_coords::Val{A}
@@ -99,8 +95,7 @@ end
 # output
 function fetch_data(d::DataFormatter,values::TwoStageBuckets)
   TwoStageBuckets(
-    map(x -> fetch_data(d,x),values.first_stage),
-    map(x -> fetch_data(d,x),values.second_stage)
+    fetch_data(d,values.first_stage),fetch_data(d,values.second_stage)
   )
 end
 
@@ -276,7 +271,7 @@ function _init_data(a,x)
   offsets = _offsets(a,testitem(x))
   D = offsets[end]-1
   N = length(x)
-  K = num_params(a)
+  K = num_samples(a)
   data = zeros(TData,D,N,K)
   return data,offsets
 end
@@ -326,8 +321,7 @@ _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
 
 function _merge_data(a::AbstractInputData,b::TwoStageBuckets)
   TwoStageBuckets(
-    map(x -> _merge_data(a,x),b.first_stage),
-    map(x -> _merge_data(a,x),b.second_stage)
+    _merge_data(a,b.first_stage),_merge_data(a,b.second_stage)
   )
 end
 
