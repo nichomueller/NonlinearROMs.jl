@@ -102,7 +102,7 @@ function ptrs_to_length!(ptrs::AbstractArray{<:Integer})
   ptrs[1] = 0
 end
 
-# input data type 
+# input data types
 
 const TData = Float32
 const AbstractInputData{T} = AbstractArray{T,3}
@@ -110,6 +110,26 @@ const AbstractInputData{T} = AbstractArray{T,3}
 dimension(data::AbstractInputData) = size(data,1)
 num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
+
+struct TwoStageBuckets{A<:AbstractInputData}
+  first_stage::Vector{A}
+  second_stage::Vector{A}
+end
+
+function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector},args...)
+  r1 = stage_ranges(steps;stage=:first)
+  r2 = stage_ranges(steps;stage=:second)
+  s1,s2 = split_stages(data,r1,r2,args...)
+  TwoStageBuckets(s1,s2)
+end
+
+function Base.copy(a::TwoStageBuckets)
+  TwoStageBuckets(copy(a.first_stage),copy(a.second_stage))
+end
+
+dimension(data::TwoStageBuckets) = dimension(first(data.first_stage))
+num_coords(data::TwoStageBuckets) = num_coords(first(data.first_stage))
+num_samples(data::TwoStageBuckets) = num_samples(first(data.first_stage))
 
 # normalisation handling
 
@@ -124,6 +144,16 @@ Score(::MScoreStyle,data;kwargs...) = MScore(data;kwargs...)
 Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
 Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
 
+function Score(style::ScoreStyle,data::TwoStageBuckets;kwargs...)
+  item = first(data.first_stage)
+  sample_size = size(item,2)*size(item,3)
+  c(args...) = combine_scores(args...;sample_size)
+  
+  scores1 = map(x -> Score(style,x;kwargs...),data.first_stage) |> c
+  scores2 = map(x -> Score(style,x;kwargs...),data.second_stage) |> c
+  return c(scores1,scores2)
+end
+
 function Score(style::NamedTuple,data::NamedTuple;kwargs...)
   scores = NamedTuple()
   for (k,v) in pairs(data)
@@ -136,6 +166,55 @@ abstract type AbstractScore end
 
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
+combine_scores(scores::AbstractScore...;kwargs...) = @abstractmethod
+combine_scores(scores::Union{Tuple,AbstractVector};kwargs...) = combine_scores(scores...;kwargs...)
+
+struct MScore{A} <: AbstractScore
+  scale::A
+end
+
+const NoMScore = MScore{Nothing}
+
+MScore(::Nothing;kwargs...) = MScore(nothing)
+
+function MScore(data::AbstractInputData;normalise=true)
+  if normalise
+    stats = MScore(data;normalise=false)
+    normalise!(data,stats)
+    return stats
+  end
+  s = maximum(abs,data)
+  iszero(s) && (s = one(s))
+  return MScore(s)
+end
+
+function normalise!(data::AbstractInputData,score::NoMScore)
+  data
+end
+
+function normalise!(data::AbstractInputData,score::MScore)
+  data ./= score.scale
+end
+
+function denormalise!(data::AbstractInputData,score::NoMScore)
+  data
+end
+
+function denormalise!(data::AbstractInputData,score::MScore)
+  data .*= score.scale
+end
+
+function combine_scores(score::NoMScore...;kwargs...)
+  first(score)
+end
+
+function combine_scores(score::MScore...;kwargs...)
+  m = zero(TData)
+  for s in score
+    m = max(abs(m),s.scale)
+  end
+  return MScore(m)
+end
 
 struct RScore{A} <: AbstractScore
   lower::A
@@ -177,6 +256,23 @@ function denormalise!(data::AbstractInputData,score::RScore)
   end
 end
 
+function combine_scores(score::NoRScore...;kwargs...)
+  first(score)
+end
+
+function combine_scores(score::RScore...;kwargs...)
+  D = length(first(score).lower)
+  l = fill(typemax(TData),D)
+  u = fill(typemin(TData),D)
+  @inbounds for s in score
+    for d in 1:D
+      l[d] = min(l[d],s.lower[d])
+      u[d] = max(u[d],s.upper[d])
+    end
+  end
+  return RScore(l,u)
+end
+
 struct ZScore{A} <: AbstractScore
   μ::A
   σ::A
@@ -205,41 +301,6 @@ function ZScore(data::AbstractInputData;normalise=true)
   return ZScore(μ,σ)
 end
 
-struct MScore{A} <: AbstractScore
-  scale::A
-end
-
-const NoMScore = MScore{Nothing}
-
-MScore(::Nothing;kwargs...) = MScore(nothing)
-
-function MScore(data::AbstractInputData;normalise=true)
-  if normalise
-    stats = MScore(data;normalise=false)
-    normalise!(data,stats)
-    return stats
-  end
-  s = maximum(abs,data)
-  iszero(s) && (s = one(s))
-  return MScore(s)
-end
-
-function normalise!(data::AbstractInputData,score::NoMScore)
-  data
-end
-
-function normalise!(data::AbstractInputData,score::MScore)
-  data ./= score.scale
-end
-
-function denormalise!(data::AbstractInputData,score::NoMScore)
-  data
-end
-
-function denormalise!(data::AbstractInputData,score::MScore)
-  data .*= score.scale
-end
-
 function normalise!(data::AbstractInputData,score::NoZScore)
   data
 end
@@ -258,6 +319,13 @@ function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
   end
+end
+
+function Score(style::ZScoreStyle,data::TwoStageBuckets;kwargs...)
+  mdata1 = cat(data.first_stage...,dims=3)
+  mdata2 = cat(data.second_stage...,dims=3)
+  mdata = cat(mdata1,mdata2,dims=3)
+  return Score(style,mdata;kwargs...)
 end
 
 struct NamedScores{A} <: AbstractScore

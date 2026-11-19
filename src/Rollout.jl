@@ -1,17 +1,3 @@
-struct TwoStageBuckets{A<:AbstractInputData}
-  first_stage::Vector{A}
-  second_stage::Vector{A}
-end
-
-function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector})
-  r1 = stage_ranges(steps;stage=:first)
-  r2 = stage_ranges(steps;stage=:second)
-  s1,s2 = split_stages(data,r1,r2)
-  TwoStageBuckets(s1,s2)
-end
-
-Base.copy(a::TwoStageBuckets) = TwoStageBuckets(copy(a.first_stage),copy(a.second_stage))
-
 """
     struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
       data::A
@@ -47,14 +33,16 @@ end
 
 ParamDataStructures.num_params(a::RolloutData) = num_params(a.data)
 
+function TwoStageBuckets(a::RolloutData,x::AbstractVector{<:Point})
+  TwoStageBuckets(a,a.steps,x)
+end
+
 function stage_ranges(a::RolloutData;kwargs...)
   stage_ranges(a.steps;kwargs...)
 end
 
-num_clusters(a::RolloutData) = length(a.steps)-1
-
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
-  coords = points_to_coords(x,num_params(a)*num_clusters(a))
+  coords = points_to_coords(x,num_params(a))
   features = _get_features(a,x)
   InputSpace(coords,features)
 end
@@ -97,17 +85,6 @@ function stage_ranges(steps;stage=:first)
     end
   end
   return t
-end
-
-function TwoStageBuckets(a::RolloutData,x::AbstractVector{<:Point})
-  TwoStageBuckets(a,a.steps,x)
-end
-
-function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector},x::AbstractVector{<:Point})
-  r1 = stage_ranges(steps;stage=:first)
-  r2 = stage_ranges(steps;stage=:second)
-  s1,s2 = split_stages(data,r1,r2,x)
-  TwoStageBuckets(s1,s2)
 end
 
 function split_stages(a,r1,r2)
@@ -234,25 +211,4 @@ function _offsets(a::RolloutData,x::Point)
   offsets = repeat(o,Δ)
   length_to_ptrs!(offsets)
   return offsets
-end
-
-function sample(s::Sampler,a::TwoStageBuckets)
-  TwoStageBuckets(
-    map(x -> sample(s,x),a.first_stage),
-    map(x -> sample(s,x),a.second_stage)
-  )
-end
-
-function fetch_data(d::DataFormatter,a::TwoStageBuckets)
-  TwoStageBuckets(
-    map(x -> fetch_data(d,x),a.first_stage),
-    map(x -> fetch_data(d,x),a.second_stage)
-  )
-end
-
-function _merge_data(a::TwoStageBuckets,b::TwoStageBuckets)
-  TwoStageBuckets(
-    map(_merge_data,a.first_stage,b.first_stage),
-    map(_merge_data,a.second_stage,b.second_stage)
-  )
 end

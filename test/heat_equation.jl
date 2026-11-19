@@ -80,6 +80,39 @@ pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
+ispace = input_space(μ_train)
+# neural_operator(solver,ispace,output_space)
 data,stats = NonlinearROMs.fetch_data_and_stats(
-  solver,input_space(μ_train),output_space
+  solver,ispace,output_space
 )
+
+function rollout_train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
+  init!(logger)
+
+  Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
+    for epoch in 1:logger.max_epochs
+      local current_loss = zero(TData)
+
+      for raw_batch in dataloader
+        batch_dev = to_device_batch(raw_batch)
+
+        _,loss_val,_,train_state = Lux.Training.single_train_step!(
+          Lux.AutoEnzyme(),
+          loss,
+          batch_dev,
+          train_state;
+          return_gradients=Val(false)
+        )
+        current_loss += TData(loss_val)
+      end
+      current_loss /= length(dataloader)
+
+      step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
+
+      update!(logger,epoch,current_loss)
+    end
+  end
+
+  finalise!(logger)
+  return NeuralOperator(train_state,stats)
+end

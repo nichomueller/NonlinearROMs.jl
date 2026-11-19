@@ -6,6 +6,13 @@ Sampler() = Sampler(:)
 
 sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
+function sample(s::Sampler,a::TwoStageBuckets)
+  TwoStageBuckets(
+    map(x -> sample(s,x),a.first_stage),
+    map(x -> sample(s,x),a.second_stage)
+  )
+end
+
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
 end
@@ -87,6 +94,14 @@ end
 # output 
 function fetch_data(d::DataFormatter,values::AbstractInputData)
   sample(d.sampler,values)
+end
+
+# output
+function fetch_data(d::DataFormatter,values::TwoStageBuckets)
+  TwoStageBuckets(
+    map(x -> fetch_data(d,x),values.first_stage),
+    map(x -> fetch_data(d,x),values.second_stage)
+  )
 end
 
 function fetch_stats(d::DataFormatter,data)
@@ -308,6 +323,13 @@ _merge_data(a::Nothing,b::Nothing) = nothing
 _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
+
+function _merge_data(a::AbstractInputData,b::TwoStageBuckets)
+  TwoStageBuckets(
+    map(x -> _merge_data(a,x),b.first_stage),
+    map(x -> _merge_data(a,x),b.second_stage)
+  )
+end
 
 function _trivial_table(a::Tuple{Vararg{AbstractInputData{T}}}) where T
   ptrs = zeros(Int,length(a)+1)

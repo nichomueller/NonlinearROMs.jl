@@ -66,8 +66,8 @@ function build_model(
   fixed_formatter::DataFormatter=DataFormatter(model)
   )
 
-  in_dims = size(inputs,1)
-  out_dims = size(outputs,1)
+  in_dims = dimension(inputs)
+  out_dims = dimension(outputs)
   widths = (in_dims,model.hidden_layers...,out_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
   klayers = ntuple(
