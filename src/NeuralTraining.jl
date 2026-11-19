@@ -57,16 +57,11 @@ function build_kernel_network(in_dims,out_dims,layers::Tuple,activation)
 end
 
 function build_model(s::NeuralSolver{<:KernelNeuralModel},data)
-  build_model(s.model,data,get_formatter(s))
+  build_model(s.model,data)
 end
 
-function build_model(
-  model::KernelNeuralModel,
-  (inputs,outputs),
-  fixed_formatter::DataFormatter=DataFormatter(model)
-  )
-
-  in_dims = dimension(inputs)
+function build_model(model::KernelNeuralModel,(inputs,outputs))
+  in_dims = _in_dims(inputs,outputs)
   out_dims = dimension(outputs)
   widths = (in_dims,model.hidden_layers...,out_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
@@ -178,62 +173,103 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_b
   return NeuralOperator(train_state,stats)
 end
 
-# rollout training
+# rollout training (temporal bundling + pushforward trick, Brandstetter et al.)
+#
+# sample (c,ip) of the buckets stores, for cluster c and parameter ip:
+#   input  = ([coords;F₁ᶜ],[coords;F₂ᶜ])   features at the stage-1/stage-2 times
+#   output = (s₁ᶜ,s₂ᶜ)                     states at the stage-1/stage-2 times
+# the network always sees [coords; features at the predicted times; previous state]:
+#   one-step:    N([coords;F₂ᶜ;s₁ᶜ]) ≈ s₂ᶜ
+#   pushforward: N([coords;F₁ᶜ;sg(ŝ₂ᶜ⁻¹)]) ≈ s₁ᶜ,  ŝ₂ᶜ⁻¹ = N([coords;F₂ᶜ⁻¹;s₁ᶜ⁻¹]),  c ≥ 2
+# samples are stored cluster by cluster (index (c-1)*np+ip), so the same parameter
+# in cluster c-1 sits np = K/num_clusters indices earlier
 
-function MLUtils.DataLoader(data::TwoStageBuckets;kwargs...)
+const RolloutBuckets = NamedTuple{(:input,:output),<:Tuple{TwoStageBuckets,TwoStageBuckets}}
+const RolloutLoader = MLUtils.DataLoader{<:Any,<:Any,<:Any,<:Any,<:RolloutBuckets}
+
+function rollout_data((input,output)::RolloutBuckets,num_clusters::Int)
+  K = num_samples(output)
+  @check K % num_clusters == 0 "Number of samples must be a multiple of the number of clusters"
+  np = K ÷ num_clusters
+  prev = vcat(1:np,1:K-np) # predecessor of each sample (dummy for the first cluster)
+  x = _merge_data(input.second_stage,output.first_stage)
+  w = ones(TData,1,1,K)
+  w[:,:,1:np] .= 0         # the first cluster has no predecessor
   (
-    first_stage = MLUtils.DataLoader(data.first_stage;kwargs...),
-    second_stage = MLUtils.DataLoader(data.second_stage;kwargs...)
+    x = x,                  # one-step input
+    y = output.second_stage,# one-step target
+    xp = x[:,:,prev],       # one-step input of the previous cluster
+    f = input.first_stage,  # fixed data at the pushforward target times
+    yp = output.first_stage,# pushforward target
+    w = w
   )
 end
 
 function train_model!(
   train_state,
-  (first_stage,second_stage)::NamedTuple,
+  dataloader::RolloutLoader,
   stats,
   lr_scheduler,
-  loss,
-  to_device_batch;
-  logger,λ=1.0,warmup_epochs=0
+  loss::Lux.AbstractLossFunction,
+  to_device_batch=nothing;
+  logger,num_clusters::Int,λ=TData(1),warmup_epochs=0
   )
 
   init!(logger)
 
-  nclusters = length(first_stage)
-  @check length(second_stage) == nclusters 
-  
+  # rebuild the loader on the paired data: all the arrays are batched with the
+  # same indices, so every batch mixes clusters and keeps (c-1,c) pairs aligned.
+  # partial=false: fixed batch shape, so each step is compiled once
+  data = rollout_data(dataloader.data,num_clusters)
+  loader = MLUtils.DataLoader(data;
+    batchsize=dataloader.batchsize,shuffle=dataloader.shuffle,rng=dataloader.rng,partial=false)
+
+  # one-step term + pushforward term; ŷp is passed as data, so it is constant
+  # for Enzyme (stop-gradient)
+  function rollout_loss(model,ps,st,(x,y,f,ŷp,yp,w))
+    l1,st,_ = loss(model,ps,st,(x,y))
+    ŷ,st = model(_merge_data(f,ŷp),ps,st)
+    l2 = loss(ŷ .* w,yp .* w)
+    return l1 + TData(λ)*l2,st,(;)
+  end
+
+  predict = nothing
+
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
     for epoch in 1:logger.max_epochs
       local current_loss = zero(TData)
-      local prev_first_batch_dev
 
-      for k in 1:nclusters
-        first_loader = first_stage[k]
-        second_loader = second_stage[k]
+      for raw_batch in loader
+        b = raw_batch |> XDEV
 
-        for (first_raw,second_raw) in zip(first_loader,second_loader)
-          first_batch_dev = to_device_batch(first_raw)
-          second_batch_dev = to_device_batch(second_raw)
-          if k > 1 && epoch > warmup_epochs
-            ps = train_state.parameters
-            st = train_state.states
-            ŷ = train_state.model(prev_first_batch_dev,ps,st)
-            # current_loss += TData(loss_val)
-          end 
-          
+        if epoch ≤ warmup_epochs
           _,loss_val,_,train_state = Lux.Training.single_train_step!(
             Lux.AutoEnzyme(),
             loss,
-            first_batch_dev,
+            (b.x,b.y),
             train_state;
             return_gradients=Val(false)
           )
-
-          current_loss += TData(loss_val)
-          prev_first_batch_dev = first_batch_dev
+        else
+          ps = train_state.parameters
+          st = Lux.testmode(train_state.states)
+          if isnothing(predict)
+            predict = Reactant.@compile train_state.model(b.xp,ps,st)
+          end
+          # plain forward pass outside the differentiated call
+          ŷp, = predict(b.xp,ps,st)
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            rollout_loss,
+            (b.x,b.y,b.f,ŷp,b.yp,b.w),
+            train_state;
+            return_gradients=Val(false)
+          )
         end
+
+        current_loss += TData(loss_val)
       end
-      current_loss /= length(dataloader)
+      current_loss /= length(loader)
 
       step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
 
@@ -246,6 +282,10 @@ function train_model!(
 end
 
 # utils
+
+_in_dims(inputs,outputs) = dimension(inputs)
+# rollout: the previous state is appended to the fixed data
+_in_dims(inputs::TwoStageBuckets,outputs::TwoStageBuckets) = dimension(inputs) + dimension(outputs)
 
 _shape_factor(::KernelStyle) = 1
 _edge_dims(::KernelStyle) = 0

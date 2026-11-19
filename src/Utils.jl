@@ -114,13 +114,11 @@ num_samples(data::AbstractInputData) = size(data,3)
 struct TwoStageBuckets{A<:AbstractInputData}
   first_stage::A
   second_stage::A
-end
-
-function TwoStageBuckets(data,steps::Union{Tuple,AbstractVector},args...)
-  r1 = stage_ranges(steps;stage=:first)
-  r2 = stage_ranges(steps;stage=:second)
-  s1,s2 = split_stages(data,r1,r2,args...)
-  TwoStageBuckets(s1,s2)
+  function TwoStageBuckets(first_stage::A,second_stage::A) where A<:AbstractInputData
+    msg = "First and second stage data must have the same dimensions"
+    @check size(first_stage) == size(second_stage) msg
+    new{A}(first_stage,second_stage)
+  end
 end
 
 function Base.copy(a::TwoStageBuckets)
@@ -133,30 +131,13 @@ num_samples(data::TwoStageBuckets) = num_samples(data.first_stage)
 
 merge_data(a::TwoStageBuckets) = _merge_data(a.first_stage,a.second_stage)
 
-function stage_ranges(steps;stage=:first)
-  t = ()
-  for k in 1:length(steps)-1
-    ak = steps[k]
-    bk = steps[k+1]
-    mk = div(ak + bk,2)
-    if stage==:first
-      t = (t...,ak:mk-1)
-    elseif stage==:second
-      t = (t...,mk:bk-1)
-    else
-      @notimplemented "stage must be :first or :second"
-    end
-  end
-  return t
-end
+MLUtils.numobs(a::TwoStageBuckets) = num_samples(a)
 
-function split_stages(a,r1,r2,args...)
-  @check length(r1) == length(r2) "r1 and r2 must have the same length"
-  _split_stages(a,r1,r2,args...)
-end
-
-function _split_stages(a,r1,r2,args...)
-  @abstractmethod
+function MLUtils.getobs(a::TwoStageBuckets,args...)
+  (
+    MLUtils.getobs(a.first_stage,args...),
+    MLUtils.getobs(a.second_stage,args...)
+  )
 end
 
 # normalisation handling
@@ -172,8 +153,12 @@ Score(::MScoreStyle,data;kwargs...) = MScore(data;kwargs...)
 Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
 Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
 
-function Score(style::ScoreStyle,data::TwoStageBuckets;kwargs...)
-  merge_data(style,merge_data(data);kwargs...)
+for T in (:MScoreStyle,:RScoreStyle,:ZScoreStyle)
+  @eval begin
+    function Score(style::$T,data::TwoStageBuckets;kwargs...)
+      Score(style,merge_data(data);kwargs...)
+    end
+  end
 end
 
 function Score(style::NamedTuple,data::NamedTuple;kwargs...)

@@ -163,3 +163,8 @@ function train_model!(
   finalise!(logger)
   return NeuralOperator(train_state,stats)
 end
+
+using MLUtils
+A = (rand(2,2,2),rand(2,2,2))
+@which MLUtils.numobs(A)
+@which MLUtils.getobs(A)

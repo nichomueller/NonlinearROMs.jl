@@ -32,18 +32,19 @@ function RolloutData(data::TransientParamFESolution,step::Int=2)
 end
 
 function TwoStageBuckets(a::RolloutData,x::AbstractVector{<:Point})
-  TwoStageBuckets(a,a.steps,x)
-end
-
-function stage_ranges(a::RolloutData;kwargs...)
-  stage_ranges(a.steps;kwargs...)
+  TwoStageBuckets(split_stages(a,x)...)
 end
 
 num_clusters(a::RolloutData) = length(a.steps)-1
 
 cluster_size(a::RolloutData) = div(length(a.times),num_clusters(a))
 
-num_samples(a::RolloutData) = num_samples(a.data)*cluster_size(a)
+stage_size(a::RolloutData) = div(cluster_size(a),2)
+
+# index in a.times of the s-th slot of the k-th stage (k = 1,2) of cluster c
+stage_time(a::RolloutData,c::Int,k::Int,s::Int) = a.steps[c] + (k-1)*stage_size(a) + s - 1
+
+num_samples(a::RolloutData) = num_samples(a.data)*num_clusters(a)
 
 function InputSpace(x::AbstractVector{<:Point},a::RolloutData)
   coords = points_to_coords(x,num_samples(a))
@@ -74,61 +75,58 @@ function OutputSpace(sol::TransientParamFESolution,args...)
   OutputSpace(data)
 end
 
-function _split_stages(a::RolloutData{<:FeatureBundle},r1,r2,x::AbstractVector{<:Point})
-  np = num_params(a.data)
+function split_stages(a::RolloutData{<:FeatureBundle},x::AbstractVector{<:Point})
+  np = num_samples(a.data)
   nd = length(a.data.bundle)
   features,offsets = _init_data(a,x)
   coffsets = _sample_offsets(a)
 
   stage1 = features
   stage2 = similar(features)
-  
+
   @inbounds for (j,aj) in enumerate(a.data.bundle)
     ax = lazy_map(aj,x)
     cache = array_cache(ax)
     for i in eachindex(ax)
       axi = getindex!(cache,ax,i)
       for c in 1:num_clusters(a)
-        _r3 = coffsets[c]:coffsets[c+1]-1
-        for s in 1:cluster_size(a)
-          _r1 = offsets[(s-1)*(nd+1)+j]:offsets[(s-1)*(nd+1)+j+1]-1
-          _fill_stage!(stage1,axi,o,t1,i,np)
-          _fill_stage!(stage2,axi,o,t2,i,np)
+        r3 = coffsets[c]:coffsets[c+1]-1
+        for (k,stage) in enumerate((stage1,stage2)), s in 1:stage_size(a)
+          t = stage_time(a,c,k,s)
+          o = offsets[(s-1)*(nd+1)+j]
+          _fill_stage!(stage,axi,o,i,r3,t,np)
         end
       end
-      # for k in eachindex(r1)
-      #   for (ik,(t1,t2)) in enumerate(zip(r1[k],r2[k]))
-      #     o = offsets[(ik-1)*(nd+1)+j]
-      #     _fill_stage!(stage1,axi,o,t1,i,np)
-      #     _fill_stage!(stage2,axi,o,t2,i,np)
-      #   end
-      # end
     end
   end
 
   stage1,stage2
 end
 
-function _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::AbstractVector{<:Point})
-  np = num_params(a.data)
+function split_stages(a::RolloutData{<:TransientParamFESolution},x::AbstractVector{<:Point})
   nd = 1
   values,offsets = _init_data(a,x)
+  coffsets = _sample_offsets(a)
 
   stage1 = values
   stage2 = similar(values)
 
-  ah,state = iterate(a.data)
-  for k in eachindex(r1)
-    for (stage,rk) in ((stage1,r1[k]),(stage2,r2[k]))
-      for ik in eachindex(rk)
-        o = offsets[(ik-1)*(nd+1)+j]
+  # the solution is only iterable: clusters, stages and slots are visited in
+  # time order, i.e. stage_time(a,c,k,s) increases by one at every iteration
+  it = iterate(a.data)
+  @inbounds for c in 1:num_clusters(a)
+    r3 = coffsets[c]:coffsets[c+1]-1
+    for stage in (stage1,stage2)
+      for s in 1:stage_size(a)
+        ah,state = it
+        o = offsets[(s-1)*(nd+1)+1]
         ax = lazy_map(ah,x)
         cache = array_cache(ax)
         for i in eachindex(ax)
           axi = getindex!(cache,ax,i)
-          _fill_stage!(stage,axi,o,i,np)
+          _fill_stage!(stage,axi,o,i,r3)
         end
-        ah,state = iterate(a.data,state)
+        it = iterate(a.data,state)
       end
     end
   end
@@ -136,16 +134,17 @@ function _split_stages(a::RolloutData{<:TransientParamFESolution},r1,r2,x::Abstr
   stage1,stage2
 end
 
-function _fill_stage!(stage,axi,o,t::Integer,i,np)
-  for ip in 1:np
-    ipt = (t-1)*np+ip
-    _set_data!(stage,param_getindex(axi,ipt),o,i,ip)
+# axi stores (param,time) pairs with the param index running fastest
+function _fill_stage!(stage,axi,o,i,r3,it,np)
+  for (ip,k) in enumerate(r3)
+    ipt = (it-1)*np+ip
+    _set_data!(stage,param_getindex(axi,ipt),o,i,k)
   end
 end
 
-function _fill_stage!(stage,axi,o,i,np)
-  for ip in 1:np
-    _set_data!(stage,param_getindex(axi,ip),o,i,ip)
+function _fill_stage!(stage,axi,o,i,r3)
+  for (ip,k) in enumerate(r3)
+    _set_data!(stage,param_getindex(axi,ip),o,i,k)
   end
 end
 
@@ -157,13 +156,15 @@ for f in (:_get_features,:_get_values)
   end
 end
 
+num_samples(a::TransientParamFESolution) = num_params(a.odesol.r)
+
 function _offsets(a::TransientParamFESolution,x::Point)
   trial = a.trial(a.odesol.r)
   _offsets(zero(trial),x)
 end
 
 function _offsets(a::RolloutData,x::Point)
-  Δ = cluster_size(a)
+  Δ = stage_size(a)
   o = _offsets(a.data,x)
   ptrs_to_length!(o)
   offsets = repeat(o,Δ)

@@ -71,13 +71,11 @@ struct NeuralSolver{A<:NeuralModel} <: ROMSolver
   trainlog::TrainingLog
 end
 
-default_solver_formatter(model::NeuralModel) = DataFormatter()
-
 function NeuralSolver(
   model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
-  formatter=default_solver_formatter(model),
+  formatter=DataFormatter(model),
   lr_scheduler=CosineAnnealing(epochs),
   loss=Lux.MSELoss(),
   name=string(nameof(typeof(model))),
