@@ -147,12 +147,17 @@ function RScore(data::AbstractInputData;normalise=true)
   end
   l = dropdims(minimum(data,dims=(2,3)),dims=(2,3))
   u = dropdims(maximum(data,dims=(2,3)),dims=(2,3))
+  # Avoid dividing by zero on constant channels
+  @inbounds for i in eachindex(l)
+    if (u[i] - l[i]) < TData(1e-6)
+      l[i] = zero(eltype(l))
+      u[i] = one(eltype(u))
+    end
+  end
   return RScore(l,u)
 end
 
-function normalise!(data::AbstractInputData,score::NoRScore)
-  data
-end
+normalise!(data,score::NoRScore) = data
 
 function normalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
@@ -160,9 +165,7 @@ function normalise!(data::AbstractInputData,score::RScore)
   end
 end
 
-function denormalise!(data::AbstractInputData,score::NoRScore)
-  data
-end
+denormalise!(data,score::NoRScore) = data
 
 function denormalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
@@ -185,12 +188,11 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=(2,3)),dims=(2,3))
-  σ = dropdims(std(data,dims=(2,3)),dims=(2,3))
-  # A constant channel has zero variance: leave it unnormalised (identity
-  # transform) instead of dividing by a near-zero σ, which would collapse it to 0
+  data64 = Float64.(data)
+  μ = TData.(dropdims(mean(data64,dims=(2,3)),dims=(2,3)))
+  σ = TData.(dropdims(std(data64,dims=(2,3)),dims=(2,3)))
   @inbounds for i in eachindex(σ)
-    if iszero(σ[i])
+    if σ[i] < TData(1e-6)
       μ[i] = zero(eltype(μ))
       σ[i] = one(eltype(σ))
     end
@@ -213,29 +215,23 @@ function MScore(data::AbstractInputData;normalise=true)
     return stats
   end
   s = maximum(abs,data)
-  iszero(s) && (s = one(s))
+  s < TData(1e-6) && (s = one(s))
   return MScore(s)
 end
 
-function normalise!(data::AbstractInputData,score::NoMScore)
-  data
-end
+normalise!(data,score::NoMScore) = data
 
 function normalise!(data::AbstractInputData,score::MScore)
   data ./= score.scale
 end
 
-function denormalise!(data::AbstractInputData,score::NoMScore)
-  data
-end
+denormalise!(data,score::NoMScore) = data
 
 function denormalise!(data::AbstractInputData,score::MScore)
   data .*= score.scale
 end
 
-function normalise!(data::AbstractInputData,score::NoZScore)
-  data
-end
+normalise!(data,score::NoZScore) = data
 
 function normalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
@@ -243,9 +239,7 @@ function normalise!(data::AbstractInputData,stats::ZScore)
   end
 end
 
-function denormalise!(data::AbstractInputData,score::NoZScore)
-  data
-end
+denormalise!(data,score::NoZScore) = data
 
 function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))

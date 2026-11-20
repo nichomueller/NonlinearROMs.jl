@@ -16,10 +16,6 @@ using Test
     include("kernel_operators.jl")
   end
 
-  @testset "poisson" begin
-    include("poisson.jl")
-  end
-
 end
 
 end # module

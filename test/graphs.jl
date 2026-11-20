@@ -6,7 +6,7 @@ using Gridap.FESpaces
 using GridapROMs
 using NonlinearROMs
 
-using NonlinearROMs: WeightedSimpleDiGraph,get_weight,out_weights,in_weights
+using NonlinearROMs: WeightedSimpleDiGraph,get_weight,out_weights,in_weights,TData,num_coords
 
 @testset "WeightedSimpleDiGraph" begin
   g = WeightedSimpleDiGraph(4)
@@ -173,5 +173,34 @@ end
         @test sum(α[in_mask]) ≈ 1.0f0 atol=1e-5
       end
     end
+  end
+  
+  @testset "MPRules (DifferenceMP, CompositeMP, PlainMP)" begin
+    model = CartesianDiscreteModel((0,1,0,1),(5,5))
+    reffe = ReferenceFE(lagrangian,Float64,1)
+    V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
+    gspace = GraphInducedSpace(V;radius=0.35)
+    g = get_graph(gspace)
+    src_ids = NonlinearROMs.get_src_ids(gspace)
+    dst_ids = NonlinearROMs.get_dst_ids(gspace)
+    w = NonlinearROMs.get_edge_weights(gspace)
+  
+    D,N,K = 3,num_coords(gspace),2
+    vals = rand(TData,D,N,K)
+  
+    # DifferenceMP: src - dst (D channels)
+    g_diff = gather_data(vals,InducedMeasure(gspace;message_rule=DifferenceMP()))
+    @test size(g_diff) == (D,ne(g),K)
+    @test g_diff[:,1,:] ≈ vals[:,src_ids[1],:] .- vals[:,dst_ids[1],:]
+  
+    # CompositeMP: [src - dst; dist] (D + 1 channels)
+    g_comp = gather_data(vals,InducedMeasure(gspace;message_rule=CompositeMP()))
+    @test size(g_comp) == (D + 1,ne(g),K)
+    @test g_comp[1:D,1,:] ≈ vals[:,src_ids[1],:] .- vals[:,dst_ids[1],:]
+    @test all(x -> isapprox(x,w[1];atol=1e-6),g_comp[D+1,1,:])
+  
+    # PlainMP: [src; dst; dist] (2D + 1 channels)
+    g_plain = gather_data(vals,InducedMeasure(gspace;message_rule=PlainMP()))
+    @test size(g_plain) == (2D + 1,ne(g),K)
   end
 end

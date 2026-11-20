@@ -176,6 +176,52 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     @test in_test.coords ≈ test_coords_backup
     @test in_test.features ≈ test_features_backup
     @test pred1 ≈ pred2
-  end
+    
+    # FunctionSpace + EnergyLoss(H1(), fspace) + to_element round-trip (covers Enzyme/XLA gradient path)
+    uh_test = solve(fesolver,feop,μ_test)
+    fspace = FunctionSpace(test_space)
+    h1_loss = EnergyLoss(H1(),fspace)
+    fno = KernelNeuralModel(fspace; hidden_layers=(8,8),activation=tanh)
+    fsolver = NeuralSolver(fno; epochs=15,batch_size=0,loss=h1_loss,verbose=false)
 
+    fop = neural_operator(fsolver,in_train,out_train)
+    pred_f = solve(fsolver,fop,in_test)
+    @test size(pred_f) == (1,length(x_coords),3)
+    @test all(isfinite,pred_f)
+
+    pred_uh = to_element(OutputSpace(uh_test),pred_f)
+    @test size(get_all_data(get_free_dof_values(pred_uh))) == size(get_all_data(get_free_dof_values(uh_test)))
+  end
+  
+  @testset "MultipleMeasure, replace_space & Module Exports" begin
+    # Verify all exported symbols actually exist in NonlinearROMs
+    for sym in names(NonlinearROMs)
+      @test isdefined(NonlinearROMs,sym)
+    end
+
+    # Verify replace_space transfers a trained GNO to a finer mesh
+    model_c = CartesianDiscreteModel((0,1,0,1),(5,5))
+    model_f = CartesianDiscreteModel((0,1,0,1),(8,8))
+    reffe = ReferenceFE(lagrangian,Float64,1)
+    Vc = TestFESpace(model_c,reffe;conformity=:H1,dirichlet_tags="boundary")
+    Vf = TestFESpace(model_f,reffe;conformity=:H1,dirichlet_tags="boundary")
+
+    pspace = ParamSpace((1.0,3.0))
+    μ = realisation(pspace;nparams=4)
+    fb = FeatureBundle((parameterise(μ -> x -> μ[1],μ),))
+
+    gspace_c = GraphInducedSpace(Vc;radius=0.4)
+    gspace_f = GraphInducedSpace(Vf;radius=0.25)
+
+    gno = KernelNeuralModel(gspace_c;hidden_layers=(8,8),activation=tanh)
+    solver = NeuralSolver(gno;epochs=3,verbose=false)
+    in_c = InputSpace(Vc,fb)
+    out_c = OutputSpace(Vc,rand(TData,1,length(get_coords(Vc)),4))
+
+    op_c = neural_operator(solver,in_c,out_c)
+    op_f = replace_space(op_c,gspace_f)
+    pred_f = solve(solver,op_f,InputSpace(Vf,fb))
+    @test size(pred_f) == (1,length(get_coords(Vf)),4)
+    @test all(isfinite,pred_f)
+  end
 end

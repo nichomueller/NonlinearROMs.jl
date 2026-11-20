@@ -122,7 +122,6 @@ export gather_data
 export scatter_data
 export attention
 export build_graph
-export get_edge_tensors
 export MPRule
 export PlainMP
 export DifferenceMP
@@ -189,16 +188,9 @@ export TransientNNRegression
 export TransientNNHyperReduction
 export NOMADReduction
 export KernelReduction
-export AbstractKernelReduction
-export GNOReduction
 include("NeuralReductions.jl")
 
 export RolloutData
-export RolloutInputSpace
-export RolloutOutputSpace
-export collect_trajectory
-export rollout_data
-export rollout
 include("Rollout.jl")
 
 export train

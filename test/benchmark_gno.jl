@@ -36,7 +36,7 @@ V = TestFESpace(
 
 mesh_size = 1 / 50
 gspace = GraphInducedSpace(V; radius=2.0 * mesh_size)
-meas = InducedMeasure(gspace)
+meas = InducedMeasure(gspace; message_rule=PlainMP())
 g = get_graph(gspace)
 
 N = length(get_coords(gspace))
@@ -65,7 +65,7 @@ display(b_zscore)
 
 println("\n2. Graph message gathering (gather_data):")
 
-b_gather = @benchmark gather_data($fixed_data, $gspace)
+b_gather = @benchmark gather_data($fixed_data, $meas)
 display(b_gather)
 
 println("\n3. Graph message integration (_integration = scatter_data + degree weighting):")
@@ -206,6 +206,74 @@ pred, _ = xla_op.chain(
 
 println("SUCCESS! Output shape: $(size(pred))")
 println("All predictions are finite.")
+
+# ==========================================================
+# 6. GNO Accuracy & Receptive-Field Diagnostic (2D Poisson)
+# ==========================================================
+println("\n==========================================================")
+println("8. GNO Accuracy Diagnostic on 2D Poisson (25x25, 300 epochs)")
+println("==========================================================")
+
+using GridapROMs
+using GridapROMs.RBSteady
+using GridapSolvers
+using GridapSolvers.LinearSolvers
+using LinearAlgebra
+
+pdomain_d = (1,10,1,10,1,10)
+pspace_d = ParamSpace(pdomain_d)
+model_d = CartesianDiscreteModel((0,1,0,1),(25,25))
+Ω_d = Triangulation(model_d)
+dΩ_d = Measure(Ω_d,2)
+Γn_d = BoundaryTriangulation(model_d,tags=[8])
+dΓn_d = Measure(Γn_d,2)
+
+a_d(μ) = x -> exp(-x[1]/sum(μ))
+f_d(μ) = x -> 1.0
+g_d(μ) = x -> μ[1]*exp(-x[1]/μ[2])
+h_d(μ) = x -> abs(cos(μ[3]*x[2]))
+
+stiff_d(μ,u,v) = ∫(parameterise(a_d,μ)*∇(v)⋅∇(u))dΩ_d
+rhs_d(μ,v) = ∫(parameterise(f_d,μ)*v)dΩ_d + ∫(parameterise(h_d,μ)*v)dΓn_d
+
+V_d = TestFESpace(Ω_d,ReferenceFE(lagrangian,Float64,1);conformity=:H1,dirichlet_tags=[1,3,7])
+U_d = ParamTrialFESpace(V_d,μ -> parameterise(g_d,μ))
+feop_d = LinearParamFEOperator(rhs_d,stiff_d,pspace_d,U_d,V_d)
+fesolver_d = LinearFESolver(LUSolver())
+
+μ_tr = realisation(pspace_d;nparams=30)
+uh_tr = solve(fesolver_d,feop_d,μ_tr)
+μ_te = realisation(pspace_d;nparams=10,start=31)
+uh_te = solve(fesolver_d,feop_d,μ_te)
+
+x_d = get_coords(V_d)
+feats_d(μ) = FeatureBundle((parameterise(a_d,μ),parameterise(f_d,μ),parameterise(g_d,μ),parameterise(h_d,μ)))
+in_tr = InputSpace(x_d,feats_d(μ_tr))
+out_tr = OutputSpace(uh_tr)
+in_te = InputSpace(x_d,feats_d(μ_te))
+u_true = OutputSpace(uh_te).values
+
+h_d_size = 1 / 25
+configs = [
+  ("1-hop, r=2h, DifferenceMP", 2*h_d_size, DifferenceMP(), (16,16)),
+  ("1-hop, r=2h, CompositeMP",  2*h_d_size, CompositeMP(),  (16,16)),
+  ("1-hop, r=2h, PlainMP",      2*h_d_size, PlainMP(),      (16,16)),
+  ("4-hop, r=4h, CompositeMP",  4*h_d_size, CompositeMP(),  (32,32,32,32,32)),
+  ("4-hop, r=4h, PlainMP",      4*h_d_size, PlainMP(),      (32,32,32,32,32)),
+]
+
+for (label,rad,rule,hlayers) in configs
+  gs = GraphInducedSpace(V_d;radius=rad)
+  meas_cfg = InducedMeasure(gs;message_rule=rule)
+  gm = KernelNeuralModel(IntegralStyle(meas_cfg);hidden_layers=hlayers,activation=tanh)
+  slv = NeuralSolver(gm;epochs=300,verbose=false)
+  t0 = time()
+  op_cfg = neural_operator(slv,in_tr,out_tr)
+  dt = round(time() - t0,digits=2)
+  pred = solve(slv,op_cfg,in_te)
+  rel_l2 = norm(pred - u_true) / norm(u_true)
+  println("$(rpad(label,30)) | E=$(lpad(ne(get_graph(gs)),6)) | time=$(lpad(dt,6))s | rel L2 err = $(round(rel_l2,digits=5))")
+end
 
 println("\n==========================================================")
 println("Benchmark completed.")

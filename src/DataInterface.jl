@@ -259,7 +259,7 @@ end
 
 function _init_data(a,x)
   offsets = _offsets(a,testitem(x))
-  D = offsets[end]
+  D = offsets[end] - 1
   N = length(x)
   K = num_params(a)
   data = zeros(TData,D,N,K)
