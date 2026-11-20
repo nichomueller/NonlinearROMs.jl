@@ -2,6 +2,7 @@ using Test
 using LinearAlgebra
 using Random
 using SparseArrays
+using Statistics
 using Graphs
 using Lux
 using Gridap
@@ -15,18 +16,18 @@ using GridapSolvers
 using GridapSolvers.LinearSolvers
 using NonlinearROMs
 
-using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
+using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_weights,_kv,build_model,assemble_norm,get_formatter
 
 @testset "Kernel Neural Operators" begin
 
   @testset "InducedMeasures & Integration" begin
     model = CartesianDiscreteModel((0,1,0,1),(6,6))
     reffe = ReferenceFE(lagrangian,Float64,1)
-    V = TestFESpace(model,reffe; conformity=:H1,dirichlet_tags="boundary")
+    V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
 
     # 1. GraphMeasure integration: integrating a constant message c across all incoming
-    # edges of each node must yield exactly c at every node (degree-normalized average)
-    gspace = GraphInducedSpace(V; radius=0.35)
+    # edges of each node yields c at every node under uniform degree averaging
+    gspace = GraphInducedSpace(V;radius=0.35)
     g = get_graph(gspace)
     gmeas = InducedMeasure(gspace)
 
@@ -37,7 +38,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     edge_const = fill(c_val,D,E,K)
     node_int = integration(edge_const,gmeas)
     @test size(node_int) == (D,N,K)
-    @test all(x -> isapprox(x,c_val; atol=1e-5),node_int)
+    @test all(x -> isapprox(x,c_val;atol=1e-5),node_int)
 
     # 2. FESpaceMeasure integration & Sobolev Energy Losses
     fspace = FunctionSpace(V)
@@ -50,20 +51,29 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     edge_rand = u_rand[:,cols,:]
     fe_int = integration(edge_rand,fmeas)
     @test size(fe_int) == (1,N,K)
-    Mu = stack(k -> M*u_rand[1,:,k],1:K;dims=2)
+    Mu = stack(k -> M * u_rand[1,:,k],1:K;dims=2)
     @test fe_int ≈ reshape(Mu,1,N,K)
 
     for loss_fn in (EnergyLoss(ℓ2(),fspace),EnergyLoss(L2(),fspace),EnergyLoss(H1(),fspace))
       @test loss_fn(u_rand,u_rand) ≈ 0.0f0 atol=1e-6
       @test loss_fn(u_rand,zeros(TData,1,N,K)) > 0.0f0
     end
+
+    # EnergyLoss must match the sample-averaged squared Gram norm (1/K) Σ_k e_k' X e_k
+    u_zero = zeros(TData,1,N,K)
+    X_l2 = assemble_norm(L2(),fspace)
+    X_h1 = assemble_norm(H1(),fspace)
+    expected_l2 = mean(dot(u_rand[1,:,k],X_l2 * u_rand[1,:,k]) for k in 1:K)
+    expected_h1 = mean(dot(u_rand[1,:,k],X_h1 * u_rand[1,:,k]) for k in 1:K)
+    @test_broken isapprox(EnergyLoss(L2(),fspace)(u_rand,u_zero),expected_l2;rtol=1e-4)
+    @test_broken isapprox(EnergyLoss(H1(),fspace)(u_rand,u_zero),expected_h1;rtol=1e-4)
   end
 
   @testset "Kernel Network Non-Linearity & _kv Modes" begin
     model = CartesianDiscreteModel((0,1,0,1),(5,5))
     reffe = ReferenceFE(lagrangian,Float64,1)
-    V = TestFESpace(model,reffe; conformity=:H1,dirichlet_tags="boundary")
-    gspace = GraphInducedSpace(V; radius=0.3)
+    V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
+    gspace = GraphInducedSpace(V;radius=0.3)
     fspace = FunctionSpace(V)
 
     N = num_coords(gspace)
@@ -87,8 +97,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
       @test result[:,e,k] ≈ W * v_test[:,e,k]
     end
 
-    # Verify model construction across both discrete spaces (Graph & FESpace)
-    # and all kernel input formulations
+    # Verify model construction across both discrete spaces and all kernel input formulations
     for space in (gspace,fspace)
       for fmt in (SpatialKernelFormatter(),FeatureKernelFormatter(),StateKernelFormatter(),FullKernelFormatter())
         for cw in (true,false)
@@ -106,7 +115,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
           @test length(chain.layers) == 4
           klayer1 = chain.layers.layer_2
 
-          # Both the integral kernel network κ_θ and the projection Q must be non-linear MLPs (Lux.Chain)
+          # Both the integral kernel network κ_θ and the projection Q must be non-linear MLPs
           @test klayer1.kernel.kernel isa Lux.Chain
           @test chain.layers.layer_4.layer isa Lux.Chain
 
@@ -117,6 +126,12 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
         end
       end
     end
+
+    # NeuralSolver must propagate norm_style and sampler from KernelNeuralModel's formatter
+    ns_custom = NormStyle(;output_style=MScoreStyle())
+    gno_ns = KernelNeuralModel(gspace;formatter=FeatureKernelFormatter(;norm_style=ns_custom))
+    slv_ns = NeuralSolver(gno_ns;epochs=1,verbose=false)
+    @test_broken get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
   end
 
   @testset "End-to-End Training & Non-Mutating Inference" begin
@@ -137,12 +152,12 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     rhs(μ,v) = ∫(fμ(μ) * v)dΩ
 
     reffe = ReferenceFE(lagrangian,Float64,1)
-    test_space = TestFESpace(Ω,reffe; conformity=:H1,dirichlet_tags="boundary")
+    test_space = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags="boundary")
     trial_space = ParamTrialFESpace(test_space,gμ)
     feop = LinearParamFEOperator(rhs,stiffness,pspace,trial_space,test_space)
     fesolver = LinearFESolver(LUSolver())
 
-    μ_train = realisation(pspace; nparams=8,sampling=:halton)
+    μ_train = realisation(pspace;nparams=8,sampling=:halton)
     uh_train = solve(fesolver,feop,μ_train)
 
     x_coords = get_coords(test_space)
@@ -153,9 +168,9 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     features_backup = copy(in_train.features)
     values_backup = copy(out_train.values)
 
-    gspace = GraphInducedSpace(test_space; radius=0.35)
-    gno = KernelNeuralModel(gspace; hidden_layers=(8,8),activation=tanh)
-    solver = NeuralSolver(gno; epochs=5,batch_size=4,verbose=false)
+    gspace = GraphInducedSpace(test_space;radius=0.35)
+    gno = KernelNeuralModel(gspace;hidden_layers=(8,8),activation=tanh)
+    solver = NeuralSolver(gno;epochs=5,batch_size=4,verbose=false)
 
     op = neural_operator(solver,in_train,out_train)
 
@@ -165,7 +180,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     @test out_train.values ≈ values_backup
 
     # Repeated online solve calls on the same InputSpace must be idempotent
-    μ_test = realisation(pspace; nparams=3,sampling=:halton,start=9)
+    μ_test = realisation(pspace;nparams=3,sampling=:halton,start=9)
     in_test = InputSpace(x_coords,FeatureBundle((aμ(μ_test),fμ(μ_test))))
     test_coords_backup = copy(in_test.coords)
     test_features_backup = copy(in_test.features)
@@ -176,13 +191,32 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     @test in_test.coords ≈ test_coords_backup
     @test in_test.features ≈ test_features_backup
     @test pred1 ≈ pred2
-    
-    # FunctionSpace + EnergyLoss(H1(), fspace) + to_element round-trip (covers Enzyme/XLA gradient path)
+
+    # End-to-end training with SpatialKernelFormatter, StateKernelFormatter, and non-uniform widths
+    for (fmt,hlayers) in (
+      (SpatialKernelFormatter(),(8,8)),
+      (StateKernelFormatter(),(8,8)),
+      (FeatureKernelFormatter(),(8,12,8))
+    )
+      gno_var = KernelNeuralModel(
+        IntegralStyle(InducedMeasure(gspace;message_rule=PlainMP()));
+        hidden_layers=hlayers,
+        activation=tanh,
+        formatter=fmt
+      )
+      slv_var = NeuralSolver(gno_var;epochs=3,batch_size=0,verbose=false)
+      op_var = neural_operator(slv_var,in_train,out_train)
+      pred_var = solve(slv_var,op_var,in_test)
+      @test size(pred_var) == (1,length(x_coords),3)
+      @test all(isfinite,pred_var)
+    end
+
+    # FunctionSpace + EnergyLoss(H1(),fspace) + to_element round-trip
     uh_test = solve(fesolver,feop,μ_test)
     fspace = FunctionSpace(test_space)
     h1_loss = EnergyLoss(H1(),fspace)
-    fno = KernelNeuralModel(fspace; hidden_layers=(8,8),activation=tanh)
-    fsolver = NeuralSolver(fno; epochs=15,batch_size=0,loss=h1_loss,verbose=false)
+    fno = KernelNeuralModel(fspace;hidden_layers=(8,8),activation=tanh)
+    fsolver = NeuralSolver(fno;epochs=15,batch_size=0,loss=h1_loss,verbose=false)
 
     fop = neural_operator(fsolver,in_train,out_train)
     pred_f = solve(fsolver,fop,in_test)
@@ -192,14 +226,118 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     pred_uh = to_element(OutputSpace(uh_test),pred_f)
     @test size(get_all_data(get_free_dof_values(pred_uh))) == size(get_all_data(get_free_dof_values(uh_test)))
   end
-  
+
   @testset "MultipleMeasure, replace_space & Module Exports" begin
     # Verify all exported symbols actually exist in NonlinearROMs
     for sym in names(NonlinearROMs)
       @test isdefined(NonlinearROMs,sym)
     end
 
-    # Verify replace_space transfers a trained GNO to a finer mesh
+    # 1. Multi-field MultipleMeasure (Taylor-Hood Q2/Q1) + BlockNorm EnergyLoss
+    pdomain = (1.0,4.0)
+    pspace_mf = ParamSpace(pdomain)
+    fesolver = LinearFESolver(LUSolver())
+
+    model_mf = CartesianDiscreteModel((0,1,0,1),(3,3))
+    Ω_mf = Triangulation(model_mf)
+    dΩ_mf = Measure(Ω_mf,4)
+
+    reffe_u = ReferenceFE(lagrangian,VectorValue{2,Float64},2)
+    reffe_p = ReferenceFE(lagrangian,Float64,1)
+    Vu = TestFESpace(Ω_mf,reffe_u;conformity=:H1,dirichlet_tags="boundary")
+    Vp = TestFESpace(Ω_mf,reffe_p;conformity=:H1)
+
+    a_mf(μ) = x -> μ[1]
+    a_mfμ(μ) = parameterise(a_mf,μ)
+    g_mf(μ) = x -> VectorValue(0.0,0.0)
+    g_mfμ(μ) = parameterise(g_mf,μ)
+
+    Uu = ParamTrialFESpace(Vu,g_mfμ)
+    Up = ParamTrialFESpace(Vp)
+    V_mf = MultiFieldFESpace([Vu,Vp])
+    U_mf = MultiFieldFESpace([Uu,Up])
+
+    stiff_mf(μ,(u,p),(v,q)) = ∫(a_mfμ(μ)*(∇(v)⊙∇(u)) - p*(∇⋅v) + q*(∇⋅u))dΩ_mf
+    rhs_mf(μ,(v,q)) = ∫(VectorValue(1.0,0.0)⋅v)dΩ_mf
+    feop_mf = LinearParamFEOperator(rhs_mf,stiff_mf,pspace_mf,U_mf,V_mf)
+    μ_mf = realisation(pspace_mf;nparams=3)
+    uh_mf = solve(fesolver,feop_mf,μ_mf)
+
+    in_mf = InputSpace(V_mf,FeatureBundle((a_mfμ(μ_mf),)))
+    out_mf = OutputSpace(uh_mf)
+    fspace_mf = FunctionSpace(V_mf)
+    gspace_mf = GraphInducedSpace(V_mf;radius=0.5)
+    gmeas_mf = InducedMeasure(gspace_mf)
+    @test gmeas_mf isa MultipleMeasure
+
+    N_mf = num_coords(gspace_mf)
+    E_mf = num_edges(gmeas_mf)
+    vals_mf = rand(TData,4,N_mf,2)
+    g_mf_data = gather_data(vals_mf,gmeas_mf)
+    @test size(g_mf_data) == (4,E_mf,2)
+    @test size(scatter_data(g_mf_data,gmeas_mf)) == (4,N_mf,2)
+    int_mf = integration(g_mf_data,gmeas_mf)
+    @test size(int_mf) == (4,N_mf,2)
+    @test all(isfinite,int_mf)
+
+    # Multi-field BlockNorm EnergyLoss
+    blk_loss = EnergyLoss(BlockNorm((H1(),L2())),fspace_mf)
+    u_mf_rand = rand(TData,3,N_mf,2)
+    u_mf_zero = zeros(TData,3,N_mf,2)
+    @test blk_loss(u_mf_rand,u_mf_rand) ≈ 0.0f0 atol=1e-6
+    @test blk_loss(u_mf_rand,u_mf_zero) > 0.0f0
+    X_blk = assemble_norm(BlockNorm((H1(),L2())),fspace_mf)
+    expected_blk = mean(begin
+      ek = vcat(u_mf_rand[1,:,k],u_mf_rand[2,:,k],u_mf_rand[3,:,k])
+      dot(ek,X_blk * ek)
+    end for k in 1:2)
+    @test_broken isapprox(blk_loss(u_mf_rand,u_mf_zero),expected_blk;rtol=1e-4)
+
+    gno_mf = KernelNeuralModel(gspace_mf;hidden_layers=(8,8),activation=tanh)
+    slv_mf = NeuralSolver(gno_mf;epochs=2,batch_size=0,loss=blk_loss,verbose=false)
+    op_mf = neural_operator(slv_mf,in_mf,out_mf)
+    pred_mf = solve(slv_mf,op_mf,in_mf)
+    @test size(pred_mf) == (3,N_mf,3)
+    @test all(isfinite,pred_mf)
+
+    # 2. Multi-PDE MultipleMeasure + replace_space onto a single new mesh
+    reffe_s = ReferenceFE(lagrangian,Float64,1)
+    g_s(μ) = x -> 0.0
+    g_sμ(μ) = parameterise(g_s,μ)
+
+    function solve_poisson_mpde(n,np,start)
+      m = CartesianDiscreteModel((0,1,0,1),(n,n))
+      t = Triangulation(m)
+      dm = Measure(t,2)
+      V = TestFESpace(t,reffe_s;conformity=:H1,dirichlet_tags="boundary")
+      U = ParamTrialFESpace(V,g_sμ)
+      op = LinearParamFEOperator((μ,v) -> ∫(a_mfμ(μ)*v)dm,(μ,u,v) -> ∫(∇(v)⋅∇(u))dm,pspace_mf,U,V)
+      μ = realisation(pspace_mf;nparams=np,start=start)
+      uh = solve(fesolver,op,μ)
+      return V,InputSpace(V,FeatureBundle((a_mfμ(μ),))),uh
+    end
+
+    V1,in1,uh1 = solve_poisson_mpde(3,2,1)
+    V2,in2,uh2 = solve_poisson_mpde(4,3,3)
+    in_mpde = InputSpace(in1,in2)
+    out_mpde = OutputSpace(uh1,uh2)
+    gspace_mpde = GraphInducedSpace(out_mpde;radius=0.5)
+    @test InducedMeasure(gspace_mpde) isa MultipleMeasure
+
+    gno_mpde = KernelNeuralModel(gspace_mpde;hidden_layers=(8,8),activation=tanh)
+    slv_mpde = NeuralSolver(gno_mpde;epochs=2,batch_size=0,verbose=false)
+    op_mpde = neural_operator(slv_mpde,in_mpde,out_mpde)
+    pred_mpde = solve(slv_mpde,op_mpde,in_mpde)
+    @test size(pred_mpde) == (1,num_coords(out_mpde),5)
+    @test all(isfinite,pred_mpde)
+
+    # Transfer multi-PDE trained operator onto a single-PDE graph space
+    op_single = replace_space(op_mpde,GraphInducedSpace(V2;radius=0.45))
+    pred_single = solve(slv_mpde,op_single,in2)
+    @test size(pred_single) == (1,length(get_coords(V2)),3)
+    @test all(isfinite,pred_single)
+
+    # 3. replace_space across meshes and MPRule preservation
     model_c = CartesianDiscreteModel((0,1,0,1),(5,5))
     model_f = CartesianDiscreteModel((0,1,0,1),(8,8))
     reffe = ReferenceFE(lagrangian,Float64,1)
@@ -223,5 +361,15 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     pred_f = solve(solver,op_f,InputSpace(Vf,fb))
     @test size(pred_f) == (1,length(get_coords(Vf)),4)
     @test all(isfinite,pred_f)
+
+    # replace_space must preserve non-default message passing rules (PlainMP, CompositeMP)
+    for rule in (PlainMP(),CompositeMP())
+      meas_r = InducedMeasure(gspace_c;message_rule=rule)
+      gno_r = KernelNeuralModel(IntegralStyle(meas_r);hidden_layers=(8,8),activation=tanh)
+      slv_r = NeuralSolver(gno_r;epochs=2,verbose=false)
+      op_r = neural_operator(slv_r,in_c,out_c)
+      op_r_f = replace_space(op_r,gspace_f)
+      @test_broken get_message_rule(op_r_f.chain.layers.layer_2.kernel.measure) isa typeof(rule)
+    end
   end
 end

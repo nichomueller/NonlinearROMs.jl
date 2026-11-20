@@ -309,13 +309,13 @@ _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
 
-function _trivial_table(a::Tuple{Vararg{AbstractInputData{T}}}) where T
+function _trivial_table(a::Tuple{Vararg{AbstractInputData}})
   ptrs = zeros(Int,length(a)+1)
   @inbounds for (i,ai) in enumerate(a)
-    ptrs[i+1] = ptrs[i] + size(ai,2)
+    ptrs[i+1] = size(ai,2)
   end
-  data = zeros(T,ptrs[end])
   length_to_ptrs!(ptrs)
+  data = zeros(Int,ptrs[end]-1)
   @inbounds for i in eachindex(a)
     pini = ptrs[i]
     pend = ptrs[i+1]-1

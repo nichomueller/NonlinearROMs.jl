@@ -11,7 +11,7 @@ using GridapSolvers
 using GridapSolvers.LinearSolvers
 using NonlinearROMs
 
-using NonlinearROMs: TData,MScore,ZScore,RScore,Normalisation,normalise!,denormalise!
+using NonlinearROMs: TData,MScore,ZScore,RScore,NormStyle,Normalisation,normalise!,denormalise!
 using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
 
 @testset "DataInterface & Normalisation" begin
@@ -20,31 +20,31 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     D,N,K = 3,25,10
     data = zeros(TData,D,N,K)
 
-    # Channel 1: Spatial coordinates (vary across nodes N, constant across samples K)
+    # Channel 1: spatial coordinates (vary across nodes N, constant across samples K)
     x_nodes = range(0.0f0,1.0f0,length=N)
     for k in 1:K,i in 1:N
       data[1,i,k] = x_nodes[i]
     end
 
-    # Channel 2: Parameter-independent spatial source term f(x) = sin(π*x)
+    # Channel 2: parameter-independent spatial source term f(x) = sin(π*x)
     for k in 1:K,i in 1:N
       data[2,i,k] = sin(Float32(π) * x_nodes[i])
     end
 
-    # Channel 3: Global constant field across all nodes and samples
+    # Channel 3: global constant field across all nodes and samples
     fill!(view(data,3,:,:),5.0f0)
 
     data_orig = copy(data)
-    stats = ZScore(data; normalise=true)
+    stats = ZScore(data;normalise=true)
 
-    # Spatial profiles must be preserved with unit standard deviation across (N, K)
+    # Spatial profiles must be preserved with unit standard deviation across (N,K)
     @test norm(view(data,1,:,1)) > 1.0f0
     @test norm(view(data,2,:,1)) > 1.0f0
     @test std(view(data,1,:,:)) ≈ 1.0f0 atol=1e-4
     @test std(view(data,2,:,:)) ≈ 1.0f0 atol=1e-4
 
     # Constant channels must not be zeroed out or produce NaNs
-    @test all(x -> isapprox(x,5.0f0; atol=1e-5),view(data,3,:,:))
+    @test all(x -> isapprox(x,5.0f0;atol=1e-5),view(data,3,:,:))
     @test !any(isnan,data)
 
     # Discretization invariance: per-channel scalar stats work on N_test != N
@@ -86,16 +86,46 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     denormalise!(r_data,rstats)
     @test r_data ≈ fp_orig rtol=1e-5
 
-    # MScore round-trip recovery
+    # All-zero channels must remain zero without NaN/Inf across all score types
+    for score_ctor in (ZScore,RScore,MScore)
+      z_data = zeros(TData,2,N,K)
+      z_data[2,:,:] .= randn(TData,N,K)
+      z_orig = copy(z_data)
+      s = score_ctor(z_data;normalise=true)
+      @test all(isfinite,z_data)
+      @test all(iszero,view(z_data,1,:,:))
+      denormalise!(z_data,s)
+      @test z_data ≈ z_orig atol=1e-5
+    end
+
+    # MScore round-trip recovery and per-channel scaling
     out_data = randn(TData,2,N,K) .* 10.0f0
     out_orig = copy(out_data)
-    mstats = MScore(out_data; normalise=true)
+    mstats = MScore(out_data;normalise=true)
     @test maximum(abs,out_data) ≈ 1.0f0 atol=1e-5
     denormalise!(out_data,mstats)
     @test out_data ≈ out_orig atol=1e-5
+
+    # Multi-scale channels: MScore should scale each channel independently
+    mc_data = zeros(TData,2,N,K)
+    mc_data[1,:,:] .= 100.0f0 .* (0.5f0 .+ rand(TData,N,K))
+    mc_data[2,:,:] .= 0.01f0 .* (0.5f0 .+ rand(TData,N,K))
+    mstats_mc = MScore(mc_data;normalise=true)
+    @test_broken length(mstats_mc.scale) == 2
+    @test_broken maximum(abs,view(mc_data,2,:,:)) ≈ 1.0f0 atol=1e-5
+
+    # NormStyle(;normalise=false) must leave inputs and outputs untouched
+    coords_raw = rand(TData,2,N,K) .* 5.0f0 .+ 2.0f0
+    feats_raw = rand(TData,2,N,K) .* 10.0f0 .+ 3.0f0
+    vals_raw = rand(TData,1,N,K) .* 7.0f0 .+ 4.0f0
+    in_raw = (coords=copy(coords_raw),features=copy(feats_raw))
+    out_raw = copy(vals_raw)
+    ns_off = NormStyle(;normalise=false)
+    stats_off = Normalisation(ns_off,(in_raw,out_raw))
+    @test_broken (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
   end
 
-  @testset "DataFormatter & Kernel Formulations" begin
+  @testset "DataFormatter, Concatenation & Kernel Formulations" begin
     coord_dims = 2
     feat_dims = 4
     fixed_dims = coord_dims + feat_dims
@@ -114,26 +144,31 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     @test size(fetched.coords) == (coord_dims,length(sub_ids),K)
     @test size(fetched.features) == (feat_dims,length(sub_ids),K)
 
-    # Kovachki et al. Eq. (7): κ(x, y) -> coordinates only
+    # Default trivial-table concatenation along channels
+    cat_ab = cat_channels((coords,features))
+    @test size(cat_ab) == (fixed_dims,N,K)
+    @test cat_ab ≈ fixed_data
+
+    # Kovachki et al. Eq. (7): κ(x,y) -> coordinates only
     fmt_spatial = SpatialKernelFormatter()
     m_spatial = merge_data(fmt_spatial,fixed_data,v_state,coord_dims)
     @test size(m_spatial) == (coord_dims,N,K)
     @test m_spatial == view(fixed_data,1:coord_dims,:,:)
 
-    # Kovachki et al. Eq. (8): κ(x, y, a(x), a(y)) -> coordinates and PDE features
+    # Kovachki et al. Eq. (8): κ(x,y,a(x),a(y)) -> coordinates and PDE features
     fmt_feature = FeatureKernelFormatter()
     m_feature = merge_data(fmt_feature,fixed_data,v_state,coord_dims)
     @test size(m_feature) == (fixed_dims,N,K)
     @test m_feature == fixed_data
 
-    # Kovachki et al. Eq. (9): κ(x, y, v(x), v(y)) -> coordinates and latent state v
+    # Kovachki et al. Eq. (9): κ(x,y,v(x),v(y)) -> coordinates and latent state v
     fmt_state = StateKernelFormatter()
     m_state = merge_data(fmt_state,fixed_data,v_state,coord_dims)
     @test size(m_state) == (coord_dims + latent_dims,N,K)
     @test m_state[1:coord_dims,:,:] == view(fixed_data,1:coord_dims,:,:)
     @test m_state[(coord_dims+1):end,:,:] == v_state
 
-    # Full formulation: κ(x, y, a(x), a(y), v(x), v(y))
+    # Full formulation: κ(x,y,a(x),a(y),v(x),v(y))
     fmt_full = FullKernelFormatter()
     m_full = merge_data(fmt_full,fixed_data,v_state,coord_dims)
     @test size(m_full) == (fixed_dims + latent_dims,N,K)
@@ -157,12 +192,12 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     rhs(μ,v) = ∫(fμ(μ) * v)dΩ
 
     reffe = ReferenceFE(lagrangian,Float64,1)
-    V = TestFESpace(Ω,reffe; conformity=:H1,dirichlet_tags="boundary")
+    V = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags="boundary")
     U = ParamTrialFESpace(V,gμ)
     feop = LinearParamFEOperator(rhs,stiffness,pspace,U,V)
     fesolver = LinearFESolver(LUSolver())
 
-    μ = realisation(pspace; nparams=4)
+    μ = realisation(pspace;nparams=4)
     uh = solve(fesolver,feop,μ)
 
     fb = FeatureBundle((aμ(μ),fμ(μ)))
