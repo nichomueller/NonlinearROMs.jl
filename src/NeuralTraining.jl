@@ -121,7 +121,7 @@ end
 
 resolve_data_loader(a) = MLUtils.DataLoader
 resolve_data_loader(a::TwoStageBuckets) = AutoregressiveDataLoader
-resolve_data_loader((input,output)) = resolve_data_loader(input)
+resolve_data_loader((input,output)::NamedTuple) = resolve_data_loader(input)
 
 function get_data_loader(solver::NeuralSolver,data;kwargs...)
   batchsize = resolve_batch_size(solver,data)
@@ -180,30 +180,37 @@ end
 
 # rollout 
 
-function AutoregressiveDataLoader((input,output);kwargs...)
+# the pushforward data holds (nc-1)/nc of the one-step samples: its batch size is
+# scaled so that both loaders yield (at least) the same number of batches, to be
+# zipped in the training loop. partial=false keeps every batch the same shape, so
+# each step is compiled once
+function AutoregressiveDataLoader((input,output);batchsize,partial=false,kwargs...)
   one_step_data,pushforward_data = rollout_data(input,output)
-  (
-    one_step = MLUtils.DataLoader(one_step_data;kwargs...),
-    pushforward = MLUtils.DataLoader(pushforward_data;kwargs...)
-  )
+  one_step = MLUtils.DataLoader(one_step_data;batchsize,partial,kwargs...)
+  nb = length(one_step)
+  pf_batchsize = max(1,fld(MLUtils.numobs(pushforward_data),nb))
+  pushforward = MLUtils.DataLoader(pushforward_data;batchsize=pf_batchsize,partial,kwargs...)
+  (one_step=one_step,pushforward=pushforward)
 end
 
 function rollout_data(input::TwoStageBuckets,output::TwoStageBuckets)
   nc = input.num_clusters
   @check output.num_clusters == nc "Input and output must have the same number of clusters"
+  @check nc > 1 "The pushforward term needs at least two clusters"
   one_step_data = (
     input = _merge_data(input.second_stage,output.first_stage),
     output = output.second_stage
   )
   
   in_first_forward = _get_clusters(input.first_stage,2:nc,nc)
-  in_back = _get_clusters(one_step_data.input,1:(nc-1),nc)
-  out_first_back = _get_clusters(output.first_stage,1:(nc-1),nc)
+  in_backward = _get_clusters(one_step_data.input,1:(nc-1),nc)
+  out_first_forward = _get_clusters(output.first_stage,2:nc,nc)
   pushforward_data = (
     input = in_first_forward,
-    output = out_first_back,
-    metadata = in_back
+    output = out_first_forward,
+    metadata = in_backward
   )
+  
   return (one_step_data,pushforward_data)
 end
 
@@ -213,21 +220,16 @@ function train_model!(
   stats,
   lr_scheduler,
   loss,
-  to_device_batch;
+  args...;
   logger,λ=TData(1),warmup_epochs=0
   )
 
-  # one-step term + pushforward term; ŷp is passed as data, so it is constant
+  # one-step term + pushforward term; pred is passed as data, so it is constant
   # for Enzyme (stop-gradient)
-  function rollout_loss(model,ps,st,(one_step,pushforward,pred))
-    updated_pushforward = (
-      input = _merge_data(pushforward.input,pred),
-      output = pushforward.output
-    )
-
-    l_one_step,st,_ = loss(model,ps,st,one_step)
-    ŷ,st = model(updated_pushforward,ps,st)
-    l_pushforward = loss(ŷ,pushforward.output)
+  function rollout_loss(model,ps,st,(one_step_b,pushforward_b,pred))
+    l_one_step,st,_ = loss(model,ps,st,(one_step_b.input,one_step_b.output))
+    ŷ,st = model(_merge_data(pushforward_b.input,pred),ps,st)
+    l_pushforward = loss(ŷ,pushforward_b.output)
     return l_one_step + TData(λ)*l_pushforward,st,(;)
   end
 
@@ -239,20 +241,19 @@ function train_model!(
     for epoch in 1:logger.max_epochs
       local current_loss = zero(TData)
 
-      for raw_batch in loader
-        raw_one_step,raw_pushforward = raw_batch
-        one_step_batch = to_device_batch(raw_one_step)
-        pushforward_batch = to_device_batch(raw_pushforward)
+      for (raw_one_step,raw_pushforward) in zip(one_step,pushforward)
+        one_step_batch = raw_one_step |> XDEV
 
         if epoch ≤ warmup_epochs
           _,loss_val,_,train_state = Lux.Training.single_train_step!(
             Lux.AutoEnzyme(),
             loss,
-            one_step_batch,
+            (one_step_batch.input,one_step_batch.output),
             train_state;
             return_gradients=Val(false)
           )
         else
+          pushforward_batch = raw_pushforward |> XDEV
           ps = train_state.parameters
           st = Lux.testmode(train_state.states)
           if isnothing(predict)
@@ -271,7 +272,7 @@ function train_model!(
 
         current_loss += TData(loss_val)
       end
-      current_loss /= length(loader)
+      current_loss /= length(one_step)
 
       step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
 

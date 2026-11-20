@@ -22,6 +22,8 @@ struct FourierStyle <: KernelStyle
   truncation::Int
 end
 
+FourierStyle(;truncation=12) = FourierStyle(truncation)
+
 function DataFormatter(style::FourierStyle)
   DataFormatter(pass_coords=Val{false}(),pass_features=Val{false}(),pass_new_data=Val{true}())
 end

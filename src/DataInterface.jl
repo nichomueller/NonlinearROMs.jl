@@ -353,14 +353,11 @@ end
 _get_range(::Nothing,::Int) = Colon()
 _get_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)
 
-function _get_clusters(a::AbstractInputData,r::UnitRange{Int},nc::Int=1)
+# samples are stored cluster by cluster: cluster c spans (c-1)*Δ+1:c*Δ on axis 3
+function _get_clusters(a::AbstractInputData,r::UnitRange{Int},nc::Int)
   K = num_samples(a)
   @check K % nc == 0 "Number of samples must be divisible by the number of clusters"
   Δ = K ÷ nc
-  inds = (r.start-1)*Δ+1:r.stop*Δ
-  TwoStageBuckets(
-    view(a.first_stage,:,inds,:),
-    view(a.second_stage,:,inds,:),
-    length(r)
-  )
+  inds = (first(r)-1)*Δ+1:last(r)*Δ
+  view(a,:,:,inds)
 end

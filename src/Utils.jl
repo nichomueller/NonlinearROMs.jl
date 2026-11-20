@@ -150,10 +150,17 @@ Score(::MScoreStyle,data;kwargs...) = MScore(data;kwargs...)
 Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
 Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
 
+# one score shared by both stages: the network's prediction (second-stage scale)
+# is fed back as a state, and compared against first-stage targets. The stats are
+# computed on the stages stacked along the samples, then both stages are
+# normalised in place (merging makes a copy, so normalising it would be lost)
 for T in (:MScoreStyle,:RScoreStyle,:ZScoreStyle)
   @eval begin
-    function Score(style::$T,data::TwoStageBuckets;kwargs...)
-      Score(style,merge_data(data);kwargs...)
+    function Score(style::$T,data::TwoStageBuckets;normalise=true)
+      all_data = cat(data.first_stage,data.second_stage;dims=3)
+      score = Score(style,all_data;normalise=false)
+      normalise && normalise!(data,score)
+      return score
     end
   end
 end
@@ -171,6 +178,16 @@ abstract type AbstractScore end
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
 combine_scores(scores::AbstractScore...;kwargs...) = @abstractmethod
+
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::TwoStageBuckets,score::AbstractScore)
+      $f(data.first_stage,score)
+      $f(data.second_stage,score)
+      data
+    end
+  end
+end
 combine_scores(scores::Union{Tuple,AbstractVector};kwargs...) = combine_scores(scores...;kwargs...)
 
 struct MScore{A} <: AbstractScore
@@ -386,7 +403,7 @@ for f in (:normalise!,:denormalise!)
       $f(inputs,stats.input_score)
     end
 
-    function $f(outputs::AbstractInputData,stats::Normalisation)
+    function $f(outputs::Union{AbstractInputData,TwoStageBuckets},stats::Normalisation)
       $f(outputs,stats.output_score)
     end
   end
