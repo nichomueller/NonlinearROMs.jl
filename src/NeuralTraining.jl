@@ -56,10 +56,6 @@ function build_kernel_network(in_dims,out_dims,layers::Tuple,activation)
   build_lux_chain((in_dims,layers...,out_dims),activation)
 end
 
-function build_model(s::NeuralSolver{<:KernelNeuralModel},data)
-  build_model(s.model,data)
-end
-
 function build_model(model::KernelNeuralModel,(inputs,outputs))
   in_dims = _in_dims(inputs,outputs)
   out_dims = dimension(outputs)
@@ -109,6 +105,17 @@ function train!(solver::NeuralSolver,train_state,dataloader,stats)
   logger = get_logger(solver)
   to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
+end
+
+function train!(solver::RolloutNeuralSolver,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  loss = get_loss(solver)
+  logger = get_logger(solver)
+  to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
+  train_model!(
+    train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;
+    logger,warmup_epochs=solver.warmup_epochs,λ=solver.λ
+  )
 end
 
 function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed=1234)
@@ -210,7 +217,7 @@ function rollout_data(input::TwoStageBuckets,output::TwoStageBuckets)
     output = out_first_forward,
     metadata = in_backward
   )
-  
+
   return (one_step_data,pushforward_data)
 end
 

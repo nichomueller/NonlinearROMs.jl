@@ -74,7 +74,7 @@ output_space = OutputSpace(RolloutData(uhμ_train,times,2))
 
 fspace = FunctionSpace(test)
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+solver = RolloutNeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)

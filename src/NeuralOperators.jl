@@ -1,5 +1,21 @@
+abstract type NeuralSolver <: ROMSolver end
+
+get_formatter(s::NeuralSolver) = @abstractmethod
+get_optimiser(s::NeuralSolver) = @abstractmethod
+get_scheduler(s::NeuralSolver) = @abstractmethod
+get_batch_size(s::NeuralSolver) = @abstractmethod
+get_loss(s::NeuralSolver) = @abstractmethod
+get_logger(s::NeuralSolver) = @abstractmethod
+build_model(s::NeuralSolver,args...;kwargs...) = @abstractmethod
+
+function resolve_batch_size(s::NeuralSolver,(inputs,outputs))
+  bs = get_batch_size(s)
+  ns = num_samples(inputs)
+  bs > 0 ? min(bs,ns) : ns
+end
+
 """
-    struct NeuralSolver{A<:NeuralModel} <: ROMSolver
+    struct GenericNeuralSolver{A<:NeuralModel} <: NeuralSolver
       model::A
       epochs::Int
       batch_size::Int
@@ -61,7 +77,7 @@ solver = NeuralSolver(
 )
 ```
 """
-struct NeuralSolver{A<:NeuralModel} <: ROMSolver
+struct GenericNeuralSolver{A<:NeuralModel} <: NeuralSolver
   model::A
   epochs::Int
   batch_size::Int
@@ -86,7 +102,7 @@ function NeuralSolver(
 
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
-  NeuralSolver(
+  GenericNeuralSolver(
     model,
     epochs,
     batch_size,
@@ -97,18 +113,32 @@ function NeuralSolver(
   )
 end
 
-get_formatter(s::NeuralSolver) = s.formatter
-get_optimiser(s::NeuralSolver) = s.optimiser.opt
-get_scheduler(s::NeuralSolver) = s.optimiser.lr_scheduler
-get_loss(s::NeuralSolver) = s.loss
-get_logger(s::NeuralSolver) = s.trainlog
-build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
+get_formatter(s::GenericNeuralSolver) = s.formatter
+get_optimiser(s::GenericNeuralSolver) = s.optimiser.opt
+get_scheduler(s::GenericNeuralSolver) = s.optimiser.lr_scheduler
+get_batch_size(s::GenericNeuralSolver) = s.batch_size
+get_loss(s::GenericNeuralSolver) = s.loss
+get_logger(s::GenericNeuralSolver) = s.trainlog
+build_model(s::GenericNeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
 
-function resolve_batch_size(s::NeuralSolver,(inputs,outputs))
-  bs = s.batch_size
-  ns = num_samples(inputs)
-  bs > 0 ? min(bs,ns) : ns
+struct RolloutNeuralSolver{A<:NeuralModel} <: NeuralSolver
+  solver::GenericNeuralSolver{A}
+  warmup_epochs::Int
+  λ::Real
 end
+
+function RolloutNeuralSolver(args...;warmup_epochs::Int=0,λ::Real=1.0,kwargs...)
+  solver = NeuralSolver(args...;kwargs...)
+  RolloutNeuralSolver(solver,warmup_epochs,λ)
+end
+
+get_formatter(s::RolloutNeuralSolver) = get_formatter(s.solver)
+get_optimiser(s::RolloutNeuralSolver) = get_optimiser(s.solver)
+get_scheduler(s::RolloutNeuralSolver) = get_scheduler(s.solver)
+get_batch_size(s::RolloutNeuralSolver) = get_batch_size(s.solver)
+get_loss(s::RolloutNeuralSolver) = get_loss(s.solver)
+get_logger(s::RolloutNeuralSolver) = get_logger(s.solver)
+build_model(s::RolloutNeuralSolver,args...;kwargs...) = build_model(s.solver,args...;kwargs...)
 
 """
     struct NeuralOperator{A,B,C,D} <: AbstractLuxLayer
@@ -212,14 +242,44 @@ function Algebra.solve(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver,
+  solver::RolloutNeuralSolver,
   op::NeuralOperator,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  initial_output_space::AbstractOutputSpace
   )
 
-  output = solve(solver,op,input_space)
-  to_element(output_space,output)
+  ic = get_values(initial_output_space)
+  data = fetch_data_from_stats(solver,input_space,op.stats)
+  output = rollout(op,data,ic)
+  denormalise!(output,op.stats)
+  return output
+end
+
+# rollout 
+
+function rollout(op::NeuralOperator,data::TwoStageBuckets,ic::AbstractInputData)
+  outputs = ()
+  one_step_output = ic
+  for _ in 1:num_clusters(data)
+    pushforward_output = pushforward_step(op,data,one_step_output)
+    one_step_output = one_step_step(op,data,pushforward_output)
+    outputs = (outputs...,pushforward_output,one_step_output)
+  end
+  return outputs
+end
+
+function pushforward_step(op::NeuralOperator,data::TwoStageBuckets,one_step_output::AbstractInputData)
+  pushforward_data = _merge_data(data.first_stage,one_step_output)
+  pushforward_output, = op.chain(pushforward_data,op.parameters,op.states)
+  denormalise!(pushforward_output,op.stats)
+  return pushforward_output
+end
+
+function one_step_step(op::NeuralOperator,data::TwoStageBuckets,pushforward_output::AbstractInputData)
+  one_step_data = _merge_data(data.second_stage,pushforward_output)
+  one_step_output, = op.chain(one_step_data,op.parameters,op.states)
+  denormalise!(one_step_output,op.stats)
+  return one_step_output
 end
 
 # utils
