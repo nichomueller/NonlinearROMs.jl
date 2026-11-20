@@ -157,15 +157,11 @@ function RScore(data::AbstractInputData;normalise=true)
   return RScore(l,u)
 end
 
-normalise!(data,score::NoRScore) = data
-
 function normalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .- score.lower[d]) ./ (score.upper[d] - score.lower[d])
   end
 end
-
-denormalise!(data,score::NoRScore) = data
 
 function denormalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
@@ -214,24 +210,27 @@ function MScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  s = maximum(abs,data)
-  s < TData(1e-6) && (s = one(s))
+  # Compute one scale factor per channel so multi-scale fields are balanced
+  s = dropdims(maximum(abs,data;dims=(2,3)),dims=(2,3))
+  @inbounds for i in eachindex(s)
+    if s[i] < TData(1e-6)
+      s[i] = one(eltype(s))
+    end
+  end
   return MScore(s)
 end
 
-normalise!(data,score::NoMScore) = data
-
 function normalise!(data::AbstractInputData,score::MScore)
-  data ./= score.scale
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd ./ score.scale[d]
+  end
 end
-
-denormalise!(data,score::NoMScore) = data
 
 function denormalise!(data::AbstractInputData,score::MScore)
-  data .*= score.scale
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd .* score.scale[d]
+  end
 end
-
-normalise!(data,score::NoZScore) = data
 
 function normalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
@@ -239,11 +238,16 @@ function normalise!(data::AbstractInputData,stats::ZScore)
   end
 end
 
-denormalise!(data,score::NoZScore) = data
-
 function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
+  end
+end
+
+for S in (NoRScore,NoZScore,NoMScore),f in (:normalise!,:denormalise!)
+  @eval begin
+    $f(data,score::$S) = data
+    $f(data::AbstractInputData,score::$S) = data
   end
 end
 
@@ -297,6 +301,12 @@ struct Normalisation{A<:NamedScores,B<:AbstractScore}
 end
 
 function Normalisation(style::NormStyle,(input,output))
+  if !style.normalise
+    # Return no-op scores without mutating input or output tensors
+    input_score = Score(style.input_style,map(_ -> nothing,input))
+    output_score = Score(style.output_style,nothing)
+    return Normalisation(input_score,output_score)
+  end
   input_score = Score(style.input_style,input)
   output_score = Score(style.output_style,output)
   Normalisation(input_score,output_score)
@@ -325,10 +335,11 @@ assemble_norm(args...) = @abstractmethod
 
     EnergyLoss(op::AssembleOperator,f)
 
-MSE between `Xŷ` and `Xy`, with `X` the Gram matrix of the `GridapROMs` norm `op`
-(`ℓ2()`, `L2()`, `H1()`, ...) on `f`'s point layout (see [`assemble_norm`](@ref)).
-`X` is either `(N,N)`, shared by every channel, or `(D*N,D*N)`, block-diagonal
-with one block per channel (the multi-field case).
+Sample-averaged squared energy norm `(1/K) Σ_k (ŷ_k - y_k)' X (ŷ_k - y_k)`,
+with `X` the Gram matrix of the `GridapROMs` norm `op` (`ℓ2()`, `L2()`, `H1()`,
+...) on `f`'s point layout (see [`assemble_norm`](@ref)). `X` is either `(N,N)`,
+shared by every channel, or `(D*N,D*N)`, block-diagonal with one block per
+channel (the multi-field case).
 """
 struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
   X::A
@@ -337,9 +348,9 @@ end
 EnergyLoss(op::AssembleOperator,f) = EnergyLoss(assemble_norm(op,f))
 
 function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
-  Xŷ = _norm_mul_data(loss.X,ŷ)
-  Xy = _norm_mul_data(loss.X,y)
-  return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
+  e = ŷ .- y
+  Xe = _norm_mul_data(loss.X,e)
+  return sum(e .* Xe) / TData(size(e,3))
 end
 
 function _norm_mul_data(X::AbstractMatrix,x::AbstractInputData)

@@ -222,22 +222,24 @@ int_mask = .!bnd_mask
 fspace_d = FunctionSpace(V_d)
 h1_loss_d = EnergyLoss(H1(),fspace_d)
 
-# Tuple fields: (label, radius, rule, hidden_layers, epochs, lr_max, loss_fn)
+# Tuple fields: (label, radius, rule, hidden_layers, epochs, lr_max, loss_fn, weight_decay)
 configs_d = [
-  ("1-hop r=2h DiffMP 300ep",    2*h_d_size,DifferenceMP(),(16,16),      300, TData(1e-3),Lux.MSELoss()),
-  ("1-hop r=2h PlainMP 300ep",   2*h_d_size,PlainMP(),     (16,16),      300, TData(1e-3),Lux.MSELoss()),
-  ("1-hop r=2h PlainMP 1500ep",  2*h_d_size,PlainMP(),     (16,16),      1500,TData(5e-3),Lux.MSELoss()),
-  ("2-hop r=3h PlainMP 1500ep",  3*h_d_size,PlainMP(),     (24,24,24),   1500,TData(5e-3),Lux.MSELoss()),
-  ("1-hop r=2h PlainMP H1-loss", 2*h_d_size,PlainMP(),     (16,16),      1500,TData(5e-3),h1_loss_d),
+  ("1-hop r=2h DiffMP 300ep",      2*h_d_size,DifferenceMP(),(16,16),   300, TData(1e-3),Lux.MSELoss(),0.0),
+  ("1-hop r=2h PlainMP 300ep",     2*h_d_size,PlainMP(),     (16,16),   300, TData(1e-3),Lux.MSELoss(),0.0),
+  ("1-hop r=2h PlainMP 1500ep",    2*h_d_size,PlainMP(),     (16,16),   1500,TData(5e-3),Lux.MSELoss(),0.0),
+  ("2-hop r=3h PlainMP 1500ep",    3*h_d_size,PlainMP(),     (24,24,24),1500,TData(5e-3),Lux.MSELoss(),0.0),
+  ("1-hop r=2h PlainMP H1-loss",   2*h_d_size,PlainMP(),     (16,16),   1500,TData(5e-3),h1_loss_d,    0.0),
+  ("1-hop r=2h AnchoredMP H1+wd",  2*h_d_size,AnchoredMP(),  (16,16),   1500,TData(5e-3),h1_loss_d,    1e-4),
+  ("2-hop r=3h AnchoredMP wd",     3*h_d_size,AnchoredMP(),  (24,24,24),1500,TData(5e-3),Lux.MSELoss(),1e-4),
 ]
 
 rows_d = String[]
-for (label,rad,rule,hlayers,ep,lr,lfn) in configs_d
+for (label,rad,rule,hlayers,ep,lr,lfn,wd) in configs_d
   gs = GraphInducedSpace(V_d;radius=rad)
   meas_cfg = InducedMeasure(gs;message_rule=rule)
   gm = KernelNeuralModel(IntegralStyle(meas_cfg);hidden_layers=hlayers,activation=tanh)
   sched = CosineAnnealing(ep;lr_max=lr)
-  slv = NeuralSolver(gm;epochs=ep,lr_scheduler=sched,loss=lfn,verbose=true,print_every=ep + 1)
+  slv = NeuralSolver(gm;epochs=ep,lr_scheduler=sched,loss=lfn,weight_decay=wd,verbose=true,print_every=ep + 1)
   lg = NonlinearROMs.get_logger(slv)
   op_cfg = neural_operator(slv,in_tr,out_tr)
   t_end = time()
@@ -249,7 +251,7 @@ for (label,rad,rule,hlayers,ep,lr,lfn) in configs_d
   te_l2 = round(norm(pred_te - u_te_true) / norm(u_te_true),digits=5)
   in_l2 = round(norm(pred_te[:,int_mask,:] - u_te_true[:,int_mask,:]) / norm(u_te_true[:,int_mask,:]),digits=5)
   bn_l2 = round(norm(pred_te[:,bnd_mask,:] - u_te_true[:,bnd_mask,:]) / norm(u_te_true[:,bnd_mask,:]),digits=5)
-  row = "$(rpad(label,28)) | E=$(lpad(ne(get_graph(gs)),6)) | comp=$(lpad(t_comp,6))s | trn=$(lpad(t_trn,6))s | trL2=$(lpad(tr_l2,7)) | teL2=$(lpad(te_l2,7)) | intL2=$(lpad(in_l2,7)) | bndL2=$(lpad(bn_l2,7))"
+  row = "$(rpad(label,30)) | E=$(lpad(ne(get_graph(gs)),6)) | comp=$(lpad(t_comp,6))s | trn=$(lpad(t_trn,6))s | trL2=$(lpad(tr_l2,7)) | teL2=$(lpad(te_l2,7)) | intL2=$(lpad(in_l2,7)) | bndL2=$(lpad(bn_l2,7))"
   push!(rows_d,row)
 end
 
@@ -302,15 +304,16 @@ u_nl_te_true = OutputSpace(uh_nl_te).values
 
 h_nl = 1 / 15
 configs_nl = [
-  ("NL 1-hop r=2h PlainMP 1000ep",2*h_nl,PlainMP(),(16,16),      1000,TData(5e-3)),
-  ("NL 3-hop r=3h PlainMP 1000ep",3*h_nl,PlainMP(),(24,24,24,24),1000,TData(5e-3)),
+  ("NL 1-hop r=2h PlainMP 1000ep",  2*h_nl,PlainMP(),   (16,16),      FeatureKernelFormatter(),1000,TData(5e-3)),
+  ("NL 3-hop r=3h PlainMP 1000ep",  3*h_nl,PlainMP(),   (24,24,24,24),FeatureKernelFormatter(),1000,TData(5e-3)),
+  ("NL 3-hop r=3h AnchoredMP Spat", 3*h_nl,AnchoredMP(),(24,24,24,24),SpatialKernelFormatter(),1000,TData(5e-3)),
 ]
 
 rows_nl = String[]
-for (label,rad,rule,hlayers,ep,lr) in configs_nl
+for (label,rad,rule,hlayers,fmt,ep,lr) in configs_nl
   gs = GraphInducedSpace(V_nl;radius=rad)
   meas_cfg = InducedMeasure(gs;message_rule=rule)
-  gm = KernelNeuralModel(IntegralStyle(meas_cfg);hidden_layers=hlayers,activation=tanh)
+  gm = KernelNeuralModel(IntegralStyle(meas_cfg);hidden_layers=hlayers,activation=tanh,formatter=fmt)
   sched = CosineAnnealing(ep;lr_max=lr)
   slv = NeuralSolver(gm;epochs=ep,lr_scheduler=sched,verbose=true,print_every=ep + 1)
   lg = NonlinearROMs.get_logger(slv)

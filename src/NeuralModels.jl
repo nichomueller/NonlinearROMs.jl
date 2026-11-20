@@ -71,14 +71,16 @@ end
 function KernelNeuralModel(
   style::KernelStyle;
   hidden_layers=(16,16,16),
-  kernel_layers=(16,),
+  kernel_layers=nothing,
   channel_wise::Bool=true,
   activation=tanh,
   formatter=DataFormatter(style),
   kernel_activation=activation
   )
 
-  KernelNeuralModel(style,Tuple(hidden_layers),Tuple(kernel_layers),channel_wise,activation,formatter,kernel_activation)
+  hlayers = Tuple(hidden_layers)
+  klayers = isnothing(kernel_layers) ? (maximum(hlayers;init=16),) : Tuple(kernel_layers)
+  KernelNeuralModel(style,hlayers,klayers,channel_wise,activation,formatter,kernel_activation)
 end
 
 function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)

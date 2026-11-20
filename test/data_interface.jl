@@ -106,15 +106,15 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     denormalise!(out_data,mstats)
     @test out_data ≈ out_orig atol=1e-5
 
-    # Multi-scale channels: MScore should scale each channel independently
+    # Multi-scale channels: MScore scales each channel independently
     mc_data = zeros(TData,2,N,K)
     mc_data[1,:,:] .= 100.0f0 .* (0.5f0 .+ rand(TData,N,K))
     mc_data[2,:,:] .= 0.01f0 .* (0.5f0 .+ rand(TData,N,K))
     mstats_mc = MScore(mc_data;normalise=true)
-    @test_broken length(mstats_mc.scale) == 2
-    @test_broken maximum(abs,view(mc_data,2,:,:)) ≈ 1.0f0 atol=1e-5
+    @test length(mstats_mc.scale) == 2
+    @test maximum(abs,view(mc_data,2,:,:)) ≈ 1.0f0 atol=1e-5
 
-    # NormStyle(;normalise=false) must leave inputs and outputs untouched
+    # NormStyle(;normalise=false) leaves inputs and outputs untouched
     coords_raw = rand(TData,2,N,K) .* 5.0f0 .+ 2.0f0
     feats_raw = rand(TData,2,N,K) .* 10.0f0 .+ 3.0f0
     vals_raw = rand(TData,1,N,K) .* 7.0f0 .+ 4.0f0
@@ -122,7 +122,10 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     out_raw = copy(vals_raw)
     ns_off = NormStyle(;normalise=false)
     stats_off = Normalisation(ns_off,(in_raw,out_raw))
-    @test_broken (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
+    @test (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
+    normalise!(in_raw,stats_off)
+    denormalise!(out_raw,stats_off)
+    @test (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
   end
 
   @testset "DataFormatter, Concatenation & Kernel Formulations" begin

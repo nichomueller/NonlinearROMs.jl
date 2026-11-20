@@ -25,8 +25,8 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     reffe = ReferenceFE(lagrangian,Float64,1)
     V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
 
-    # 1. GraphMeasure integration: integrating a constant message c across all incoming
-    # edges of each node yields c at every node under uniform degree averaging
+    # 1. GraphMeasure integration: interior nodes integrate a constant message c to c,
+    # while clipped boundary neighborhoods scale proportionally to in_degree / max_degree
     gspace = GraphInducedSpace(V;radius=0.35)
     g = get_graph(gspace)
     gmeas = InducedMeasure(gspace)
@@ -38,7 +38,13 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     edge_const = fill(c_val,D,E,K)
     node_int = integration(edge_const,gmeas)
     @test size(node_int) == (D,N,K)
-    @test all(x -> isapprox(x,c_val;atol=1e-5),node_int)
+    in_degs = [length(inneighbors(g,v)) for v in vertices(g)]
+    max_deg = maximum(in_degs)
+    for v in vertices(g)
+      expected_v = c_val * TData(in_degs[v]) / TData(max_deg)
+      @test all(x -> isapprox(x,expected_v;atol=1e-5),node_int[:,v,:])
+    end
+    @test any(d -> d == max_deg,in_degs) && any(d -> d < max_deg,in_degs)
 
     # 2. FESpaceMeasure integration & Sobolev Energy Losses
     fspace = FunctionSpace(V)
@@ -65,8 +71,8 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     X_h1 = assemble_norm(H1(),fspace)
     expected_l2 = mean(dot(u_rand[1,:,k],X_l2 * u_rand[1,:,k]) for k in 1:K)
     expected_h1 = mean(dot(u_rand[1,:,k],X_h1 * u_rand[1,:,k]) for k in 1:K)
-    @test_broken isapprox(EnergyLoss(L2(),fspace)(u_rand,u_zero),expected_l2;rtol=1e-4)
-    @test_broken isapprox(EnergyLoss(H1(),fspace)(u_rand,u_zero),expected_h1;rtol=1e-4)
+    @test isapprox(EnergyLoss(L2(),fspace)(u_rand,u_zero),expected_l2;rtol=1e-4)
+    @test isapprox(EnergyLoss(H1(),fspace)(u_rand,u_zero),expected_h1;rtol=1e-4)
   end
 
   @testset "Kernel Network Non-Linearity & _kv Modes" begin
@@ -131,7 +137,7 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     ns_custom = NormStyle(;output_style=MScoreStyle())
     gno_ns = KernelNeuralModel(gspace;formatter=FeatureKernelFormatter(;norm_style=ns_custom))
     slv_ns = NeuralSolver(gno_ns;epochs=1,verbose=false)
-    @test_broken get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
+    @test get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
   end
 
   @testset "End-to-End Training & Non-Mutating Inference" begin
@@ -274,10 +280,10 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     E_mf = num_edges(gmeas_mf)
     vals_mf = rand(TData,4,N_mf,2)
     g_mf_data = gather_data(vals_mf,gmeas_mf)
-    @test size(g_mf_data) == (4,E_mf,2)
-    @test size(scatter_data(g_mf_data,gmeas_mf)) == (4,N_mf,2)
+    @test size(g_mf_data) == (2 * 4 + 1,E_mf,2)
+    @test size(scatter_data(g_mf_data,gmeas_mf)) == (2 * 4 + 1,N_mf,2)
     int_mf = integration(g_mf_data,gmeas_mf)
-    @test size(int_mf) == (4,N_mf,2)
+    @test size(int_mf) == (2 * 4 + 1,N_mf,2)
     @test all(isfinite,int_mf)
 
     # Multi-field BlockNorm EnergyLoss
@@ -291,7 +297,7 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
       ek = vcat(u_mf_rand[1,:,k],u_mf_rand[2,:,k],u_mf_rand[3,:,k])
       dot(ek,X_blk * ek)
     end for k in 1:2)
-    @test_broken isapprox(blk_loss(u_mf_rand,u_mf_zero),expected_blk;rtol=1e-4)
+    @test isapprox(blk_loss(u_mf_rand,u_mf_zero),expected_blk;rtol=1e-4)
 
     gno_mf = KernelNeuralModel(gspace_mf;hidden_layers=(8,8),activation=tanh)
     slv_mf = NeuralSolver(gno_mf;epochs=2,batch_size=0,loss=blk_loss,verbose=false)
@@ -362,14 +368,17 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     @test size(pred_f) == (1,length(get_coords(Vf)),4)
     @test all(isfinite,pred_f)
 
-    # replace_space must preserve non-default message passing rules (PlainMP, CompositeMP)
-    for rule in (PlainMP(),CompositeMP())
+    # replace_space preserves all message passing rules and remains runnable on the new mesh
+    for rule in (DifferenceMP(),PlainMP(),CompositeMP(),AnchoredMP())
       meas_r = InducedMeasure(gspace_c;message_rule=rule)
       gno_r = KernelNeuralModel(IntegralStyle(meas_r);hidden_layers=(8,8),activation=tanh)
       slv_r = NeuralSolver(gno_r;epochs=2,verbose=false)
       op_r = neural_operator(slv_r,in_c,out_c)
       op_r_f = replace_space(op_r,gspace_f)
-      @test_broken get_message_rule(op_r_f.chain.layers.layer_2.kernel.measure) isa typeof(rule)
+      @test get_message_rule(op_r_f.chain.layers.layer_2.kernel.measure) isa typeof(rule)
+      pred_r_f = solve(slv_r,op_r_f,InputSpace(Vf,fb))
+      @test size(pred_r_f) == (1,length(get_coords(Vf)),4)
+      @test all(isfinite,pred_r_f)
     end
   end
 end

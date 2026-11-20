@@ -189,7 +189,7 @@ function (l::MultipleAttentionKernel{N})((fixed_data,v),ps,st) where N
     st_value = (st_value...,st_valuei)
     y = (y...,attention_integral(si,vali,l.measure))
   end
-  z,st_aggregation = evaluate(l.aggregation,hcat(y...),ps.aggregation,st.aggregation)
+  z,st_aggregation = evaluate(l.aggregation,cat(y...;dims=1),ps.aggregation,st.aggregation)
   return (fixed_data,z),(score=st_score,value=st_value,aggregation=st_aggregation)
 end
 
@@ -254,6 +254,9 @@ function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
   sz = size(v)
   wout = reshape(ps.weights*reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
   y = l.activation.(wout .+ kout .+ ps.bias)
+  if l.in_dims == l.out_dims && l.activation !== identity
+    y = y .+ v
+  end
   return (fixed_data,y),(kernel=kst,)
 end
 
@@ -283,6 +286,18 @@ end
 function replace_measure(k::MultipleAttentionKernel,meas::InducedMeasure)
   _check_measure(k.measure,meas)
   MultipleAttentionKernel(k.scores,k.values,k.aggregation,meas,k.formatter)
+end
+
+_get_message_rule(::AbstractLuxLayer) = nothing
+_get_message_rule(l::KernelNeuralLayer) = _get_message_rule(l.kernel)
+_get_message_rule(k::Union{IntegralKernel,AttentionKernel,MultipleAttentionKernel}) = get_message_rule(k.measure)
+
+function _get_message_rule(c::Lux.Chain)
+  for l in c.layers
+    r = _get_message_rule(l)
+    !isnothing(r) && return r
+  end
+  return nothing
 end
 
 function _check_measure(old::InducedMeasure,new::InducedMeasure)

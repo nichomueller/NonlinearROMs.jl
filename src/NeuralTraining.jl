@@ -188,9 +188,11 @@ _edge_dims(s::IntegralStyle) = _edge_dims(get_message_rule(s.measure))
 
 _shape_factor(::MPRule) = 1
 _shape_factor(::PlainMP) = 2
+_shape_factor(::AnchoredMP) = 2
 
 _edge_dims(::MPRule) = 0
 _edge_dims(::PlainMP) = 1
+_edge_dims(::AnchoredMP) = 1
 _edge_dims(::CompositeMP) = 1
 
 function _selected_fixed_dims(::DataFormatter{A,B},fixed_dims::Int,coord_dims::Int) where {A,B}

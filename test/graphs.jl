@@ -202,5 +202,12 @@ end
     # PlainMP: [src; dst; dist] (2D + 1 channels)
     g_plain = gather_data(vals,InducedMeasure(gspace;message_rule=PlainMP()))
     @test size(g_plain) == (2D + 1,ne(g),K)
+    
+    # AnchoredMP: [dst; src - dst; dist] (2D + 1 channels)
+    g_anch = gather_data(vals,InducedMeasure(gspace;message_rule=AnchoredMP()))
+    @test size(g_anch) == (2D + 1,ne(g),K)
+    @test g_anch[1:D,1,:] ≈ vals[:,dst_ids[1],:]
+    @test g_anch[(D+1):(2D),1,:] ≈ vals[:,src_ids[1],:] .- vals[:,dst_ids[1],:]
+    @test all(x -> isapprox(x,w[1];atol=1e-6),g_anch[2D+1,1,:])
   end
 end

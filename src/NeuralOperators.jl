@@ -71,7 +71,7 @@ struct NeuralSolver{A<:NeuralModel} <: ROMSolver
   trainlog::TrainingLog
 end
 
-default_solver_formatter(model::NeuralModel) = DataFormatter()
+default_solver_formatter(model::NeuralModel) = DataFormatter(model)
 
 function NeuralSolver(
   model::NeuralModel;
@@ -148,7 +148,9 @@ training space is a [`MultipleSpaces`](@ref) of graphs, e.g. a moving geometry),
 the inputs must then live on `get_coords(space)`.
 """
 function replace_space(op::NeuralOperator,space::DiscreteSpace)
-  chain = replace_measure(op.chain,InducedMeasure(space))
+  rule = _get_message_rule(op.chain)
+  meas = isnothing(rule) ? InducedMeasure(space) : InducedMeasure(space;message_rule=rule)
+  chain = replace_measure(op.chain,meas)
   NeuralOperator(chain,op.parameters,op.states,op.stats)
 end
 

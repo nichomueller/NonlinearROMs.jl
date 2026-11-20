@@ -2,7 +2,7 @@
 
 abstract type MPRule end
 
-MPRule() = DifferenceMP()
+MPRule() = AnchoredMP()
 
 combine_message(::MPRule,src,dst,args...) = @abstractmethod
 
@@ -15,6 +15,10 @@ end
 struct PlainMP <: MPRule end
 
 combine_message(::PlainMP,src,dst,args...) = vcat(src,dst,args...)
+
+struct AnchoredMP <: MPRule end
+
+combine_message(::AnchoredMP,src,dst,args...) = vcat(dst,src .- dst,args...)
 
 struct DifferenceMP <: MPRule end
 
@@ -46,8 +50,11 @@ function compute_weights(f::GraphInducedSpace)
   for d in get_dst_ids(f)
     deg[d] += 1
   end
-  inv_deg = TData[d > 0 ? inv(TData(d)) : zero(TData) for d in deg]
-  return reshape(inv_deg,1,nv(graph),1)
+  # Normalize by reference interior degree to avoid amplifying clipped boundary neighborhoods
+  max_deg = maximum(deg;init=0)
+  w_ref = max_deg > 0 ? inv(TData(max_deg)) : zero(TData)
+  w = TData[d > 0 ? w_ref : zero(TData) for d in deg]
+  return reshape(w,1,nv(graph),1)
 end
 
 compute_weights(f::MultipleSpaces) = map(compute_weights,f.lspaces)
