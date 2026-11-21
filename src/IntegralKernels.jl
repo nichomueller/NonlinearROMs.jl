@@ -71,6 +71,15 @@ function (l::FourierKernel)((fixed_data,x),ps,st)
   return (fixed_data,y),st
 end
 
+# Carries hoisted per-edge inputs across layers sharing the same formatter/measure
+struct EdgeDataCache{F<:DataFormatter,A,B}
+  fixed_data::A
+  edge_data::B
+end
+
+_unwrap_fixed_data(x) = x
+_unwrap_fixed_data(x::EdgeDataCache) = x.fixed_data
+
 """
     struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
       kernel::A
@@ -114,12 +123,69 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)((fixed_data,v),ps,st)
-  x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
-  xk = gather_data(x,l.measure)
-  k,st = evaluate(l.kernel,xk,ps,st)
-  y = kv(k,v,l.measure)
-  z = integration(y,l.measure)
-  return (fixed_data,z),st
+  mst = measure_state(l.measure)
+  if isnothing(mst)
+    x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
+    xk = gather_data(x,l.measure)
+    k,st = evaluate(l.kernel,xk,ps,st)
+    y = kv(k,v,l.measure)
+    z = integration(y,l.measure)
+    return (fixed_data,z),st
+  end
+  (next_carrier,z),st = _apply_kernel(l,(fixed_data,v),ps,st,mst)
+  return (_unwrap_fixed_data(next_carrier),z),st
+end
+
+_kernel_measure_state(::AbstractIntegralKernel) = nothing
+_kernel_measure_state(k::IntegralKernel) = measure_state(k.measure)
+
+function _apply_kernel(k::AbstractIntegralKernel,(carrier,v),ps,st,mst)
+  k((_unwrap_fixed_data(carrier),v),ps,st)
+end
+
+function _apply_kernel(
+  l::IntegralKernel{<:Any,<:Union{GraphMeasure,FESpaceMeasure,MultipleMeasure},F},
+  (carrier,v),ps,st,mst
+  ) where {F<:DataFormatter}
+
+  fd = _unwrap_fixed_data(carrier)
+  xk′,next_carrier = _get_edge_input_last(l,carrier,fd,v,mst)
+  k′,st = evaluate(l.kernel,xk′,ps,st)
+  v′ = permutedims(v,(1,3,2))
+  v′_src = NNlib.gather(v′,mst.src_ids)
+  y′ = _kv(k′,v′_src)
+  z′ = _integration_last(y′,l.measure,mst)
+  z = permutedims(z′,(1,3,2))
+  return (next_carrier,z),st
+end
+
+function _get_edge_input_last(
+  l::IntegralKernel{<:Any,<:Any,<:DataFormatter{<:Any,<:Any,true}},
+  carrier,fd,v,mst
+  )
+
+  x = merge_data(l.formatter,fd,v,l.coord_dims)
+  x′ = permutedims(x,(1,3,2))
+  xk′ = _gather_data_last(x′,mst.src_ids,mst.dst_ids,mst.edge_weights,get_message_rule(l.measure))
+  return xk′,carrier
+end
+
+function _get_edge_input_last(
+  l::IntegralKernel{<:Any,<:Any,F},
+  carrier,fd,v,mst
+  ) where {A,B,F<:DataFormatter{A,B,false}}
+
+  if carrier isa EdgeDataCache{F} && size(carrier.edge_data,3) == num_edges(l.measure)
+    return carrier.edge_data,carrier
+  end
+  x = merge_data(l.formatter,fd,v,l.coord_dims)
+  # Coordinate-only kernels κ(x,y) are sample-independent: evaluate on K=1 and broadcast in _kv
+  if A && !B
+    x = view(x,:,:,1:1)
+  end
+  x′ = permutedims(x,(1,3,2))
+  xk′ = _gather_data_last(x′,mst.src_ids,mst.dst_ids,mst.edge_weights,get_message_rule(l.measure))
+  return xk′,EdgeDataCache{F,typeof(fd),typeof(xk′)}(fd,xk′)
 end
 
 struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel
@@ -207,15 +273,19 @@ One iterative layer of a kernel neural operator (Kovachki et al.):
 ```
 v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 ```
-`kernel` (`K_t`) is the non-local integral operator -- any `AbstractIntegralKernel`
-(`IntegralKernel` wrapping a graph/FE-quadrature `InducedMeasure`, `FourierKernel`,
-`AttentionKernel`, ...). The pointwise local linear term `W`, bias `b`, and
-nonlinearity `σ` are owned by this layer, not by `kernel`, since they're the same
-shape/role regardless of which non-local discretization `kernel` uses. Called as
-`l((fixed_data,v),ps,st)`: `v` feeds both the local `W v` term and `kernel`
-directly; `fixed_data` (the per-sample `(x,a(x))` tensor) is only relevant to
-`kernel` (via its own `formatter`) and passes through untouched, so the next
-layer in the stack can use it too.
+with a residual skip connection `+ v_t(x)` added whenever `in_dims == out_dims`
+and `activation !== identity` (omitted for `identity` so linear/affine operators
+remain strictly affine). `kernel` (`K_t`) is the non-local integral operator --
+any `AbstractIntegralKernel` (`IntegralKernel` wrapping a graph/FE-quadrature
+`InducedMeasure`, `FourierKernel`, `AttentionKernel`, ...). The pointwise local
+linear term `W`, bias `b`, and nonlinearity `σ` are owned by this layer, not by
+`kernel`, since they're the same shape/role regardless of which non-local
+discretization `kernel` uses. Called as `l((fixed_data,v),ps,st)`: `v` feeds
+both the local `W v` term and `kernel` directly; `fixed_data` (the per-sample
+`(x,a(x))` tensor, optionally wrapped in an edge-data cache across layers) is
+only relevant to `kernel` (via its own `formatter`) and passes through untouched,
+so the next layer in the stack can use it too. Precomputed measure topology and
+weights are stored in `st.measure` so they are transferred once to `XDEV`.
 
 `in_dims`/`out_dims` are the running hidden state's channel counts (`v_t`'s and
 `v_{t+1}`'s), sizing `W`/`b` -- **not** `kernel`'s own internal input width.
@@ -246,18 +316,19 @@ end
 function Lux.initialstates(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialstates(rng,l.kernel),
+    measure = _kernel_measure_state(l.kernel),
   )
 end
 
-function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
-  (_,kout),kst = l.kernel((fixed_data,v),ps.kernel,st.kernel)
+function (l::KernelNeuralLayer)((carrier,v),ps,st)
+  (next_carrier,kout),kst = _apply_kernel(l.kernel,(carrier,v),ps.kernel,st.kernel,st.measure)
   sz = size(v)
-  wout = reshape(ps.weights*reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
+  wout = reshape(ps.weights * reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
   y = l.activation.(wout .+ kout .+ ps.bias)
   if l.in_dims == l.out_dims && l.activation !== identity
     y = y .+ v
   end
-  return (fixed_data,y),(kernel=kst,)
+  return (next_carrier,y),(kernel=kst,measure=st.measure)
 end
 
 # swapping the discretisation (e.g. to evaluate on a new mesh), keeping the
@@ -298,6 +369,16 @@ function _get_message_rule(c::Lux.Chain)
     !isnothing(r) && return r
   end
   return nothing
+end
+
+replace_measure_state(::AbstractLuxLayer,st) = st
+
+function replace_measure_state(c::Lux.Chain,st::NamedTuple)
+  NamedTuple{keys(st)}(map(replace_measure_state,values(c.layers),values(st)))
+end
+
+function replace_measure_state(l::KernelNeuralLayer,st::NamedTuple)
+  (kernel=st.kernel,measure=_kernel_measure_state(l.kernel))
 end
 
 function _check_measure(old::InducedMeasure,new::InducedMeasure)
@@ -379,8 +460,8 @@ function _kv(k::AbstractInputData,v::AbstractInputData)
     return k .* v
   else
     dout = div(kdim,din)
-    k_r = reshape(k,dout,din,N,nbatch)
+    k_r = reshape(k,dout,din,size(k,2),size(k,3))
     v_r = reshape(v,1,din,N,nbatch)
-    return dropdims(sum(k_r.*v_r,dims=2),dims=2)
+    return dropdims(sum(k_r .* v_r,dims=2),dims=2)
   end
 end

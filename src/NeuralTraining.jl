@@ -108,9 +108,15 @@ function build_model(model::MultiLayerPerceptron,(inputs,outputs))
   build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
+_to_device_loss(loss) = loss
+
+function _to_device_loss(loss::EnergyLoss)
+  EnergyLoss(loss.X,loss.rows |> XDEV,loss.cols |> XDEV,loss.vals |> XDEV)
+end
+
 function train!(solver::NeuralSolver,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(solver)
-  loss = get_loss(solver)
+  loss = _to_device_loss(get_loss(solver))
   logger = get_logger(solver)
   to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
@@ -150,23 +156,37 @@ normalisation bundled into the returned [`NeuralOperator`](@ref).
 function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
   init!(logger)
 
+  # Pre-transfer the single full-batch tensor once to avoid per-epoch host-to-device copies
+  single_batch_dev = length(dataloader) == 1 ? to_device_batch(first(dataloader)) : nothing
+
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
     for epoch in 1:logger.max_epochs
       local current_loss = zero(TData)
 
-      for raw_batch in dataloader
-        batch_dev = to_device_batch(raw_batch)
-
+      if !isnothing(single_batch_dev)
         _,loss_val,_,train_state = Lux.Training.single_train_step!(
           Lux.AutoEnzyme(),
           loss,
-          batch_dev,
+          single_batch_dev,
           train_state;
           return_gradients=Val(false)
         )
-        current_loss += TData(loss_val)
+        current_loss = TData(loss_val)
+      else
+        for raw_batch in dataloader
+          batch_dev = to_device_batch(raw_batch)
+
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            loss,
+            batch_dev,
+            train_state;
+            return_gradients=Val(false)
+          )
+          current_loss += TData(loss_val)
+        end
+        current_loss /= length(dataloader)
       end
-      current_loss /= length(dataloader)
 
       step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
 

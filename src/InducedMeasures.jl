@@ -8,7 +8,9 @@ combine_message(::MPRule,src,dst,args...) = @abstractmethod
 
 function combine_message(r::MPRule,src,dst;edge_weights=nothing)
   isnothing(edge_weights) && return combine_message(r,src,dst)
-  w = repeat(reshape(edge_weights,1,1,:);inner=(1,size(src,2),1))
+  k = size(src,2)
+  w0 = reshape(edge_weights,1,1,:)
+  w = k == 1 ? w0 : repeat(w0;inner=(1,k,1))
   combine_message(r,src,dst,w)
 end
 
@@ -22,6 +24,7 @@ combine_message(::AnchoredMP,src,dst,args...) = vcat(dst,src .- dst,args...)
 
 struct DifferenceMP <: MPRule end
 
+combine_message(::DifferenceMP,src,dst;edge_weights=nothing) = src .- dst
 combine_message(::DifferenceMP,src,dst,args...) = src .- dst
 
 struct CompositeMP <: MPRule end
@@ -314,4 +317,91 @@ function _mat_mul_data(A::AbstractSparseMatrix,x::AbstractInputData)
   weighted = gathered .* w
   out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
   return permutedims(out_perm,(1,3,2))
+end
+
+# Precomputed measure topology/weights stored in Lux states (transferred once to XDEV)
+
+measure_state(::InducedMeasure) = nothing
+
+function measure_state(meas::GraphMeasure)
+  (
+    src_ids = get_src_ids(meas),
+    dst_ids = get_dst_ids(meas),
+    edge_weights = get_edge_weights(meas),
+    weights = permutedims(get_weights(meas),(1,3,2)),
+  )
+end
+
+function measure_state(meas::FESpaceMeasure)
+  rows,cols,vals = findnz(get_weights(meas))
+  (
+    src_ids = cols,
+    dst_ids = rows,
+    edge_weights = vals,
+    weights = reshape(vals,1,1,length(vals)),
+  )
+end
+
+function measure_state(meas::MultipleMeasure)
+  space = get_space(meas)
+  lmeas = get_local_measures(meas)
+  l_states = map(measure_state,lmeas)
+  l_coords = ntuple(l -> collect(Int,space.l_to_lcoord_to_coords[l]),length(lmeas))
+  (
+    src_ids = get_src_ids(meas),
+    dst_ids = get_dst_ids(meas),
+    edge_weights = get_edge_weights(meas),
+    local_states = l_states,
+    local_coords = l_coords,
+  )
+end
+
+# Edge-last (D,K,N) <-> (D,K,E) primitives avoiding per-layer edge permutations
+
+function _gather_data_last(x′::AbstractInputData,ids_src,ids_dst,edge_weights,rule::MPRule)
+  src′ = NNlib.gather(x′,ids_src)
+  dst′ = NNlib.gather(x′,ids_dst)
+  combine_message(rule,src′,dst′;edge_weights)
+end
+
+function _integration_last(y′::AbstractInputData,meas::GraphMeasure,mst)
+  d,k,_ = size(y′)
+  NNlib.scatter(+,y′,mst.dst_ids;dstsize=(d,k,num_vertices(meas))) .* mst.weights
+end
+
+function _integration_last(y′::AbstractInputData,meas::FESpaceMeasure,mst)
+  d,k,_ = size(y′)
+  NNlib.scatter(+,y′ .* mst.weights,mst.dst_ids;dstsize=(d,k,num_vertices(meas)))
+end
+
+function _integration_last(y′::AbstractInputData,meas::MultipleMeasure,mst)
+  space = get_space(meas)
+  l_to_sample_offset = space.l_to_sample_offset
+  _check_samples_last(l_to_sample_offset,y′)
+  lmeas = get_local_measures(meas)
+  N = num_vertices(meas)
+  d = size(y′,1)
+  eoff = 0
+  outs = map(enumerate(lmeas)) do (l,m)
+    ne_m = num_edges(m)
+    edges = (eoff + 1):(eoff + ne_m)
+    eoff += ne_m
+    samples = _get_range(l_to_sample_offset,l)
+    ly′ = y′[:,samples,edges]
+    lout′ = _integration_last(ly′,m,mst.local_states[l])
+    NNlib.scatter(+,lout′,mst.local_coords[l];dstsize=(d,size(lout′,2),N))
+  end
+  _combine_blocks_last(l_to_sample_offset,outs)
+end
+
+_combine_blocks_last(::Nothing,outs) = reduce(+,outs)
+_combine_blocks_last(::AbstractVector,outs) = cat(outs...;dims=2)
+
+_check_samples_last(::Nothing,a) = nothing
+
+function _check_samples_last(l_to_sample_offset::AbstractVector,a)
+  msg = """The data has $(size(a,2)) samples, but the measure expects $(last(l_to_sample_offset)-1),
+  one block per local space: the samples of a MultipleSpaces with sample offsets cannot be
+  batched (use a full batch, `batch_size=0`)"""
+  @check size(a,2) == last(l_to_sample_offset) - 1 msg
 end

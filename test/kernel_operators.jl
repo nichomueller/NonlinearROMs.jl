@@ -138,6 +138,27 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     gno_ns = KernelNeuralModel(gspace;formatter=FeatureKernelFormatter(;norm_style=ns_custom))
     slv_ns = NeuralSolver(gno_ns;epochs=1,verbose=false)
     @test get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
+    
+    # SpatialKernelFormatter K=1 fast-path must match sample-by-sample evaluation
+    shared_coords = repeat(rand(TData,2,N,1),1,1,K)
+    var_feats = rand(TData,in_dims - 2,N,K)
+    sp_in = vcat(shared_coords,var_feats)
+    for cw in (true,false)
+      kno_sp = KernelNeuralModel(
+        gspace;
+        hidden_layers=(8,8,8),
+        channel_wise=cw,
+        activation=tanh,
+        formatter=SpatialKernelFormatter()
+      )
+      ch_sp = build_model(kno_sp,(sp_in,dummy_out))
+      ps_sp,st_sp = Lux.setup(Random.default_rng(),ch_sp)
+      pred_batch,_ = ch_sp(sp_in,ps_sp,st_sp)
+      for k in 1:K
+        pred_k,_ = ch_sp(sp_in[:,:,k:k],ps_sp,st_sp)
+        @test pred_batch[:,:,k:k] ≈ pred_k atol=1e-5
+      end
+    end
   end
 
   @testset "End-to-End Training & Non-Mutating Inference" begin

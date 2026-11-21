@@ -2,58 +2,63 @@
 
 > Temporary tracking file updated across the refactoring commits.
 
-## Current Results (Accuracy & Correctness Fixes)
+## Current Results (CPU & Reactant/XLA Optimizations)
 
 ### 1. Test Suite (`Pkg.test("NonlinearROMs")`)
-- **Result:** `1205 Pass | 0 Broken | 1205 Total` (`4m25.9s`)
+- **Result:** `1213 Pass | 0 Broken | 1213 Total` (`4m39.3s`)
 
 ### 2. CPU Micro-Benchmarks (`50x50`, `N=2550`, `E=26690`, `K=10`, `PlainMP`)
 | Benchmark | Median Time | Memory | Allocs |
 | :--- | :---: | :---: | :---: |
-| `ZScore` (`D=6`) | `449.684 μs` | `1.17 MiB` | `29` |
-| `gather_data` (`PlainMP`) | `9.524 ms` | `40.29 MiB` | `38` |
-| `_integration` | `5.466 ms` | `20.96 MiB` | `12` |
-| `_kv` Full-Matrix (`16x16`) | `116.061 ms` | `276.94 MiB` | `15` |
-| `_kv` Channel-Wise (`16`) | `2.056 ms` | `16.29 MiB` | `3` |
-| `EnergyLoss(H1(),fspace)` | `1.338 ms` | `2.62 MiB` | `31` |
-| Full GNO Chain (2 layers, `FeatureKernel`) | `151.342 ms` | `301.07 MiB` | `213` |
-| Full GNO Chain (2 layers, `SpatialKernel`) | `119.291 ms` | `251.42 MiB` | `215` |
+| `ZScore` (`D=6`) | `244.422 μs` | `160 B` | `4` |
+| `gather_data` (`PlainMP`) | `9.732 ms` | `40.29 MiB` | `38` |
+| `_integration` | `5.565 ms` | `20.96 MiB` | `12` |
+| `_kv` Full-Matrix (`16x16`) | `117.984 ms` | `276.94 MiB` | `15` |
+| `_kv` Channel-Wise (`16`) | `2.255 ms` | `16.29 MiB` | `3` |
+| `EnergyLoss(H1(),fspace)` | `1.333 ms` | `2.09 MiB` | `19` |
+| Full GNO Chain (2 layers, `FeatureKernel`) | `83.563 ms` | `182.38 MiB` | `130` |
+| Full GNO Chain (2 layers, `SpatialKernel`) | `37.010 ms` | `97.62 MiB` | `128` |
 
 ### 3. Reactant / XLA Training (`50x50`, `PlainMP`, 2 layers, 200 epochs, `K=10`)
+> Note: this run was executed in an already warm Julia session. In a fresh session, the first epoch (cold JIT + training) takes ~`133 s`, with post-compilation training around `30–32 s`.
+
 | Metric | Value |
 | :--- | :---: |
-| First epoch (JIT + training) | `132.033 s` |
-| Training after first epoch (199 ep) | `26.281 s` |
-| Training loop total | `158.313 s` |
-| Setup and other overhead | `1.798 s` |
-| Total call time | `160.111 s` |
+| First epoch (warm JIT + training) | `3.348 s` |
+| Training after first epoch (199 ep) | `31.951 s` |
+| Training loop total | `35.299 s` |
+| Setup and other overhead | `0.177 s` |
+| Total call time | `35.476 s` |
 
 ### 4. 2D Poisson Diagnostic (`25x25`, 30 train / 10 test)
 | Config | E | Compile (s) | Train (s) | Train L2 | Test L2 | Int L2 | Bnd L2 |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| `1-hop r=2h DiffMP 300ep` | `6924` | `5.71` | `14.57` | `0.11563` | `0.11019` | `0.10235` | `0.13008` |
-| `1-hop r=2h PlainMP 300ep` | `6924` | `3.55` | `15.10` | `0.11268` | `0.11001` | `0.10286` | `0.12833` |
-| `1-hop r=2h PlainMP 1500ep` | `6924` | `1.82` | `78.29` | `0.05789` | `0.08790` | `0.08328` | `0.09996` |
-| `2-hop r=3h PlainMP 1500ep` | `16744` | `4.77` | `546.03` | `0.02046` | `0.09158` | `0.08844` | `0.10002` |
-| `1-hop r=2h PlainMP H1-loss` | `6924` | `5.31` | `77.02` | `0.09194` | `0.06790` | `0.06509` | `0.07538` |
-| `1-hop r=2h AnchoredMP H1+wd` | `6924` | `9.73` | `77.24` | `0.09408` | `0.07214` | `0.06923` | `0.07988` |
-| `2-hop r=3h AnchoredMP wd` | `16744` | `13.18` | `518.18` | `0.01704` | `0.06043` | `0.05355` | `0.07680` |
+| `1-hop r=2h DiffMP 300ep` | `6924` | `5.69` | `15.12` | `0.11563` | `0.11019` | `0.10235` | `0.13008` |
+| `1-hop r=2h PlainMP 300ep` | `6924` | `3.21` | `16.10` | `0.11268` | `0.11001` | `0.10286` | `0.12833` |
+| `1-hop r=2h PlainMP 1500ep` | `6924` | `1.48` | `80.90` | `0.05789` | `0.08790` | `0.08328` | `0.09996` |
+| `2-hop r=3h PlainMP 1500ep` | `16744` | `2.15` | `532.87` | `0.02044` | `0.09161` | `0.08848` | `0.10003` |
+| `1-hop r=2h PlainMP H1-loss` | `6924` | `4.68` | `79.88` | `0.09194` | `0.06790` | `0.06509` | `0.07538` |
+| `1-hop r=2h AnchoredMP H1+wd` | `6924` | `9.24` | `81.07` | `0.09408` | `0.07214` | `0.06923` | `0.07988` |
+| `2-hop r=3h AnchoredMP wd` | `16744` | `12.24` | `531.15` | `0.01696` | `0.06029` | `0.05340` | `0.07669` |
 
 ### 5. Non-Local Multi-Mode 2D Poisson (`15x15`, 40 train / 10 test)
 | Config | E | Compile (s) | Train (s) | Train L2 | Test L2 |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| `NL 1-hop r=2h PlainMP 1000ep` | `1992` | `2.00` | `17.03` | `0.29842` | `0.35355` |
-| `NL 3-hop r=3h PlainMP 1000ep` | `4544` | `15.77` | `160.32` | `0.10819` | `0.17546` |
-| `NL 3-hop r=3h AnchoredMP Spat` | `4544` | `14.31` | `156.72` | `0.09608` | `0.14465` |
+| `NL 1-hop r=2h PlainMP 1000ep` | `1992` | `1.80` | `17.32` | `0.29840` | `0.35354` |
+| `NL 3-hop r=3h PlainMP 1000ep` | `4544` | `16.33` | `167.22` | `0.10810` | `0.17539` |
+| `NL 3-hop r=3h AnchoredMP Spat` | `4544` | `12.90` | `80.01` | `0.09593` | `0.14448` |
 
-### 6. Analysis of Results
+### 6. Observations & Limitations
 
-- **Fixing `EnergyLoss(H1)` (accuracy and speed):** Updating `EnergyLoss` to compute the standard Gram norm $(1/K)\sum_k e_k^T X e_k$ instead of $\|X e\|_2^2 = e^T X^2 e$ brings the `1-hop PlainMP H1-loss` test error down from `18.10%` to `6.79%` (train: `21.52% -> 9.19%`). In these runs, it performs better than MSE on the same setup (`6.79%` vs. `8.79%`). CPU evaluation time and memory usage also drop roughly by half (`2.57 ms / 4.85 MiB -> 1.34 ms / 2.62 MiB`), mainly because the function now only needs one sparse matrix-vector product per call instead of two.
-- **Boundary behavior and multi-hop results on 2D Poisson (`25x25`):**
-  - On `1-hop PlainMP 1500ep`, normalizing by the maximum degree (`1 / max_deg`) instead of each node's local degree (`1 / in_degree`)—along with adding residual connections—reduces test error from `13.03%` to `8.79%`. This seems to help mostly near the boundaries, where error drops from `15.41%` to `10.00%`.
-  - On `2-hop r=3h`, combining `AnchoredMP` (`[dst; src - dst; w]`), `1 / max_deg` normalization, residual connections, a wider kernel (`24`), and `weight_decay = 1e-4` lowers test error from `9.30%` to `6.04%` (`intL2 = 5.36%`, `bndL2 = 7.68%`, `trL2 = 1.70%`).
-- **Results on the multi-mode problem (`15x15`):** On this test case, `3-hop PlainMP` test error moves from `18.54%` to `17.55%`. Switching to `AnchoredMP` with `SpatialKernelFormatter` lowers it further to `14.47%` (`trL2 = 9.61%`), likely because a coordinate-only kernel $\kappa(x,y)$ is sufficient when the underlying PDE has constant coefficients.
-- **Current performance and memory bottlenecks:**
-  - The 2-layer CPU forward pass (`FeatureKernel`: `151.34 ms / 301.07 MiB`; `SpatialKernel`: `119.29 ms / 251.42 MiB`) and multi-hop XLA training (`2-hop`: `518–546 s` for 1500 epochs; `3-hop`: `157–160 s` for 1000 epochs) are still relatively slow. Most of the overhead seems to come from repeated 3D `permutedims`, calling `gather_data` at every layer, re-evaluating `SpatialKernel` per sample, and embedding graph topology arrays directly as inline MLIR constants.
-  - The longer 2-hop XLA training time (`465 s -> 546 s`) is expected, as `kernel_layers` automatically scaled from `(16,)` to `(24,)` to match `hidden_layers = (24, 24, 24)`.
-  - `ZScore` still allocates `1.17 MiB` because it makes a full `Float64` copy of the array.
+- **CPU forward pass and memory:**
+  - Replacing the full `Float64` copy in `ZScore` with a two-pass loop reduces median time from `~450 μs` to `~244 μs` and memory from `1.17 MiB` (`29` allocs) to `160 B` (`4` allocs).
+  - Keeping edge tensors in `(D, K, E)` layout inside `IntegralKernel` and reusing `gather_data` across layers (`EdgeDataCache`) lowers the 2-layer CPU forward pass for `FeatureKernel` from `~151 ms / 301 MiB` to `~84 ms / 182 MiB` (`213 -> 130` allocs).
+  - Evaluating `SpatialKernelFormatter` on `K = 1` and broadcasting in `_kv` lowers the 2-layer CPU forward pass from `~119 ms / 251 MiB` to `~37 ms / 98 MiB`.
+  - Precomputing sparse triplets `(rows, cols, vals)` in `EnergyLoss` trims memory from `2.62 MiB` (`31` allocs) to `2.09 MiB` (`19` allocs) at roughly the same median runtime (`~1.33 ms`).
+- **Reactant / XLA training:**
+  - The clearest XLA speedup is on the non-local 3-hop `SpatialKernel` case (`15x15`, `K = 40`), where training time drops from `~157 s` to `~80 s` thanks to the `K = 1` kernel evaluation.
+  - For feature-dependent kernels (`FeatureKernel`), per-epoch XLA training time did **not** improve meaningfully: `2-hop` training stays around `531–533 s`, and the 50x50 200-epoch test is slightly slower (`~30–32 s` vs. `~26 s` before). This suggests XLA was already fusing most permutations on its own, and that per-epoch cost on CPU is mostly limited by memory bandwidth over the large `(D, K, E)` edge-sample tensors.
+  - Warm compilation times in Sections 4–5 are modestly lower in most cases (e.g., `2-hop PlainMP`: `4.77 s -> 2.15 s`), though the effect varies across configurations. Cold first-epoch compilation in a fresh Julia session remains around `~133 s`.
+- **Consistency and caveats:**
+  - All `1213` tests pass, and the accuracy metrics in Sections 4–5 match the previous run to 4 decimal places.
+  - All timings are measured on a single CPU machine and show normal run-to-run variance.

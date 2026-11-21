@@ -184,13 +184,29 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  data64 = Float64.(data)
-  μ = TData.(dropdims(mean(data64,dims=(2,3)),dims=(2,3)))
-  σ = TData.(dropdims(std(data64,dims=(2,3)),dims=(2,3)))
-  @inbounds for i in eachindex(σ)
-    if σ[i] < TData(1e-6)
-      μ[i] = zero(eltype(μ))
-      σ[i] = one(eltype(σ))
+  D,N,K = size(data)
+  n = N * K
+  μ = Vector{TData}(undef,D)
+  σ = Vector{TData}(undef,D)
+  @inbounds for d in 1:D
+    # Two-pass Float64 accumulation avoids allocating a full Float64 copy of data
+    s = 0.0
+    for k in 1:K,i in 1:N
+      s += Float64(data[d,i,k])
+    end
+    m = s / n
+    ss = 0.0
+    for k in 1:K,i in 1:N
+      diff = Float64(data[d,i,k]) - m
+      ss += diff * diff
+    end
+    sd = n > 1 ? sqrt(ss / (n - 1)) : 0.0
+    if sd < 1e-6
+      μ[d] = zero(TData)
+      σ[d] = one(TData)
+    else
+      μ[d] = TData(m)
+      σ[d] = TData(sd)
     end
   end
   return ZScore(μ,σ)
@@ -329,8 +345,11 @@ end
 assemble_norm(args...) = @abstractmethod
 
 """
-    struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+    struct EnergyLoss{A<:AbstractMatrix,B<:AbstractVector,C<:AbstractVector} <: Lux.AbstractLossFunction
       X::A
+      rows::B
+      cols::B
+      vals::C
     end
 
     EnergyLoss(op::AssembleOperator,f)
@@ -339,29 +358,40 @@ Sample-averaged squared energy norm `(1/K) Σ_k (ŷ_k - y_k)' X (ŷ_k - y_k)`,
 with `X` the Gram matrix of the `GridapROMs` norm `op` (`ℓ2()`, `L2()`, `H1()`,
 ...) on `f`'s point layout (see [`assemble_norm`](@ref)). `X` is either `(N,N)`,
 shared by every channel, or `(D*N,D*N)`, block-diagonal with one block per
-channel (the multi-field case).
+channel (the multi-field case). The sparse triplets `(rows,cols,vals)` are
+precomputed at construction time (and moved to `XDEV` during training) to avoid
+calling `findnz` at every training step.
 """
-struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+struct EnergyLoss{A<:AbstractMatrix,B<:AbstractVector,C<:AbstractVector} <: Lux.AbstractLossFunction
   X::A
+  rows::B
+  cols::B
+  vals::C
 end
 
+function EnergyLoss(X::AbstractSparseMatrix)
+  rows,cols,vals = findnz(X)
+  EnergyLoss(X,rows,cols,vals)
+end
+
+EnergyLoss(X::AbstractMatrix) = EnergyLoss(sparse(X))
 EnergyLoss(op::AssembleOperator,f) = EnergyLoss(assemble_norm(op,f))
 
 function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
   e = ŷ .- y
-  Xe = _norm_mul_data(loss.X,e)
-  return sum(e .* Xe) / TData(size(e,3))
-end
-
-function _norm_mul_data(X::AbstractMatrix,x::AbstractInputData)
-  D,N,K = size(x)
-  if size(X,1) == N
-    _mat_mul_data(X,x)
+  D,N,K = size(e)
+  w = reshape(loss.vals,1,1,length(loss.vals))
+  if size(loss.X,1) == N
+    e_p = permutedims(e,(1,3,2))
+    gathered = NNlib.gather(e_p,loss.cols)
+    Xe_p = NNlib.scatter(+,gathered .* w,loss.rows;dstsize=(D,K,N))
+    return sum(e_p .* Xe_p) / TData(K)
   else
-    @check size(X,1) == D*N "Norm matrix of size $(size(X)) incompatible with data of size $(size(x))"
-    x_flat = reshape(permutedims(x,(2,1,3)),1,N*D,K)
-    y_flat = _mat_mul_data(X,x_flat)
-    permutedims(reshape(y_flat,N,D,K),(2,1,3))
+    @check size(loss.X,1) == D * N "Norm matrix of size $(size(loss.X)) incompatible with data of size $(size(e))"
+    e_p = reshape(permutedims(e,(3,2,1)),1,K,N * D)
+    gathered = NNlib.gather(e_p,loss.cols)
+    Xe_p = NNlib.scatter(+,gathered .* w,loss.rows;dstsize=(1,K,N * D))
+    return sum(e_p .* Xe_p) / TData(K)
   end
 end
 

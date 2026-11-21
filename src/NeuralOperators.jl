@@ -151,7 +151,8 @@ function replace_space(op::NeuralOperator,space::DiscreteSpace)
   rule = _get_message_rule(op.chain)
   meas = isnothing(rule) ? InducedMeasure(space) : InducedMeasure(space;message_rule=rule)
   chain = replace_measure(op.chain,meas)
-  NeuralOperator(chain,op.parameters,op.states,op.stats)
+  states = replace_measure_state(chain,op.states)
+  NeuralOperator(chain,op.parameters,states,op.stats)
 end
 
 """
