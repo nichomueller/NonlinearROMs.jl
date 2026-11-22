@@ -75,6 +75,8 @@ end
 struct EdgeDataCache{F<:DataFormatter,A,B}
   fixed_data::A
   edge_data::B
+  measure_id::UInt
+  coord_dims::Int
 end
 
 _unwrap_fixed_data(x) = x
@@ -99,8 +101,12 @@ and fed to `kernel` -- different layers legitimately want different subsets
 are exactly a choice of `formatter`). `coord_dims` is how many of `fixed_data`'s
 leading rows are coordinates (vs. features), which `formatter`'s
 `pass_coords`/`pass_features` use to select which part of `fixed_data` to keep
-(see [`DataInterface.merge_data`](@ref)). `fixed_data` passes through unchanged
-so the next layer can use it too.
+(see [`DataInterface.merge_data`](@ref)). For coordinate-only formatters
+(`pass_coords=Val(true)`, `pass_features=Val(false)`, `pass_new_data=Val(false)`,
+e.g. [`SpatialKernelFormatter`](@ref)), the spatial coordinates are assumed to be
+shared across samples in a batch so `kernel` is evaluated on a single slice (`K=1`)
+and broadcast in `_kv`. `fixed_data` passes through unchanged so the next layer
+can use it too.
 """
 struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
   kernel::A
@@ -175,17 +181,24 @@ function _get_edge_input_last(
   carrier,fd,v,mst
   ) where {A,B,F<:DataFormatter{A,B,false}}
 
-  if carrier isa EdgeDataCache{F} && size(carrier.edge_data,3) == num_edges(l.measure)
+  mid = objectid(l.measure)
+  if (
+    carrier isa EdgeDataCache{F} &&
+    carrier.measure_id == mid &&
+    carrier.coord_dims == l.coord_dims &&
+    size(carrier.edge_data,3) == num_edges(l.measure)
+  )
     return carrier.edge_data,carrier
   end
   x = merge_data(l.formatter,fd,v,l.coord_dims)
-  # Coordinate-only kernels κ(x,y) are sample-independent: evaluate on K=1 and broadcast in _kv
+  # Coordinate-only kernels κ(x,y) are sample-independent (shared mesh across samples):
+  # evaluate on K=1 and broadcast in _kv
   if A && !B
     x = view(x,:,:,1:1)
   end
   x′ = permutedims(x,(1,3,2))
   xk′ = _gather_data_last(x′,mst.src_ids,mst.dst_ids,mst.edge_weights,get_message_rule(l.measure))
-  return xk′,EdgeDataCache{F,typeof(fd),typeof(xk′)}(fd,xk′)
+  return xk′,EdgeDataCache{F,typeof(fd),typeof(xk′)}(fd,xk′,mid,l.coord_dims)
 end
 
 struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel

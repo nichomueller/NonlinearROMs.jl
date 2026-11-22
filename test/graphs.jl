@@ -100,6 +100,14 @@ end
     subg = NystromSubgraph(g;subgraph_size=sub_n)
     @test nv(subg.graph) == sub_n
     @test length(subg.vertex_map) == sub_n
+    
+    # Exact distance radius must give uniform interior in-degree without Float64 edge drops
+    model_lat = CartesianDiscreteModel((0,1,0,1),(10,10))
+    V_lat = TestFESpace(model_lat,reffe;conformity=:H1)
+    coords_lat = get_coords(V_lat)
+    g_lat = build_graph(coords_lat;radius=2 / 10)
+    int_ids = findall(p -> 0.2 <= p[1] <= 0.8 && 0.2 <= p[2] <= 0.8,coords_lat)
+    @test all(v -> length(inneighbors(g_lat,v)) == 13,int_ids)
   end
 
   @testset "GraphInducedSpace, gather_data, scatter_data & attention" begin
@@ -108,7 +116,7 @@ end
 
     # gather_data/scatter_data/attention run on an InducedMeasure, not a bare space --
     # PlainMP is requested explicitly here (vcat(src,dst,weight)) since the default
-    # message_rule is DifferenceMP, which this test's shape/content assertions don't match.
+    # message_rule is AnchoredMP, which this test's shape/content assertions don't match.
     gmeas = InducedMeasure(gspace; message_rule=PlainMP())
 
     src_ids = NonlinearROMs.get_src_ids(gmeas)
@@ -175,7 +183,7 @@ end
     end
   end
   
-  @testset "MPRules (DifferenceMP, CompositeMP, PlainMP)" begin
+  @testset "MPRules (DifferenceMP, CompositeMP, PlainMP, AnchoredMP)" begin
     model = CartesianDiscreteModel((0,1,0,1),(5,5))
     reffe = ReferenceFE(lagrangian,Float64,1)
     V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")

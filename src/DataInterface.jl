@@ -45,8 +45,8 @@ function DataFormatter(;
   DataFormatter(pass_coords,pass_features,pass_new_data,norm_style,sampler)
 end
 
-# Constructor for the 3 formulation of Kovachki et al. (Sez. 3, Eq. 7, 8, 9):
-# Eq. (7): κ(x, y)
+# Constructors for the 3 formulations of Kovachki et al. (Sec. 3, Eqs. 7, 8, 9):
+# Eq. (7): κ(x, y) -- assumes spatial coordinates are shared across samples (K=1 fast path)
 SpatialKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false),kwargs...)
 # Eq. (8): κ(x, y, a(x), a(y))
 FeatureKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(false),kwargs...)

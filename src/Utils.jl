@@ -371,7 +371,8 @@ end
 
 function EnergyLoss(X::AbstractSparseMatrix)
   rows,cols,vals = findnz(X)
-  EnergyLoss(X,rows,cols,vals)
+  vals_t = eltype(vals) === TData ? vals : TData.(vals)
+  EnergyLoss(X,rows,cols,vals_t)
 end
 
 EnergyLoss(X::AbstractMatrix) = EnergyLoss(sparse(X))

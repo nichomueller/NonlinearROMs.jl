@@ -53,7 +53,8 @@ function compute_weights(f::GraphInducedSpace)
   for d in get_dst_ids(f)
     deg[d] += 1
   end
-  # Normalize by reference interior degree to avoid amplifying clipped boundary neighborhoods
+  # Normalize by reference interior degree to avoid amplifying clipped boundary
+  # neighborhoods (assumes a quasi-uniform point distribution across the domain)
   max_deg = maximum(deg;init=0)
   w_ref = max_deg > 0 ? inv(TData(max_deg)) : zero(TData)
   w = TData[d > 0 ? w_ref : zero(TData) for d in deg]

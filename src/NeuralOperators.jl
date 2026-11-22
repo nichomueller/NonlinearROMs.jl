@@ -186,22 +186,24 @@ Returns a `NeuralOperator` containing the trained network, its optimized weights
 function neural_operator(
   solver::NeuralSolver,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  output_space::AbstractOutputSpace;
+  kwargs...
   )
-  
+
   data,stats = fetch_data_and_stats(solver,input_space,output_space)
-  train(solver,data,stats)
+  train(solver,data,stats;kwargs...)
 end
 
 function neural_operator(
   solver::NeuralSolver,
   old_op::NeuralOperator,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  output_space::AbstractOutputSpace;
+  kwargs...
   )
-  
+
   data,stats = fetch_data_and_stats(solver,old_op,input_space,output_space)
-  train(solver,data,stats)
+  train(solver,data,stats;kwargs...)
 end
 
 function Algebra.solve(

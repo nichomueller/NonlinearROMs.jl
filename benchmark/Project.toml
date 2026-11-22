@@ -1,0 +1,11 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+Gridap = "56d4f2e9-7ea1-5844-9cf6-b9c51ca7ce8e"
+GridapROMs = "9ec1d169-1b02-4ed6-9618-ff21f43ad569"
+GridapSolvers = "6d3209ee-5e3c-4db7-a716-942eb12ed534"
+Lux = "b2108857-7c20-44ae-9111-449ecde12c47"
+NonlinearROMs = "dcd789dd-871c-4daf-91a9-c07bc3379936"
+
+[sources]
+NonlinearROMs = {path = ".."}

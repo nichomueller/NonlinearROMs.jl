@@ -73,6 +73,12 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     expected_h1 = mean(dot(u_rand[1,:,k],X_h1 * u_rand[1,:,k]) for k in 1:K)
     @test isapprox(EnergyLoss(L2(),fspace)(u_rand,u_zero),expected_l2;rtol=1e-4)
     @test isapprox(EnergyLoss(H1(),fspace)(u_rand,u_zero),expected_h1;rtol=1e-4)
+    
+    # EnergyLoss converts Float64 sparse Gram matrices to TData without type promotion
+    loss_f64 = EnergyLoss(Float64.(X_h1))
+    val_f64 = loss_f64(u_rand,u_zero)
+    @test val_f64 isa TData
+    @test isapprox(val_f64,expected_h1;rtol=1e-4)
   end
 
   @testset "Kernel Network Non-Linearity & _kv Modes" begin
@@ -159,6 +165,20 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
         @test pred_batch[:,:,k:k] ≈ pred_k atol=1e-5
       end
     end
+    
+    # EdgeDataCache must not reuse edge tensors across layers with different measures
+    meas_a = InducedMeasure(gspace;message_rule=PlainMP())
+    meas_b = InducedMeasure(gspace;message_rule=AnchoredMP())
+    ch_a = build_model(KernelNeuralModel(IntegralStyle(meas_a);hidden_layers=(8,8,8),activation=tanh),(dummy_in,dummy_out))
+    ch_b = build_model(KernelNeuralModel(IntegralStyle(meas_b);hidden_layers=(8,8,8),activation=tanh),(dummy_in,dummy_out))
+    ch_mix = Lux.Chain(ch_a.layers.layer_1,ch_a.layers.layer_2,ch_b.layers.layer_3,ch_a.layers.layer_4)
+    ps_m,st_m = Lux.setup(Random.default_rng(),ch_mix)
+    pred_mix,_ = ch_mix(dummy_in,ps_m,st_m)
+    (_,v1),_ = ch_mix.layers.layer_1(dummy_in,ps_m.layer_1,st_m.layer_1)
+    (_,v2),_ = ch_mix.layers.layer_2((dummy_in,v1),ps_m.layer_2,st_m.layer_2)
+    (_,v3),_ = ch_mix.layers.layer_3((dummy_in,v2),ps_m.layer_3,st_m.layer_3)
+    pred_ref,_ = ch_mix.layers.layer_4((dummy_in,v3),ps_m.layer_4,st_m.layer_4)
+    @test pred_mix ≈ pred_ref atol=1e-5
   end
 
   @testset "End-to-End Training & Non-Mutating Inference" begin
@@ -218,6 +238,19 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     @test in_test.coords ≈ test_coords_backup
     @test in_test.features ≈ test_features_backup
     @test pred1 ≈ pred2
+    
+    # Non-dividing mini-batch sizes (both >1 and ==1 batches after partial=false)
+    # must compile and train cleanly on Reactant/XLA, and seed forwarding must be deterministic
+    for bs in (3,5)
+      slv_mb = NeuralSolver(gno;epochs=3,batch_size=bs,verbose=false)
+      op_mb1 = neural_operator(slv_mb,in_train,out_train;seed=77)
+      op_mb2 = neural_operator(slv_mb,in_train,out_train;seed=77)
+      pred_mb1 = solve(slv_mb,op_mb1,in_test)
+      pred_mb2 = solve(slv_mb,op_mb2,in_test)
+      @test size(pred_mb1) == (1,length(x_coords),3)
+      @test all(isfinite,pred_mb1)
+      @test pred_mb1 ≈ pred_mb2
+    end
 
     # End-to-end training with SpatialKernelFormatter, StateKernelFormatter, and non-uniform widths
     for (fmt,hlayers) in (

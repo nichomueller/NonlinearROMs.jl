@@ -130,14 +130,24 @@ function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed
   Lux.Training.TrainState(model,ps,st,opt)
 end
 
-function get_data_loader(solver::NeuralSolver,data;kwargs...)
+function get_data_loader(
+  solver::NeuralSolver,
+  data;
+  rng=Random.default_rng(),
+  shuffle=nothing,
+  partial=false,
+  kwargs...
+  )
+
   batchsize = resolve_batch_size(solver,data)
-  MLUtils.DataLoader(data;batchsize,kwargs...)
+  ns = num_samples(first(data))
+  do_shuffle = isnothing(shuffle) ? (batchsize < ns) : shuffle
+  MLUtils.DataLoader(data;batchsize,shuffle=do_shuffle,partial,rng,kwargs...)
 end
 
 function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
   train_state = get_train_state(solver,data;rng,seed)
-  dataloader = get_data_loader(solver,data;kwargs...)
+  dataloader = get_data_loader(solver,data;rng,kwargs...)
   train!(solver,train_state,dataloader,stats)
 end
 
@@ -156,8 +166,9 @@ normalisation bundled into the returned [`NeuralOperator`](@ref).
 function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
   init!(logger)
 
-  # Pre-transfer the single full-batch tensor once to avoid per-epoch host-to-device copies
-  single_batch_dev = length(dataloader) == 1 ? to_device_batch(first(dataloader)) : nothing
+  # Pre-transfer a static full-batch tensor once to avoid per-epoch host-to-device copies
+  is_shuffled = hasproperty(dataloader,:shuffle) && dataloader.shuffle
+  single_batch_dev = (length(dataloader) == 1 && !is_shuffled) ? to_device_batch(first(dataloader)) : nothing
 
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
     for epoch in 1:logger.max_epochs
