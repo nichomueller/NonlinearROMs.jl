@@ -91,6 +91,8 @@ export RScoreStyle
 export ZScoreStyle
 export EnergyLoss
 export visualise
+export normalise!
+export denormalise!
 include("Utils.jl")
 
 export LRScheduler

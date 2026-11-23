@@ -105,6 +105,7 @@ end
 # input data types
 
 const TData = Float32
+const TCData = ComplexF32
 const AbstractInputData{T} = AbstractArray{T,3}
 
 dimension(data::AbstractInputData) = size(data,1)

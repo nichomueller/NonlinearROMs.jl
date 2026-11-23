@@ -50,7 +50,9 @@ function build_kernel_neural_layer(
   KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
-build_kernel_network(in_dims,out_dims,::Tuple{},activation) = Lux.Dense(in_dims => out_dims)
+function build_kernel_network(in_dims,out_dims::Tuple{},activation)
+  Lux.Dense(in_dims => out_dims)
+end
 
 function build_kernel_network(in_dims,out_dims,layers::Tuple,activation)
   build_lux_chain((in_dims,layers...,out_dims),activation)

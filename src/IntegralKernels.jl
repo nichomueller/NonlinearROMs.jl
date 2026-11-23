@@ -8,17 +8,6 @@ get_out_dimension(k::Lux.Dense) = k.out
 get_in_dimension(k::Lux.Conv) = k.in
 get_out_dimension(k::Lux.Conv) = k.out
 
-function Arrays.evaluate(layer::AbstractLuxLayer,x::Union{AbstractVector,AbstractMatrix},ps,st)
-  layer(x,ps,st)
-end
-
-function Arrays.evaluate(layer::AbstractLuxLayer,x::AbstractArray,ps,st)
-  a = reshape(x,size(x,1),:)
-  b,st = layer(a,ps,st)
-  y = reshape(b,size(b,1),Base.tail(size(x))...)
-  return y,st
-end
-
 """
     kv(k,v,meas::InducedMeasure)
 
@@ -68,14 +57,18 @@ struct FourierKernel <: AbstractIntegralKernel
   truncation::Int
 end
 
-get_in_dimension(k::FourierKernel) = k.in_dims
-get_out_dimension(k::FourierKernel) = k.out_dims
+# here i am assuming the input is real, so the output of rfft has zero
+# imaginary part. however, for complex-valued inputs, this is not true.
+# i think the dispatch should be at the layer level, that is: we should 
+# implement a ComplexFourierKernel
+
+get_in_dimension(l::FourierKernel) = l.in_dims
+get_out_dimension(l::FourierKernel) = l.out_dims
 
 function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
-  scale = TData(1/(l.in_dims*l.out_dims))
+  scale = TData(l.in_dims*l.out_dims)
   return (
-    weight_re = scale .* rand(rng,TData,l.out_dims,l.in_dims,l.truncation),
-    weight_im = scale .* rand(rng,TData,l.out_dims,l.in_dims,l.truncation),
+    weight = rand(rng,TData,l.out_dims,l.truncation,l.in_dims) ./ scale,
   )
 end
 
@@ -83,29 +76,10 @@ Lux.initialstates(rng::AbstractRNG,l::FourierKernel) = NamedTuple()
 
 function (l::FourierKernel)((fixed_data,v),ps,st)
   N = size(v,2)
-  v̂ = rfft(v,2)                       # (in_dims,N÷2+1,K)
-  nf = size(v̂,2)
-  m = min(l.truncation,nf)
-  v̂m = permutedims(v̂[:,1:m,:],(1,3,2)) # (in_dims,K,m)
-  vr,vi = real.(v̂m),imag.(v̂m)
-  Wr = ps.weight_re[:,:,1:m]
-  Wi = ps.weight_im[:,:,1:m]
-  # per mode: ŷ = W*v̂, with W = Wr + i*Wi
-  yr = batched_mul(Wr,vr) .- batched_mul(Wi,vi)
-  yi = batched_mul(Wr,vi) .+ batched_mul(Wi,vr)
-  ŷm = permutedims(complex.(yr,yi),(1,3,2)) # (out_dims,m,K)
-  ŷ = _pad_modes(ŷm,nf)
+  v̂ = rfft(v,2) # (in_dims,N÷2+1,K)
+  ŷ = _fft_modes(v̂,ps,l.truncation)
   y = irfft(ŷ,N,2)
   return (fixed_data,y),st
-end
-
-# zero the truncated modes m+1:nf
-_pad_modes(ŷ,nf) = size(ŷ,2) == nf ? ŷ : cat(ŷ,_zeros_like(ŷ,size(ŷ,1),nf-size(ŷ,2),size(ŷ,3));dims=2)
-
-function _zeros_like(x,dims...)
-  z = similar(x,dims...)
-  fill!(z,zero(eltype(z)))
-  z
 end
 
 """
@@ -397,5 +371,20 @@ function _kv(k::AbstractInputData,v::AbstractInputData)
     k_r = reshape(k,dout,din,N,nbatch)
     v_r = reshape(v,1,din,N,nbatch)
     return dropdims(sum(k_r.*v_r,dims=2),dims=2)
+  end
+end
+
+function _fft_modes(v̂,ps,k)
+  nf = size(v̂,2)
+  m = min(k,nf)
+  v = real.(v̂[:,1:m,:]) # (in_dims,m,K)
+  W = ps.weight[:,1:m,:]
+  y = batched_mul(W,v) # per mode: ŷ = W*v̂
+  ŷ = complex(y) # (out_dims,m,K)
+  if m == nf
+    ŷ
+  else
+    z = zeros(eltype(ŷ),size(ŷ,1),nf-size(ŷ,2),size(ŷ,3))
+    cat(ŷ,z;dims=2)
   end
 end
