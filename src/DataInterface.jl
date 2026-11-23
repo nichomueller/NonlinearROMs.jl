@@ -32,6 +32,7 @@ function num_samples(a::FeatureBundle)
 end
 
 num_samples(a::ParamFEFunction) = param_length(a)
+num_samples(a::TransientParamFESolution) = num_params(a.odesol.r)
 
 struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_coords::Val{A}

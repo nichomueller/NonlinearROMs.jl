@@ -248,7 +248,9 @@ function Algebra.solve(
   initial_output_space::AbstractOutputSpace
   )
 
-  ic = get_values(initial_output_space)
+  # copy: the initial state is normalised in place
+  ic = copy(fetch_data(solver,initial_output_space))
+  normalise!(ic,op.stats)
   data = fetch_data_from_stats(solver,input_space,op.stats)
   output = rollout(op,data,ic)
   denormalise!(output,op.stats)
@@ -257,29 +259,24 @@ end
 
 # rollout 
 
-function rollout(op::NeuralOperator,data::TwoStageBuckets,ic::AbstractInputData)
-  outputs = ()
-  one_step_output = ic
-  for _ in 1:num_clusters(data)
-    pushforward_output = pushforward_step(op,data,one_step_output)
-    one_step_output = one_step_step(op,data,pushforward_output)
-    outputs = (outputs...,pushforward_output,one_step_output)
+function rollout(op::NeuralOperator,data::TwoStageBuckets,state::AbstractInputData)
+  msg = "Initial state and input have incompatible numbers of samples"
+  nc = num_clusters(data)
+  @check num_samples(data) == nc*num_samples(state) msg
+  first_outputs = Vector{typeof(state)}(undef,nc)
+  second_outputs = Vector{typeof(state)}(undef,nc)
+  for c in 1:nc
+    state = rollout_step(op,_get_clusters(data.first_stage,c:c,nc),state)
+    first_outputs[c] = state
+    state = rollout_step(op,_get_clusters(data.second_stage,c:c,nc),state)
+    second_outputs[c] = state
   end
-  return outputs
+  TwoStageBuckets(cat(first_outputs...;dims=3),cat(second_outputs...;dims=3),nc)
 end
 
-function pushforward_step(op::NeuralOperator,data::TwoStageBuckets,one_step_output::AbstractInputData)
-  pushforward_data = _merge_data(data.first_stage,one_step_output)
-  pushforward_output, = op.chain(pushforward_data,op.parameters,op.states)
-  denormalise!(pushforward_output,op.stats)
-  return pushforward_output
-end
-
-function one_step_step(op::NeuralOperator,data::TwoStageBuckets,pushforward_output::AbstractInputData)
-  one_step_data = _merge_data(data.second_stage,pushforward_output)
-  one_step_output, = op.chain(one_step_data,op.parameters,op.states)
-  denormalise!(one_step_output,op.stats)
-  return one_step_output
+function rollout_step(op::NeuralOperator,data::AbstractInputData,state::AbstractInputData)
+  output, = op.chain(_merge_data(data,state),op.parameters,op.states)
+  return output
 end
 
 # utils

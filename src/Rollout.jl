@@ -154,7 +154,32 @@ for f in (:_get_features,:_get_values)
   end
 end
 
-num_samples(a::TransientParamFESolution) = num_params(a.odesol.r)
+# inverse of split_stages: sample (c,ip) of stage k stores, in channel slot s, the
+# state at time t = stage_time(c,k,s); the free values are ordered as the
+# transient param arrays, i.e. column (t-1)*np+ip (param index running fastest)
+function _free_values(f::FESpace,data::TwoStageBuckets)
+  msg = "Data does not match the space's dof count"
+  comps = get_free_dof_to_comp(f)
+  points = get_free_dof_to_point(f)
+  ids = findall(get_node_masks(f)) # representative dof ids
+  point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
+  D = maximum(comps)               # components of the field
+  ns = dimension(data) ÷ D         # time slots per stage
+  @check D*ns == dimension(data) && D*num_coords(data) == length(comps) msg
+  nc = num_clusters(data)
+  np = num_samples(data) ÷ nc
+  T = eltype2(get_vector_type(f))
+  u = zeros(T,length(comps),2*ns*nc*np)
+  @inbounds @views for dof in eachindex(comps)
+    pos = point_to_pos[points[dof]]
+    for c in 1:nc, (k,stage) in enumerate((data.first_stage,data.second_stage)), s in 1:ns
+      t = (c-1)*2*ns + (k-1)*ns + s
+      ch = (s-1)*D + comps[dof]
+      u[dof,(t-1)*np+1:t*np] .= stage[ch,pos,(c-1)*np+1:c*np]
+    end
+  end
+  u
+end
 
 function _offsets(a::TransientParamFESolution,x::Point)
   trial = a.trial(a.odesol.r)

@@ -420,9 +420,9 @@ function _free_values(f::FESpace,data::AbstractInputData)
   points = get_free_dof_to_point(f)
   ids = findall(get_node_masks(f)) # representative dof ids
   point_to_pos = Dict(points[dof] => pos for (pos,dof) in enumerate(ids))
-  @check size(data,1)*size(data,2) == length(comps) msg
+  @check dimension(data)*num_coords(data) == length(comps) msg
   T = eltype2(get_vector_type(f))
-  u = zeros(T,length(comps),size(data,3))
+  u = zeros(T,length(comps),num_samples(data))
   @inbounds @views for dof in eachindex(comps)
     pos = point_to_pos[points[dof]]
     u[dof,:] .= data[comps[dof],pos,:]

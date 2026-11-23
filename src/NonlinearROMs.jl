@@ -172,6 +172,7 @@ export MultiLayerPerceptron
 include("NeuralModels.jl")
 
 export NeuralSolver
+export RolloutNeuralSolver
 export NeuralOperator
 export neural_operator
 export replace_space

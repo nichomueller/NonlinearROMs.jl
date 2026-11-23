@@ -3,6 +3,7 @@ using GridapROMs
 using GridapROMs.ParamDataStructures
 using GridapROMs.RBSteady
 using NonlinearROMs
+using DrWatson
 
 θ = 0.5
 dt = 0.01
@@ -52,6 +53,9 @@ uh0μ(μ) = interpolate_everywhere(u0μ(μ),trial(μ,t0))
 fesolver = ThetaMethod(LUSolver(),dt,θ)
 feop = TransientLinearParamFEOperator(rhs,(stiffness,mass),ptspace,trial,test)
 
+dir = datadir("heat_equation")
+mkpath(dir)
+
 μt_train = realisation(ptspace;nparams=50)
 μ_train = get_params(μt_train)
 uhμ_train = solve(fesolver,feop,μt_train,uh0μ)
@@ -76,17 +80,8 @@ fspace = FunctionSpace(test)
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
 solver = RolloutNeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
-pred_uμ = solve(solver,op,input_space(μ))
+
+output_space0 = OutputSpace(uh0μ(μ))
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
-
-ispace = input_space(μ_train)
-# neural_operator(solver,ispace,output_space)
-data,stats = NonlinearROMs.fetch_data_and_stats(
-  solver,ispace,output_space
-)
-using Random
-rng=Random.default_rng()
-seed=1234
-train_state = NonlinearROMs.get_train_state(solver,data;rng,seed)
-dataloader = NonlinearROMs.get_data_loader(solver,data)

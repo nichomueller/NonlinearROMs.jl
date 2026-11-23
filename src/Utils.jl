@@ -452,20 +452,45 @@ end
 # visualisation
 
 function visualise(
-  dir,uh,ûh;
+  dir,uh::ParamFEFunction,ûh::ParamFEFunction;
   trian=get_triangulation(get_fe_space(uh)),
-  dir_name="plot",variable_name="uh",
+  dir_name="plot",variable_name="uh",param_id=1
   )
 
   dir = joinpath(dir,dir_name)
   mkpath(dir)
-  fields = Pair{String}[]
-  for ip in param_eachindex(uh)
-    uhip = param_getindex(uh,ip)
-    ûhip = param_getindex(ûh,ip)
-    _push_fields!(fields,uhip,ûhip,"$(variable_name)_param_$(ip)")
-  end
+  fields = _get_fields(uh,param_id,ûh,param_id,variable_name)
   writevtk(trian,joinpath(dir,variable_name),cellfields=fields)
+end
+
+function visualise(
+  dir,uht::TransientParamFESolution,ûh::ParamFEFunction;
+  trian=get_triangulation(uht.trial),
+  dir_name="plot",variable_name="uh",param_id=1
+  )
+
+  r = uht.odesol.r
+  np = num_params(r)
+  times = get_times(r)
+  nt = param_length(ûh) ÷ np
+  dir = joinpath(dir,dir_name)
+  mkpath(dir)
+  createpvd(joinpath(dir,variable_name)) do pvd
+    for (it,uh) in enumerate(uht)
+      it > nt && break
+      fields = _get_fields(uh,param_id,ûh,(it-1)*np+param_id,variable_name)
+      file = joinpath(dir,"$(variable_name)_$(it).vtu")
+      pvd[times[it]] = createvtk(trian,file,cellfields=fields)
+    end
+  end
+end
+
+function _get_fields(uh,ip,ûh,îp,variable_name)
+  fields = Pair{String}[]
+  uhip = param_getindex(uh,ip)
+  ûhip = param_getindex(ûh,îp)
+  _push_fields!(fields,uhip,ûhip,variable_name)
+  fields
 end
 
 function _push_fields!(fields,uhip,ûhip,name)
