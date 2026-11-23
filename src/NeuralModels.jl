@@ -18,6 +18,13 @@ struct IntegralStyle{A<:InducedMeasure} <: KernelStyle
   measure::A
 end
 
+"""
+    FourierStyle(;truncation=12)
+
+[`KernelStyle`](@ref) of a Fourier Neural Operator: every hidden layer's kernel
+is a [`FourierKernel`](@ref) retaining the first `truncation` Fourier modes. Its
+default [`DataFormatter`](@ref) feeds the kernel only the running hidden state.
+"""
 struct FourierStyle <: KernelStyle 
   truncation::Int
 end

@@ -121,6 +121,24 @@ get_loss(s::GenericNeuralSolver) = s.loss
 get_logger(s::GenericNeuralSolver) = s.trainlog
 build_model(s::GenericNeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
 
+"""
+    RolloutNeuralSolver(model::NeuralModel;warmup_epochs=0,λ=1.0,kwargs...)
+
+[`NeuralSolver`](@ref) for autoregressive (rollout) training on
+[`RolloutData`](@ref), with temporal bundling and the pushforward trick of
+Brandstetter et al.; `kwargs` are those of [`NeuralSolver`](@ref). Writing
+`F₁ᶜ,F₂ᶜ` for the features and `s₁ᶜ,s₂ᶜ` for the states at the two stages of
+cluster `c`, the network `N` maps `[x;F;previous state block]` to the next state
+block, and is trained on the loss
+```math
+ℓ(N([x;F₂ᶜ;s₁ᶜ]),s₂ᶜ) + λ\\,ℓ(N([x;F₁ᶜ;\\mathrm{sg}(N([x;F₂ᶜ⁻¹;s₁ᶜ⁻¹]))]),s₁ᶜ),
+```
+summed over all clusters (the second term for `c ≥ 2` only), `sg` being a
+stop-gradient. For the first `warmup_epochs` epochs only the one-step term is
+trained. The trained operator is evaluated by `solve(solver,op,input_space,
+initial_output_space)`, which rolls the network out from the initial state (see
+[`rollout`](@ref)).
+"""
 struct RolloutNeuralSolver{A<:NeuralModel} <: NeuralSolver
   solver::GenericNeuralSolver{A}
   warmup_epochs::Int
@@ -259,6 +277,15 @@ end
 
 # rollout 
 
+"""
+    rollout(op::NeuralOperator,data::TwoStageBuckets,state::AbstractInputData) -> TwoStageBuckets
+
+Autoregressive evaluation of a network trained by a [`RolloutNeuralSolver`](@ref):
+starting from the initial state block `state` (one sample per parameter), every
+cluster `c` is advanced as `ŷ₁ᶜ = N([x;F₁ᶜ;ŷ₂ᶜ⁻¹])`, `ŷ₂ᶜ = N([x;F₂ᶜ;ŷ₁ᶜ])`, with
+`ŷ₂⁰ = state`. `data` and `state` must be normalised; the predictions are fed
+back, and returned, normalised.
+"""
 function rollout(op::NeuralOperator,data::TwoStageBuckets,state::AbstractInputData)
   msg = "Initial state and input have incompatible numbers of samples"
   nc = num_clusters(data)

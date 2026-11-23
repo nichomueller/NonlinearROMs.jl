@@ -5,11 +5,20 @@
       steps::C
     end
 
-Temporal-bundling layout (Brandstetter et al.) for an autoregressive neural
-operator `N(u^i) -> (u^{i+1},...,u^{i+K})`, `K` the cluster size. `steps` cuts
-`times` (indices into it, not time values) into clusters of `K+1` consecutive
-time indices each (`steps[k]:steps[k+1]`): index 1 is the input time `i`,
-indices `2:K+1` are the `K` target times `i+1,...,i+K`.
+    RolloutData(data,times,step=2)
+
+Temporal-bundling layout (Brandstetter et al.) of transient `data` (a
+[`FeatureBundle`](@ref) of transient `ParamFunction`s, or a
+`TransientParamFESolution`) for an autoregressive neural operator. `steps` are
+pointers into `times` (indices, not time values) cutting them into `nc` disjoint
+clusters of `step` consecutive times, `steps[c]:steps[c+1]-1`; each cluster is
+split into two halves (stages) of `step÷2` time slots each. A trailing incomplete
+cluster is dropped, with a warning.
+
+Evaluated into an [`InputSpace`](@ref)/[`OutputSpace`](@ref), `RolloutData`
+produces [`TwoStageBuckets`](@ref): the time slots of a stage are stacked along
+the channel axis (slot-major), and the samples are ordered cluster by cluster,
+sample `(c-1)*np+ip` holding cluster `c` of parameter `ip`.
 """
 struct RolloutData{A,B<:AbstractVector,C<:Union{Tuple,AbstractVector}}
   data::A
@@ -58,7 +67,9 @@ function InputSpace(space::MultiFieldFESpace,a::RolloutData)
 end
 
 function OutputSpace(a::RolloutData{<:TransientParamFESolution})
-  r = a.data.odesol.r
+  # the space only spans the times kept by the rollout (split_stages reads the
+  # solution from its first time step, and an incomplete last cluster is dropped)
+  r = a.data.odesol.r[:,1:length(a.times)]
   f = a.data.trial(r)
   x = get_coords(f)
   values = _get_values(a,x)

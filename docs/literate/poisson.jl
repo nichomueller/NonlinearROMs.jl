@@ -9,9 +9,10 @@
 #   spaces, parameterised coefficients, parametric operators/solvers),
 # - the vocabulary `NonlinearROMs.jl` uses to turn FE snapshots into training
 #   data for a neural network (`InputSpace`, `OutputSpace`, `DataFormatter`),
-# - what a *Kernel Neural Operator* (Kovachki et al.) is, and the two
+# - what a *Kernel Neural Operator* (Kovachki et al.) is, the two
 #   different ways this package discretises its non-local integral kernel
-#   (an FE-quadrature measure vs. a radius graph), and
+#   (an FE-quadrature measure vs. a radius graph), and its spectral
+#   (Fourier Neural Operator) alternative, and
 # - the offline/online split (`NeuralSolver` / `neural_operator` / `solve`)
 #   that mirrors the rest of `GridapROMs.jl`'s reduced-order-modelling API.
 #
@@ -267,12 +268,41 @@ pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 
-# ## 11. Inspecting the result
+# ## 11. Test 3 -- a Fourier Neural Operator (FNO)
 #
-# Opening `datadir("poisson")/plot/uh_gridap.vtu` (or `uh_gno.vtu`) in
-# ParaView shows three fields per parameter sample: the true FE solution
-# (`uh_gridap_param_1`), the network's prediction (`approx_uh_gridap_param_1`),
-# and their difference (`err_uh_gridap_param_1`). Rendered directly from that
+# The third [`KernelStyle`](@ref) replaces the integral against a measure with a
+# spectral convolution (Li et al.): [`FourierStyle`](@ref) builds every hidden
+# layer's kernel as a [`FourierKernel`](@ref), which Fourier-transforms the hidden
+# state along the point axis, keeps only its first `truncation` modes, mixes
+# the channels with one complex matrix per retained mode, and transforms back,
+# ```math
+# (K_t v)(x) = \mathcal F^{-1}\big(R_\theta\cdot(\mathcal F v)\big)(x),
+# \qquad (R_\theta)_k = 0 \ \text{for } k > \texttt{truncation}.
+# ```
+# No `InducedMeasure` is involved, so the model is built from the style alone,
+# and its kernel sees only the running hidden state `v` (the default
+# [`DataFormatter`](@ref) of a `FourierStyle` passes neither `x` nor `a(x)`).
+#
+# !!! warning
+#     The FFT treats the points as uniformly spaced samples *in the order they
+#     are stored*. Only on points ordered along a uniform 1D grid is ``K_t`` a
+#     genuine convolution; on the free dofs of a 2D FE space, as here, it is a
+#     trainable global operator whose meaning depends on the dof ordering, so
+#     the result should not be read as a faithful FNO.
+
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(kmodel;epochs=200,loss=loss,print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")
+
+# ## 12. Inspecting the result
+#
+# Opening `datadir("poisson")/plot/uh_gridap.vtu` (or `uh_gno.vtu`,
+# `uh_fno.vtu`) in ParaView shows three fields for the (first) test sample: the
+# true FE solution (`uh_gridap`), the network's prediction (`approx_uh_gridap`),
+# and their difference (`err_uh_gridap`). Rendered directly from that
 # `.vtu` file, on a shared colour scale:
 #
 # ![FE solution vs. Neural Operator prediction](assets/poisson/poisson_comparison.png)

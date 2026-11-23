@@ -111,6 +111,20 @@ dimension(data::AbstractInputData) = size(data,1)
 num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
 
+"""
+    struct TwoStageBuckets{A<:AbstractInputData}
+      first_stage::A
+      second_stage::A
+      num_clusters::Int
+    end
+
+The two stages of a [`RolloutData`](@ref) evaluated on a point set, as two
+`(D,N,K)` arrays of equal size: `first_stage`/`second_stage` hold, for every
+cluster and parameter, the data at the first/second half of the cluster's times
+(the time slots of a stage stacked along the channel axis). The `K` samples are
+ordered cluster by cluster, so `num_clusters` blocks of `K÷num_clusters`
+parameters each. Both stages share a single normalisation score.
+"""
 struct TwoStageBuckets{A<:AbstractInputData}
   first_stage::A
   second_stage::A
@@ -451,6 +465,19 @@ end
 
 # visualisation
 
+"""
+    visualise(dir,uh,ûh;trian,dir_name="plot",variable_name="uh",param_id=1)
+
+Writes the true field `uh`, the prediction `ûh` and their difference for the
+`param_id`-th parameter to `joinpath(dir,dir_name)`, as the cell fields
+`variable_name`, `"approx_"*variable_name` and `"err_"*variable_name` (one per
+field, suffixed `_field<i>`, for multi-field functions). For a steady `uh` (a
+`ParamFEFunction`) a single `.vtu` file is written; for a transient `uh` (a
+`TransientParamFESolution`), `ûh` stores every (parameter,time) pair with the
+parameter index running fastest, as returned by [`to_element`](@ref) on a rollout
+prediction, and one `.vtu` file per time step is written, collected into a `.pvd`
+time series.
+"""
 function visualise(
   dir,uh::ParamFEFunction,ûh::ParamFEFunction;
   trian=get_triangulation(get_fe_space(uh)),

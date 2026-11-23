@@ -16,6 +16,13 @@ Literate.markdown(
   documenter=true,
 )
 
+Literate.markdown(
+  joinpath(@__DIR__,"literate","heat_equation.jl"),
+  joinpath(@__DIR__,"src");
+  name="heat_equation",
+  documenter=true,
+)
+
 # `moving_poisson.jl` is a documented work-in-progress (see the warning at the
 # top of the generated page): its code does not run yet, so its blocks are
 # rendered as plain (non-executed) Julia code rather than `@example` blocks.
@@ -38,6 +45,7 @@ makedocs(;
     "Tutorials" => [
       "Poisson equation" => "example.md",
       "Stokes flow" => "stokes.md",
+      "Heat equation (rollout)" => "heat_equation.md",
       "Moving Poisson (WIP)" => "moving_poisson.md",
     ],
   ],
