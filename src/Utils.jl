@@ -147,11 +147,13 @@ function RScore(data::AbstractInputData;normalise=true)
   end
   l = dropdims(minimum(data,dims=(2,3)),dims=(2,3))
   u = dropdims(maximum(data,dims=(2,3)),dims=(2,3))
-  # Avoid dividing by zero on constant channels
+  T = eltype(l)
+  # Avoid dividing by zero on constant or near-constant channels without skipping small-scale fields
   @inbounds for i in eachindex(l)
-    if (u[i] - l[i]) < TData(1e-6)
-      l[i] = zero(eltype(l))
-      u[i] = one(eltype(u))
+    tol = max(floatmin(T),T(16) * eps(T) * max(abs(l[i]),abs(u[i])))
+    if (u[i] - l[i]) <= tol
+      l[i] = zero(T)
+      u[i] = one(T)
     end
   end
   return RScore(l,u)
@@ -186,27 +188,29 @@ function ZScore(data::AbstractInputData;normalise=true)
   end
   D,N,K = size(data)
   n = N * K
-  μ = Vector{TData}(undef,D)
-  σ = Vector{TData}(undef,D)
+  T = float(eltype(data))
+  μ = Vector{T}(undef,D)
+  σ = Vector{T}(undef,D)
   @inbounds for d in 1:D
     # Two-pass Float64 accumulation avoids allocating a full Float64 copy of data
     s = 0.0
     for k in 1:K,i in 1:N
       s += Float64(data[d,i,k])
     end
-    m = s / n
+    m = n > 0 ? s / n : 0.0
     ss = 0.0
     for k in 1:K,i in 1:N
       diff = Float64(data[d,i,k]) - m
       ss += diff * diff
     end
     sd = n > 1 ? sqrt(ss / (n - 1)) : 0.0
-    if sd < 1e-6
-      μ[d] = zero(TData)
-      σ[d] = one(TData)
+    tol = max(Float64(floatmin(T)),16.0 * Float64(eps(T)) * abs(m))
+    if sd <= tol
+      μ[d] = zero(T)
+      σ[d] = one(T)
     else
-      μ[d] = TData(m)
-      σ[d] = TData(sd)
+      μ[d] = T(m)
+      σ[d] = T(sd)
     end
   end
   return ZScore(μ,σ)
@@ -228,13 +232,17 @@ function MScore(data::AbstractInputData;normalise=true)
   end
   # Compute one scale factor per channel so multi-scale fields are balanced
   s = dropdims(maximum(abs,data;dims=(2,3)),dims=(2,3))
+  T = eltype(s)
   @inbounds for i in eachindex(s)
-    if s[i] < TData(1e-6)
-      s[i] = one(eltype(s))
+    if s[i] <= floatmin(T)
+      s[i] = one(T)
     end
   end
   return MScore(s)
 end
+
+normalise!(data::AbstractInputData,score::MScore{<:Number}) = (data ./= score.scale)
+denormalise!(data::AbstractInputData,score::MScore{<:Number}) = (data .*= score.scale)
 
 function normalise!(data::AbstractInputData,score::MScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))

@@ -126,6 +126,23 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     normalise!(in_raw,stats_off)
     denormalise!(out_raw,stats_off)
     @test (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
+
+    # Small-magnitude physical fields (< 1e-6) must still be normalised properly
+    small_base = zeros(TData,1,N,K)
+    for k in 1:K,i in 1:N
+      small_base[1,i,k] = TData(1e-8) * (one(TData) + sin(Float32(π) * x_nodes[i]) + TData(0.1) * k)
+    end
+    for (score_ctor,check_fn) in (
+      (ZScore,d -> isapprox(std(d),1.0f0;atol=1e-3)),
+      (RScore,d -> isapprox(minimum(d),0.0f0;atol=1e-4) && isapprox(maximum(d),1.0f0;atol=1e-4)),
+      (MScore,d -> isapprox(maximum(abs,d),1.0f0;atol=1e-4)),
+    )
+      d_small = copy(small_base)
+      s_small = score_ctor(d_small;normalise=true)
+      @test check_fn(d_small)
+      denormalise!(d_small,s_small)
+      @test d_small ≈ small_base rtol=1e-4
+    end
   end
 
   @testset "DataFormatter, Concatenation & Kernel Formulations" begin

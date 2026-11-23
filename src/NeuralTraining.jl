@@ -23,6 +23,7 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
+  residual::Bool,
   activation,
   kernel_activation
   )
@@ -32,7 +33,8 @@ function build_kernel_neural_layer(
   k_out = (channel_wise && in_dims == out_dims) ? out_dims : out_dims*in_dims
   inner = build_lux_chain((inner_dims,kernel_layers...,k_out),kernel_activation)
   kernel = IntegralKernel(inner,style.measure,formatter,c_dims)
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
+  use_res = residual && in_dims == out_dims && activation !== identity
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation;residual=use_res)
 end
 
 function build_kernel_neural_layer(
@@ -41,13 +43,15 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
+  residual::Bool,
   activation,
   kernel_activation
   )
 
   inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,0)
   kernel = FourierKernel(inner_dims,out_dims,style.truncation)
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
+  use_res = residual && in_dims == out_dims && activation !== identity
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation;residual=use_res)
 end
 
 build_kernel_network(in_dims,out_dims,::Tuple{},activation) = Lux.Dense(in_dims => out_dims)
@@ -79,6 +83,7 @@ function build_model(
       widths[i+2],
       model.kernel_layers,
       model.channel_wise,
+      model.residual,
       model.activation,
       model.kernel_activation
     ),
@@ -142,6 +147,10 @@ function get_data_loader(
   batchsize = resolve_batch_size(solver,data)
   ns = num_samples(first(data))
   do_shuffle = isnothing(shuffle) ? (batchsize < ns) : shuffle
+  if !partial && batchsize > 0 && ns % batchsize != 0 && !do_shuffle
+    dropped = ns % batchsize
+    @warn "Dropping the last $dropped of $ns samples every epoch because `partial=false` and `shuffle=false` (batchsize=$batchsize)."
+  end
   MLUtils.DataLoader(data;batchsize,shuffle=do_shuffle,partial,rng,kwargs...)
 end
 

@@ -73,12 +73,18 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     expected_h1 = mean(dot(u_rand[1,:,k],X_h1 * u_rand[1,:,k]) for k in 1:K)
     @test isapprox(EnergyLoss(L2(),fspace)(u_rand,u_zero),expected_l2;rtol=1e-4)
     @test isapprox(EnergyLoss(H1(),fspace)(u_rand,u_zero),expected_h1;rtol=1e-4)
-    
+
     # EnergyLoss converts Float64 sparse Gram matrices to TData without type promotion
     loss_f64 = EnergyLoss(Float64.(X_h1))
     val_f64 = loss_f64(u_rand,u_zero)
     @test val_f64 isa TData
     @test isapprox(val_f64,expected_h1;rtol=1e-4)
+
+    # EnergyLoss accepts dense matrices by converting them to sparse format
+    loss_dense = EnergyLoss(Matrix(X_h1))
+    val_dense = loss_dense(u_rand,u_zero)
+    @test val_dense isa TData
+    @test isapprox(val_dense,expected_h1;rtol=1e-4)
   end
 
   @testset "Kernel Network Non-Linearity & _kv Modes" begin
@@ -144,8 +150,8 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     gno_ns = KernelNeuralModel(gspace;formatter=FeatureKernelFormatter(;norm_style=ns_custom))
     slv_ns = NeuralSolver(gno_ns;epochs=1,verbose=false)
     @test get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
-    
-    # SpatialKernelFormatter K=1 fast-path must match sample-by-sample evaluation
+
+    # Opt-in SpatialKernelFormatter(;shared_coords=true) K=1 fast-path matches sample-by-sample
     shared_coords = repeat(rand(TData,2,N,1),1,1,K)
     var_feats = rand(TData,in_dims - 2,N,K)
     sp_in = vcat(shared_coords,var_feats)
@@ -155,7 +161,7 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
         hidden_layers=(8,8,8),
         channel_wise=cw,
         activation=tanh,
-        formatter=SpatialKernelFormatter()
+        formatter=SpatialKernelFormatter(;shared_coords=true)
       )
       ch_sp = build_model(kno_sp,(sp_in,dummy_out))
       ps_sp,st_sp = Lux.setup(Random.default_rng(),ch_sp)
@@ -165,7 +171,56 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
         @test pred_batch[:,:,k:k] ≈ pred_k atol=1e-5
       end
     end
-    
+
+    # Default SpatialKernelFormatter() (shared_coords=false) handles sample-varying coordinates
+    var_coords = rand(TData,2,N,K)
+    sp_var_in = vcat(var_coords,var_feats)
+    kno_sp_var = KernelNeuralModel(
+      gspace;
+      hidden_layers=(8,8,8),
+      activation=tanh,
+      formatter=SpatialKernelFormatter()
+    )
+    ch_sp_var = build_model(kno_sp_var,(sp_var_in,dummy_out))
+    ps_sv,st_sv = Lux.setup(Random.default_rng(),ch_sp_var)
+    pred_sv,_ = ch_sp_var(sp_var_in,ps_sv,st_sv)
+    for k in 1:K
+      pred_k,_ = ch_sp_var(sp_var_in[:,:,k:k],ps_sv,st_sv)
+      @test pred_sv[:,:,k:k] ≈ pred_k atol=1e-5
+    end
+
+    # Residual flag controls skip connection on same-width nonlinear KernelNeuralLayers
+    kno_res = KernelNeuralModel(gspace;hidden_layers=(8,8),residual=true,activation=tanh)
+    kno_nores = KernelNeuralModel(gspace;hidden_layers=(8,8),residual=false,activation=tanh)
+    ch_res = build_model(kno_res,(dummy_in,dummy_out))
+    ch_nores = build_model(kno_nores,(dummy_in,dummy_out))
+    @test ch_res.layers.layer_2.residual
+    @test !ch_nores.layers.layer_2.residual
+    ps_r,st_r = Lux.setup(Random.default_rng(),ch_res)
+    pred_res,_ = ch_res(dummy_in,ps_r,st_r)
+    pred_nores,_ = ch_nores(dummy_in,ps_r,st_r)
+    @test !(pred_res ≈ pred_nores)
+
+    # MultipleAttentionKernel concatenates heads along dims=1 and handles EdgeDataCache carriers
+    gmeas_att = InducedMeasure(gspace)
+    att_in_dim = 2 * in_dims + 1
+    att_fmt = FeatureKernelFormatter()
+    scores_att = (Lux.Dense(att_in_dim => 1),Lux.Dense(att_in_dim => 1))
+    values_att = (Lux.Dense(att_in_dim => 4),Lux.Dense(att_in_dim => 4))
+    agg_att = Lux.Dense(8 => 6)
+    mak = MultipleAttentionKernel(scores_att,values_att,agg_att,gmeas_att,att_fmt)
+    ps_att,st_att = Lux.setup(Random.default_rng(),mak)
+    att_in = dummy_in[:,:,1:1]
+    att_v = rand(TData,8,N,1)
+    (_,z_att),_ = mak((att_in,att_v),ps_att,st_att)
+    @test size(z_att) == (6,N,1)
+    @test all(isfinite,z_att)
+    # Passing an EdgeDataCache produced by a preceding KernelNeuralLayer must also work
+    kl_cache = ch_res.layers.layer_2
+    (cached_carrier,_),_ = kl_cache((att_in,att_v),ps_r.layer_2,st_r.layer_2)
+    (_,z_att_cached),_ = mak((cached_carrier,att_v),ps_att,st_att)
+    @test z_att_cached ≈ z_att
+
     # EdgeDataCache must not reuse edge tensors across layers with different measures
     meas_a = InducedMeasure(gspace;message_rule=PlainMP())
     meas_b = InducedMeasure(gspace;message_rule=AnchoredMP())
@@ -238,7 +293,7 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     @test in_test.coords ≈ test_coords_backup
     @test in_test.features ≈ test_features_backup
     @test pred1 ≈ pred2
-    
+
     # Non-dividing mini-batch sizes (both >1 and ==1 batches after partial=false)
     # must compile and train cleanly on Reactant/XLA, and seed forwarding must be deterministic
     for bs in (3,5)
@@ -251,6 +306,11 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
       @test all(isfinite,pred_mb1)
       @test pred_mb1 ≈ pred_mb2
     end
+
+    # Dropping tail samples with partial=false and shuffle=false must emit a warning
+    slv_drop = NeuralSolver(gno;epochs=1,batch_size=3,verbose=false)
+    dummy_dl_data = (rand(TData,2,4,8),rand(TData,1,4,8))
+    @test_logs (:warn,r"Dropping") NonlinearROMs.get_data_loader(slv_drop,dummy_dl_data;shuffle=false)
 
     # End-to-end training with SpatialKernelFormatter, StateKernelFormatter, and non-uniform widths
     for (fmt,hlayers) in (
@@ -359,6 +419,22 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     pred_mf = solve(slv_mf,op_mf,in_mf)
     @test size(pred_mf) == (3,N_mf,3)
     @test all(isfinite,pred_mf)
+
+    # Multi-field MultipleMeasure on FunctionSpace (FESpaceMeasure local blocks)
+    fmeas_mf = InducedMeasure(fspace_mf)
+    @test fmeas_mf isa MultipleMeasure
+    E_fmf = num_edges(fmeas_mf)
+    g_fmf_data = gather_data(vals_mf,fmeas_mf)
+    @test size(g_fmf_data) == (2 * 4 + 1,E_fmf,2)
+    int_fmf = integration(g_fmf_data,fmeas_mf)
+    @test size(int_fmf) == (2 * 4 + 1,N_mf,2)
+    @test all(isfinite,int_fmf)
+    fno_mf = KernelNeuralModel(fspace_mf;hidden_layers=(8,8),activation=tanh)
+    fslv_mf = NeuralSolver(fno_mf;epochs=2,batch_size=0,loss=blk_loss,verbose=false)
+    fop_mf = neural_operator(fslv_mf,in_mf,out_mf)
+    fpred_mf = solve(fslv_mf,fop_mf,in_mf)
+    @test size(fpred_mf) == (3,N_mf,3)
+    @test all(isfinite,fpred_mf)
 
     # 2. Multi-PDE MultipleMeasure + replace_space onto a single new mesh
     reffe_s = ReferenceFE(lagrangian,Float64,1)

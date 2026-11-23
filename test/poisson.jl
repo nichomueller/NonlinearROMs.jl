@@ -86,7 +86,7 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
 # test 2: GNOs (subsampled training via Sampler + zero-shot full-resolution inference)
 
-# Quasi-uniform subgrid: 1 out of every 5 DoFs per axis (h_sub = 0.05, N_sub = 420)
+# Quasi-uniform subgrid: 1 out of every 4 DoFs per axis (h_sub = 0.04, N_sub = 650)
 dof_res = 50 * order
 stride = 4
 sub_ids = findall(p -> (round(Int,p[1] * dof_res) % stride == 0) && (round(Int,p[2] * dof_res) % stride == 0),x)

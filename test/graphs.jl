@@ -100,7 +100,7 @@ end
     subg = NystromSubgraph(g;subgraph_size=sub_n)
     @test nv(subg.graph) == sub_n
     @test length(subg.vertex_map) == sub_n
-    
+
     # Exact distance radius must give uniform interior in-degree without Float64 edge drops
     model_lat = CartesianDiscreteModel((0,1,0,1),(10,10))
     V_lat = TestFESpace(model_lat,reffe;conformity=:H1)
@@ -108,6 +108,11 @@ end
     g_lat = build_graph(coords_lat;radius=2 / 10)
     int_ids = findall(p -> 0.2 <= p[1] <= 0.8 && 0.2 <= p[2] <= 0.8,coords_lat)
     @test all(v -> length(inneighbors(g_lat,v)) == 13,int_ids)
+
+    # Also verify Float32 coordinates with a Float64 radius
+    coords_lat32 = map(p -> Point(Float32(p[1]),Float32(p[2])),coords_lat)
+    g_lat32 = build_graph(coords_lat32;radius=2 / 10)
+    @test all(v -> length(inneighbors(g_lat32,v)) == 13,int_ids)
   end
 
   @testset "GraphInducedSpace, gather_data, scatter_data & attention" begin
@@ -182,7 +187,7 @@ end
       end
     end
   end
-  
+
   @testset "MPRules (DifferenceMP, CompositeMP, PlainMP, AnchoredMP)" begin
     model = CartesianDiscreteModel((0,1,0,1),(5,5))
     reffe = ReferenceFE(lagrangian,Float64,1)
@@ -192,25 +197,25 @@ end
     src_ids = NonlinearROMs.get_src_ids(gspace)
     dst_ids = NonlinearROMs.get_dst_ids(gspace)
     w = NonlinearROMs.get_edge_weights(gspace)
-  
+
     D,N,K = 3,num_coords(gspace),2
     vals = rand(TData,D,N,K)
-  
+
     # DifferenceMP: src - dst (D channels)
     g_diff = gather_data(vals,InducedMeasure(gspace;message_rule=DifferenceMP()))
     @test size(g_diff) == (D,ne(g),K)
     @test g_diff[:,1,:] ≈ vals[:,src_ids[1],:] .- vals[:,dst_ids[1],:]
-  
+
     # CompositeMP: [src - dst; dist] (D + 1 channels)
     g_comp = gather_data(vals,InducedMeasure(gspace;message_rule=CompositeMP()))
     @test size(g_comp) == (D + 1,ne(g),K)
     @test g_comp[1:D,1,:] ≈ vals[:,src_ids[1],:] .- vals[:,dst_ids[1],:]
     @test all(x -> isapprox(x,w[1];atol=1e-6),g_comp[D+1,1,:])
-  
+
     # PlainMP: [src; dst; dist] (2D + 1 channels)
     g_plain = gather_data(vals,InducedMeasure(gspace;message_rule=PlainMP()))
     @test size(g_plain) == (2D + 1,ne(g),K)
-    
+
     # AnchoredMP: [dst; src - dst; dist] (2D + 1 channels)
     g_anch = gather_data(vals,InducedMeasure(gspace;message_rule=AnchoredMP()))
     @test size(g_anch) == (2D + 1,ne(g),K)

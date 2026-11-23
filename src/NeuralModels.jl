@@ -32,6 +32,7 @@ end
       hidden_layers::NTuple{N,Int}
       kernel_layers::NTuple{M,Int}
       channel_wise::Bool
+      residual::Bool
       activation::B
       formatter::C
       kernel_activation::D
@@ -52,8 +53,9 @@ which by default passes both `x` and `a(x)`. `kernel_layers`/`kernel_activation`
 are the hidden widths/nonlinearity of `κ_θ`'s own network (by default
 `kernel_layers` scales automatically to `(maximum(hidden_layers;init=16),)`;
 passing `()` makes `κ_θ` a single affine `Dense`). When `channel_wise=true`
-(default) and `in_dims == out_dims`, `κ_θ` outputs a diagonal channel-wise
-multiplier instead of a full `out_dims × in_dims` matrix per edge.
+(default) and `in_dims == out_dims`, `κ_θ` outputs a diagonal channel-wise multiplier
+instead of a full `out_dims × in_dims` matrix per edge.
+When `residual=true` (default), same-width nonlinear `KernelNeuralLayer`s include a `+ v` skip connection.
 
 `build_model` turns this recipe into an actual `Lux.Chain`:
 1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
@@ -66,6 +68,7 @@ struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter,D<:Func
   hidden_layers::NTuple{N,Int}
   kernel_layers::NTuple{M,Int}
   channel_wise::Bool
+  residual::Bool
   activation::B
   formatter::C
   kernel_activation::D
@@ -76,6 +79,7 @@ function KernelNeuralModel(
   hidden_layers=(16,16,16),
   kernel_layers=nothing,
   channel_wise::Bool=true,
+  residual::Bool=true,
   activation=tanh,
   formatter=DataFormatter(style),
   kernel_activation=activation
@@ -83,7 +87,7 @@ function KernelNeuralModel(
 
   hlayers = Tuple(hidden_layers)
   klayers = isnothing(kernel_layers) ? (maximum(hlayers;init=16),) : Tuple(kernel_layers)
-  KernelNeuralModel(style,hlayers,klayers,channel_wise,activation,formatter,kernel_activation)
+  KernelNeuralModel(style,hlayers,klayers,channel_wise,residual,activation,formatter,kernel_activation)
 end
 
 function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)

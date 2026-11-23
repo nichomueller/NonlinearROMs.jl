@@ -32,6 +32,18 @@ struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_new_data::Val{C}
   norm_style::E
   sampler::Sampler{D}
+  shared_coords::Bool
+end
+
+function DataFormatter(
+  pass_coords::Val{A},
+  pass_features::Val{B},
+  pass_new_data::Val{C},
+  norm_style::E,
+  sampler::Sampler{D}
+  ) where {A,B,C,D,E<:NormStyle}
+
+  DataFormatter(pass_coords,pass_features,pass_new_data,norm_style,sampler,false)
 end
 
 function DataFormatter(;
@@ -39,15 +51,16 @@ function DataFormatter(;
   pass_features=Val{true}(),
   pass_new_data=Val{false}(),
   norm_style=NormStyle(),
-  sampler=Sampler()
+  sampler=Sampler(),
+  shared_coords::Bool=false
   )
 
-  DataFormatter(pass_coords,pass_features,pass_new_data,norm_style,sampler)
+  DataFormatter(pass_coords,pass_features,pass_new_data,norm_style,sampler,shared_coords)
 end
 
 # Constructors for the 3 formulations of Kovachki et al. (Sec. 3, Eqs. 7, 8, 9):
-# Eq. (7): κ(x, y) -- assumes spatial coordinates are shared across samples (K=1 fast path)
-SpatialKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false),kwargs...)
+# Eq. (7): κ(x, y) -- pass `shared_coords=true` to enable the K=1 fast path when coordinates are shared across samples
+SpatialKernelFormatter(;shared_coords::Bool=false,kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(false),pass_new_data=Val(false),shared_coords,kwargs...)
 # Eq. (8): κ(x, y, a(x), a(y))
 FeatureKernelFormatter(;kwargs...) = DataFormatter(;pass_coords=Val(true),pass_features=Val(true),pass_new_data=Val(false),kwargs...)
 # Eq. (9): κ(x, y, v(x), v(y))

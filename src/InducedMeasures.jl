@@ -188,7 +188,7 @@ its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building 
 behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph)`
 (plain GNO) and the softmax-weighted aggregation in `attention`/`AttentionKernel`
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
-fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
+fixed `1/max_deg` reference-degree weight, or `α .* vals` for a learned, data-dependent one.
 
 Unlike `gather_data`, this genuinely needs to accumulate (several edges can share a
 destination vertex), so a plain vectorised `getindex`-style gather doesn't suffice --
@@ -300,25 +300,6 @@ function _integration(a::AbstractInputData,meas::GraphMeasure)
 end
 
 _integration(a::AbstractInputData,meas::MultipleMeasure) = blockwise(_integration,meas,a)
-  
-function _mat_mul_data(A::AbstractMatrix,x::AbstractInputData)
-  D,N,K = size(x)
-  x2 = reshape(permutedims(x,(2,1,3)),N,D*K)
-  b2 = A*x2
-  permutedims(reshape(b2,N,D,K),(2,1,3))
-end
-
-# Specialized for sparse matrices to avoid dense matrix conversion during Reactant/XLA compilation
-function _mat_mul_data(A::AbstractSparseMatrix,x::AbstractInputData)
-  D,N,K = size(x)
-  rows,cols,vals = findnz(A)
-  w = reshape(vals,1,1,length(vals))
-  x_perm = permutedims(x,(1,3,2))
-  gathered = NNlib.gather(x_perm,cols)
-  weighted = gathered .* w
-  out_perm = NNlib.scatter(+,weighted,rows;dstsize=(D,K,size(A,1)))
-  return permutedims(out_perm,(1,3,2))
-end
 
 # Precomputed measure topology/weights stored in Lux states (transferred once to XDEV)
 

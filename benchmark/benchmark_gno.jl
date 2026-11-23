@@ -109,7 +109,7 @@ gno_spatial = KernelNeuralModel(
   IntegralStyle(meas);
   hidden_layers=(16,16,16),
   activation=tanh,
-  formatter=SpatialKernelFormatter()
+  formatter=SpatialKernelFormatter(;shared_coords=true)
 )
 chain_sp = build_model(gno_spatial,(fixed_data,dummy_out))
 ps_sp,st_sp = Lux.setup(Random.default_rng(),chain_sp)
@@ -306,7 +306,7 @@ h_nl = 1 / 15
 configs_nl = [
   ("NL 1-hop r=2h PlainMP 1000ep",  2*h_nl,PlainMP(),   (16,16),      FeatureKernelFormatter(),1000,TData(5e-3)),
   ("NL 3-hop r=3h PlainMP 1000ep",  3*h_nl,PlainMP(),   (24,24,24,24),FeatureKernelFormatter(),1000,TData(5e-3)),
-  ("NL 3-hop r=3h AnchoredMP Spat", 3*h_nl,AnchoredMP(),(24,24,24,24),SpatialKernelFormatter(),1000,TData(5e-3)),
+  ("NL 3-hop r=3h AnchoredMP Spat", 3*h_nl,AnchoredMP(),(24,24,24,24),SpatialKernelFormatter(;shared_coords=true),1000,TData(5e-3)),
 ]
 
 rows_nl = String[]
