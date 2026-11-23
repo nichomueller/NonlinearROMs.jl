@@ -54,24 +54,17 @@ function build_kernel_neural_layer(
   KernelNeuralLayer(kernel,in_dims,out_dims,activation;residual=use_res)
 end
 
-build_kernel_network(in_dims,out_dims,::Tuple{},activation) = Lux.Dense(in_dims => out_dims)
+function build_kernel_network(in_dims,out_dims::Tuple{},activation)
+  Lux.Dense(in_dims => out_dims)
+end
 
 function build_kernel_network(in_dims,out_dims,layers::Tuple,activation)
   build_lux_chain((in_dims,layers...,out_dims),activation)
 end
 
-function build_model(s::NeuralSolver{<:KernelNeuralModel},data)
-  build_model(s.model,data,get_formatter(s))
-end
-
-function build_model(
-  model::KernelNeuralModel,
-  (inputs,outputs),
-  fixed_formatter::DataFormatter=DataFormatter(model)
-  )
-
-  in_dims = size(inputs,1)
-  out_dims = size(outputs,1)
+function build_model(model::KernelNeuralModel,(inputs,outputs))
+  in_dims = _in_dims(inputs,outputs)
+  out_dims = dimension(outputs)
   widths = (in_dims,model.hidden_layers...,out_dims)
   lift = Lux.Dense(widths[1] => widths[2],model.activation)
   klayers = ntuple(
@@ -127,6 +120,17 @@ function train!(solver::NeuralSolver,train_state,dataloader,stats)
   train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
 end
 
+function train!(solver::RolloutNeuralSolver,train_state,dataloader,stats)
+  lr_scheduler = get_scheduler(solver)
+  loss = _to_device_loss(get_loss(solver))
+  logger = get_logger(solver)
+  to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
+  train_model!(
+    train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;
+    logger,warmup_epochs=solver.warmup_epochs,λ=solver.λ
+  )
+end
+
 function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed=1234)
   Random.seed!(rng,seed)
   model = build_model(solver,data)
@@ -134,6 +138,10 @@ function get_train_state(solver::NeuralSolver,data;rng=Random.default_rng(),seed
   ps,st = Lux.setup(rng,model) |> XDEV
   Lux.Training.TrainState(model,ps,st,opt)
 end
+
+resolve_data_loader(a) = MLUtils.DataLoader
+resolve_data_loader(a::TwoStageBuckets) = AutoregressiveDataLoader
+resolve_data_loader((input,output)::NamedTuple) = resolve_data_loader(input)
 
 function get_data_loader(
   solver::NeuralSolver,
@@ -145,13 +153,18 @@ function get_data_loader(
   )
 
   batchsize = resolve_batch_size(solver,data)
-  ns = num_samples(first(data))
-  do_shuffle = isnothing(shuffle) ? (batchsize < ns) : shuffle
-  if !partial && batchsize > 0 && ns % batchsize != 0 && !do_shuffle
-    dropped = ns % batchsize
-    @warn "Dropping the last $dropped of $ns samples every epoch because `partial=false` and `shuffle=false` (batchsize=$batchsize)."
+  dloader = resolve_data_loader(data)
+  if dloader === MLUtils.DataLoader
+    ns = num_samples(first(data))
+    do_shuffle = isnothing(shuffle) ? (batchsize < ns) : shuffle
+    if !partial && batchsize > 0 && ns % batchsize != 0 && !do_shuffle
+      dropped = ns % batchsize
+      @warn "Dropping the last $dropped of $ns samples every epoch because `partial=false` and `shuffle=false` (batchsize=$batchsize)."
+    end
+    return dloader(data;batchsize,shuffle=do_shuffle,partial,rng,kwargs...)
   end
-  MLUtils.DataLoader(data;batchsize,shuffle=do_shuffle,partial,rng,kwargs...)
+  dloader_kwargs = isnothing(shuffle) ? kwargs : (;shuffle,kwargs...)
+  dloader(data;batchsize,partial,rng,dloader_kwargs...)
 end
 
 function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
@@ -218,7 +231,117 @@ function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_b
   return NeuralOperator(train_state,stats)
 end
 
+# rollout 
+
+# the pushforward data holds (nc-1)/nc of the one-step samples: its batch size is
+# scaled so that both loaders yield (at least) the same number of batches, to be
+# zipped in the training loop. partial=false keeps every batch the same shape, so
+# each step is compiled once
+function AutoregressiveDataLoader((input,output);batchsize,partial=false,kwargs...)
+  one_step_data,pushforward_data = rollout_data(input,output)
+  one_step = MLUtils.DataLoader(one_step_data;batchsize,partial,kwargs...)
+  nb = length(one_step)
+  pf_batchsize = max(1,fld(MLUtils.numobs(pushforward_data),nb))
+  pushforward = MLUtils.DataLoader(pushforward_data;batchsize=pf_batchsize,partial,kwargs...)
+  (one_step=one_step,pushforward=pushforward)
+end
+
+function rollout_data(input::TwoStageBuckets,output::TwoStageBuckets)
+  nc = input.num_clusters
+  @check output.num_clusters == nc "Input and output must have the same number of clusters"
+  @check nc > 1 "The pushforward term needs at least two clusters"
+  one_step_data = (
+    input = _merge_data(input.second_stage,output.first_stage),
+    output = output.second_stage
+  )
+  
+  in_first_forward = _get_clusters(input.first_stage,2:nc,nc)
+  in_backward = _get_clusters(one_step_data.input,1:(nc-1),nc)
+  out_first_forward = _get_clusters(output.first_stage,2:nc,nc)
+  pushforward_data = (
+    input = in_first_forward,
+    output = out_first_forward,
+    metadata = in_backward
+  )
+
+  return (one_step_data,pushforward_data)
+end
+
+function train_model!(
+  train_state,
+  (one_step,pushforward)::NamedTuple,
+  stats,
+  lr_scheduler,
+  loss,
+  args...;
+  logger,λ=TData(1),warmup_epochs=0
+  )
+
+  # one-step term + pushforward term; pred is passed as data, so it is constant
+  # for Enzyme (stop-gradient)
+  function rollout_loss(model,ps,st,(one_step_b,pushforward_b,pred))
+    l_one_step,st,_ = loss(model,ps,st,(one_step_b.input,one_step_b.output))
+    ŷ,st = model(_merge_data(pushforward_b.input,pred),ps,st)
+    l_pushforward = loss(ŷ,pushforward_b.output)
+    return l_one_step + TData(λ)*l_pushforward,st,(;)
+  end
+
+  init!(logger)
+
+  predict = nothing
+
+  Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
+    for epoch in 1:logger.max_epochs
+      local current_loss = zero(TData)
+
+      for (raw_one_step,raw_pushforward) in zip(one_step,pushforward)
+        one_step_batch = raw_one_step |> XDEV
+
+        if epoch ≤ warmup_epochs
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            loss,
+            (one_step_batch.input,one_step_batch.output),
+            train_state;
+            return_gradients=Val(false)
+          )
+        else
+          pushforward_batch = raw_pushforward |> XDEV
+          ps = train_state.parameters
+          st = Lux.testmode(train_state.states)
+          if isnothing(predict)
+            predict = Reactant.@compile train_state.model(pushforward_batch.metadata,ps,st)
+          end
+          # plain forward pass outside the differentiated call
+          ŷ, = predict(pushforward_batch.metadata,ps,st)
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            rollout_loss,
+            (one_step_batch,pushforward_batch,ŷ),
+            train_state;
+            return_gradients=Val(false)
+          )
+        end
+
+        current_loss += TData(loss_val)
+      end
+      current_loss /= length(one_step)
+
+      step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
+
+      update!(logger,epoch,current_loss)
+    end
+  end
+
+  finalise!(logger)
+  return NeuralOperator(train_state,stats)
+end
+
 # utils
+
+_in_dims(inputs,outputs) = dimension(inputs)
+# rollout: the previous state is appended to the fixed data
+_in_dims(inputs::TwoStageBuckets,outputs::TwoStageBuckets) = dimension(inputs) + dimension(outputs)
 
 _shape_factor(::KernelStyle) = 1
 _edge_dims(::KernelStyle) = 0

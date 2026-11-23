@@ -34,12 +34,6 @@ into its own repository, and plugs back into them via multiple dispatch:
   [`GraphInducedSpace`](@ref), for graph-based neural architectures. Multi-field
   problems and several PDEs (e.g. on a moving geometry) are handled by gluing
   local spaces into a [`MultipleSpaces`](@ref).
-
-Usage: construct a `NNHyperReduction`/`NNRegression` (or their `Transient*`
-counterparts) and pass it to `RBSolver` wherever a steady/transient
-`HyperReduction` is expected, exactly as you would `MDEIMHyperReduction` or
-`RBFHyperReduction`; or construct a `NeuralSolver` directly and call
-`reduced_operator`/`solve` on it as you would any other ROM solver.
 """
 module NonlinearROMs
 
@@ -97,6 +91,8 @@ export RScoreStyle
 export ZScoreStyle
 export EnergyLoss
 export visualise
+export normalise!
+export denormalise!
 include("Utils.jl")
 
 export LRScheduler
@@ -174,20 +170,15 @@ export MultiLayerPerceptron
 include("NeuralModels.jl")
 
 export NeuralSolver
+export RolloutNeuralSolver
 export NeuralOperator
 export neural_operator
 export replace_space
 include("NeuralOperators.jl")
 
-export NNRegression
-export NNHyperReduction
-export TransientNNRegression
-export TransientNNHyperReduction
-export NOMADReduction
-export KernelReduction
-include("NeuralReductions.jl")
-
 export RolloutData
+export rollout_data
+export rollout
 include("Rollout.jl")
 
 export train

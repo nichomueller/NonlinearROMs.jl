@@ -1,5 +1,21 @@
+abstract type NeuralSolver <: ROMSolver end
+
+get_formatter(s::NeuralSolver) = @abstractmethod
+get_optimiser(s::NeuralSolver) = @abstractmethod
+get_scheduler(s::NeuralSolver) = @abstractmethod
+get_batch_size(s::NeuralSolver) = @abstractmethod
+get_loss(s::NeuralSolver) = @abstractmethod
+get_logger(s::NeuralSolver) = @abstractmethod
+build_model(s::NeuralSolver,args...;kwargs...) = @abstractmethod
+
+function resolve_batch_size(s::NeuralSolver,(inputs,outputs))
+  bs = get_batch_size(s)
+  ns = num_samples(inputs)
+  bs > 0 ? min(bs,ns) : ns
+end
+
 """
-    struct NeuralSolver{A<:NeuralModel} <: ROMSolver
+    struct GenericNeuralSolver{A<:NeuralModel} <: NeuralSolver
       model::A
       epochs::Int
       batch_size::Int
@@ -61,7 +77,7 @@ solver = NeuralSolver(
 )
 ```
 """
-struct NeuralSolver{A<:NeuralModel} <: ROMSolver
+struct GenericNeuralSolver{A<:NeuralModel} <: NeuralSolver
   model::A
   epochs::Int
   batch_size::Int
@@ -71,13 +87,11 @@ struct NeuralSolver{A<:NeuralModel} <: ROMSolver
   trainlog::TrainingLog
 end
 
-default_solver_formatter(model::NeuralModel) = DataFormatter(model)
-
 function NeuralSolver(
   model::NeuralModel;
   epochs::Int=20000,
   batch_size::Int=0,
-  formatter=default_solver_formatter(model),
+  formatter=DataFormatter(model),
   lr_scheduler=CosineAnnealing(epochs),
   loss=Lux.MSELoss(),
   name=string(nameof(typeof(model))),
@@ -88,7 +102,7 @@ function NeuralSolver(
 
   optimiser = Optimiser(;lr_scheduler,kwargs...)
   trainlog = TrainingLog(name,epochs;verbose,print_every)
-  NeuralSolver(
+  GenericNeuralSolver(
     model,
     epochs,
     batch_size,
@@ -99,18 +113,50 @@ function NeuralSolver(
   )
 end
 
-get_formatter(s::NeuralSolver) = s.formatter
-get_optimiser(s::NeuralSolver) = s.optimiser.opt
-get_scheduler(s::NeuralSolver) = s.optimiser.lr_scheduler
-get_loss(s::NeuralSolver) = s.loss
-get_logger(s::NeuralSolver) = s.trainlog
-build_model(s::NeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
+get_formatter(s::GenericNeuralSolver) = s.formatter
+get_optimiser(s::GenericNeuralSolver) = s.optimiser.opt
+get_scheduler(s::GenericNeuralSolver) = s.optimiser.lr_scheduler
+get_batch_size(s::GenericNeuralSolver) = s.batch_size
+get_loss(s::GenericNeuralSolver) = s.loss
+get_logger(s::GenericNeuralSolver) = s.trainlog
+build_model(s::GenericNeuralSolver,args...;kwargs...) = build_model(s.model,args...;kwargs...)
 
-function resolve_batch_size(s::NeuralSolver,(inputs,outputs))
-  bs = s.batch_size
-  ns = num_samples(inputs)
-  bs > 0 ? min(bs,ns) : ns
+"""
+    RolloutNeuralSolver(model::NeuralModel;warmup_epochs=0,λ=1.0,kwargs...)
+
+[`NeuralSolver`](@ref) for autoregressive (rollout) training on
+[`RolloutData`](@ref), with temporal bundling and the pushforward trick of
+Brandstetter et al.; `kwargs` are those of [`NeuralSolver`](@ref). Writing
+`F₁ᶜ,F₂ᶜ` for the features and `s₁ᶜ,s₂ᶜ` for the states at the two stages of
+cluster `c`, the network `N` maps `[x;F;previous state block]` to the next state
+block, and is trained on the loss
+```math
+ℓ(N([x;F₂ᶜ;s₁ᶜ]),s₂ᶜ) + λ\\,ℓ(N([x;F₁ᶜ;\\mathrm{sg}(N([x;F₂ᶜ⁻¹;s₁ᶜ⁻¹]))]),s₁ᶜ),
+```
+summed over all clusters (the second term for `c ≥ 2` only), `sg` being a
+stop-gradient. For the first `warmup_epochs` epochs only the one-step term is
+trained. The trained operator is evaluated by `solve(solver,op,input_space,
+initial_output_space)`, which rolls the network out from the initial state (see
+[`rollout`](@ref)).
+"""
+struct RolloutNeuralSolver{A<:NeuralModel} <: NeuralSolver
+  solver::GenericNeuralSolver{A}
+  warmup_epochs::Int
+  λ::Real
 end
+
+function RolloutNeuralSolver(args...;warmup_epochs::Int=0,λ::Real=1.0,kwargs...)
+  solver = NeuralSolver(args...;kwargs...)
+  RolloutNeuralSolver(solver,warmup_epochs,λ)
+end
+
+get_formatter(s::RolloutNeuralSolver) = get_formatter(s.solver)
+get_optimiser(s::RolloutNeuralSolver) = get_optimiser(s.solver)
+get_scheduler(s::RolloutNeuralSolver) = get_scheduler(s.solver)
+get_batch_size(s::RolloutNeuralSolver) = get_batch_size(s.solver)
+get_loss(s::RolloutNeuralSolver) = get_loss(s.solver)
+get_logger(s::RolloutNeuralSolver) = get_logger(s.solver)
+build_model(s::RolloutNeuralSolver,args...;kwargs...) = build_model(s.solver,args...;kwargs...)
 
 """
     struct NeuralOperator{A,B,C,D} <: AbstractLuxLayer
@@ -219,14 +265,50 @@ function Algebra.solve(
 end
 
 function Algebra.solve(
-  solver::NeuralSolver,
+  solver::RolloutNeuralSolver,
   op::NeuralOperator,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  initial_output_space::AbstractOutputSpace
   )
 
-  output = solve(solver,op,input_space)
-  to_element(output_space,output)
+  # copy: the initial state is normalised in place
+  ic = copy(fetch_data(solver,initial_output_space))
+  normalise!(ic,op.stats)
+  data = fetch_data_from_stats(solver,input_space,op.stats)
+  output = rollout(op,data,ic)
+  denormalise!(output,op.stats)
+  return output
+end
+
+# rollout 
+
+"""
+    rollout(op::NeuralOperator,data::TwoStageBuckets,state::AbstractInputData) -> TwoStageBuckets
+
+Autoregressive evaluation of a network trained by a [`RolloutNeuralSolver`](@ref):
+starting from the initial state block `state` (one sample per parameter), every
+cluster `c` is advanced as `ŷ₁ᶜ = N([x;F₁ᶜ;ŷ₂ᶜ⁻¹])`, `ŷ₂ᶜ = N([x;F₂ᶜ;ŷ₁ᶜ])`, with
+`ŷ₂⁰ = state`. `data` and `state` must be normalised; the predictions are fed
+back, and returned, normalised.
+"""
+function rollout(op::NeuralOperator,data::TwoStageBuckets,state::AbstractInputData)
+  msg = "Initial state and input have incompatible numbers of samples"
+  nc = num_clusters(data)
+  @check num_samples(data) == nc*num_samples(state) msg
+  first_outputs = Vector{typeof(state)}(undef,nc)
+  second_outputs = Vector{typeof(state)}(undef,nc)
+  for c in 1:nc
+    state = rollout_step(op,_get_clusters(data.first_stage,c:c,nc),state)
+    first_outputs[c] = state
+    state = rollout_step(op,_get_clusters(data.second_stage,c:c,nc),state)
+    second_outputs[c] = state
+  end
+  TwoStageBuckets(cat(first_outputs...;dims=3),cat(second_outputs...;dims=3),nc)
+end
+
+function rollout_step(op::NeuralOperator,data::AbstractInputData,state::AbstractInputData)
+  output, = op.chain(_merge_data(data,state),op.parameters,op.states)
+  return output
 end
 
 # utils

@@ -6,11 +6,19 @@ Sampler() = Sampler(:)
 
 sample(s::Sampler,data::AbstractInputData) = view(data,:,s.strategy,:)
 
+function sample(s::Sampler,a::TwoStageBuckets)
+  TwoStageBuckets(
+    sample(s,a.first_stage),
+    sample(s,a.second_stage),
+    a.num_clusters
+  )
+end
+
 struct FeatureBundle{N,T<:NTuple{N,AbstractParamFunction}}
   bundle::T
 end
 
-function ParamDataStructures.num_params(a::FeatureBundle)
+function num_samples(a::FeatureBundle)
   dict = OrderedDict{UInt,AbstractRealisation}()
   for f in a.bundle
     μ = get_params(f)
@@ -23,8 +31,8 @@ function ParamDataStructures.num_params(a::FeatureBundle)
   return np
 end
 
-ParamDataStructures.num_params(a::ParamFEFunction) = param_length(a)
-ParamDataStructures.num_params(a::TransientParamFESolution) = num_params(a.odesol.r)
+num_samples(a::ParamFEFunction) = param_length(a)
+num_samples(a::TransientParamFESolution) = num_params(a.odesol.r)
 
 struct DataFormatter{A,B,C,D,E<:NormStyle}
   pass_coords::Val{A}
@@ -100,6 +108,15 @@ end
 # output 
 function fetch_data(d::DataFormatter,values::AbstractInputData)
   sample(d.sampler,values)
+end
+
+# output
+function fetch_data(d::DataFormatter,values::TwoStageBuckets)
+  TwoStageBuckets(
+    fetch_data(d,values.first_stage),
+    fetch_data(d,values.second_stage),
+    values.num_clusters
+  )
 end
 
 function fetch_stats(d::DataFormatter,data)
@@ -237,9 +254,9 @@ function points_to_coords(x::AbstractVector{<:Point},K::Int=1)
   D = num_components(eltype(x))
   N = length(x)
   coords = zeros(TData,D,N,K)
-  for (i,xi) in enumerate(x)
+  @inbounds @views for (i,xi) in enumerate(x)
     for d in 1:D 
-      @views coords[d,i,:] .= xi.data[d]
+      coords[d,i,:] .= xi.data[d]
     end
   end
   return coords
@@ -272,9 +289,9 @@ end
 
 function _init_data(a,x)
   offsets = _offsets(a,testitem(x))
-  D = offsets[end] - 1
+  D = offsets[end]-1
   N = length(x)
-  K = num_params(a)
+  K = num_samples(a)
   data = zeros(TData,D,N,K)
   return data,offsets
 end
@@ -322,6 +339,14 @@ _merge_data(a::Nothing,b) = b
 _merge_data(a,b::Nothing) = a
 _merge_data(a::AbstractInputData,b::AbstractInputData) = cat(a,b;dims=1)
 
+function _merge_data(a::AbstractInputData,b::TwoStageBuckets)
+  TwoStageBuckets(
+    _merge_data(a,b.first_stage),
+    _merge_data(a,b.second_stage),
+    b.num_clusters
+  )
+end
+
 function _trivial_table(a::Tuple{Vararg{AbstractInputData}})
   ptrs = zeros(Int,length(a)+1)
   @inbounds for (i,ai) in enumerate(a)
@@ -341,3 +366,12 @@ end
 
 _get_range(::Nothing,::Int) = Colon()
 _get_range(l_to_sample_offset::AbstractVector,l::Int) = l_to_sample_offset[l]:(l_to_sample_offset[l+1]-1)
+
+# samples are stored cluster by cluster: cluster c spans (c-1)*Δ+1:c*Δ on axis 3
+function _get_clusters(a::AbstractInputData,r::UnitRange{Int},nc::Int)
+  K = num_samples(a)
+  @check K % nc == 0 "Number of samples must be divisible by the number of clusters"
+  Δ = K ÷ nc
+  inds = (first(r)-1)*Δ+1:last(r)*Δ
+  view(a,:,:,inds)
+end

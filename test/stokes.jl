@@ -8,8 +8,10 @@ using NonlinearROMs
 pdomain = (1,10,-1,5,1,2)
 pspace = ParamSpace(pdomain)
 
-domain = (0,1,0,1)
-partition = (8,8)
+L,H = 1,1
+N = 8
+domain = (0,L,0,H)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
 order = 2
@@ -70,8 +72,8 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
 # test 2: GNOs
 
-mesh_size = 1/8
-gspace = GraphInducedSpace(test;radius=2.4*mesh_size)
+mesh_size = 1/(2*N)
+gspace = GraphInducedSpace(test;radius=mesh_size)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(gmodel;epochs=200,loss=EnergyLoss(BlockNorm((H1(),L2())),fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)

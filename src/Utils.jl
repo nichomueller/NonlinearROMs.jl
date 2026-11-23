@@ -95,14 +95,62 @@ function tuple_of_arrays(a)
   take(a,eltype(a))
 end
 
-# input data type 
+function ptrs_to_length!(ptrs::AbstractArray{<:Integer})
+  @inbounds for i in (length(ptrs)-1):-1:1
+    ptrs[i+1] -= ptrs[i]
+  end
+  ptrs[1] = 0
+end
+
+# input data types
 
 const TData = Float32
+const TCData = ComplexF32
 const AbstractInputData{T} = AbstractArray{T,3}
 
 dimension(data::AbstractInputData) = size(data,1)
 num_coords(data::AbstractInputData) = size(data,2)
 num_samples(data::AbstractInputData) = size(data,3)
+
+"""
+    struct TwoStageBuckets{A<:AbstractInputData}
+      first_stage::A
+      second_stage::A
+      num_clusters::Int
+    end
+
+The two stages of a [`RolloutData`](@ref) evaluated on a point set, as two
+`(D,N,K)` arrays of equal size: `first_stage`/`second_stage` hold, for every
+cluster and parameter, the data at the first/second half of the cluster's times
+(the time slots of a stage stacked along the channel axis). The `K` samples are
+ordered cluster by cluster, so `num_clusters` blocks of `K÷num_clusters`
+parameters each. Both stages share a single normalisation score.
+"""
+struct TwoStageBuckets{A<:AbstractInputData}
+  first_stage::A
+  second_stage::A
+  num_clusters::Int
+  function TwoStageBuckets(first_stage::A,second_stage::A,num_clusters=1) where A<:AbstractInputData
+    msg = "First and second stage data must have the same dimensions"
+    @check size(first_stage) == size(second_stage) msg
+    new{A}(first_stage,second_stage,num_clusters)
+  end
+end
+
+function Base.copy(data::TwoStageBuckets)
+  TwoStageBuckets(
+    copy(data.first_stage),
+    copy(data.second_stage),
+    data.num_clusters
+  )
+end
+
+dimension(data::TwoStageBuckets) = dimension(data.first_stage)
+num_coords(data::TwoStageBuckets) = num_coords(data.first_stage)
+num_samples(data::TwoStageBuckets) = num_samples(data.first_stage)
+num_clusters(data::TwoStageBuckets) = data.num_clusters
+
+merge_data(data::TwoStageBuckets) = _merge_data(data.first_stage,data.second_stage)
 
 # normalisation handling
 
@@ -117,6 +165,21 @@ Score(::MScoreStyle,data;kwargs...) = MScore(data;kwargs...)
 Score(::RScoreStyle,data;kwargs...) = RScore(data;kwargs...)
 Score(::ZScoreStyle,data;kwargs...) = ZScore(data;kwargs...)
 
+# one score shared by both stages: the network's prediction (second-stage scale)
+# is fed back as a state, and compared against first-stage targets. The stats are
+# computed on the stages stacked along the samples, then both stages are
+# normalised in place (merging makes a copy, so normalising it would be lost)
+for T in (:MScoreStyle,:RScoreStyle,:ZScoreStyle)
+  @eval begin
+    function Score(style::$T,data::TwoStageBuckets;normalise=true)
+      all_data = cat(data.first_stage,data.second_stage;dims=3)
+      score = Score(style,all_data;normalise=false)
+      normalise && normalise!(data,score)
+      return score
+    end
+  end
+end
+
 function Score(style::NamedTuple,data::NamedTuple;kwargs...)
   scores = NamedTuple()
   for (k,v) in pairs(data)
@@ -129,6 +192,82 @@ abstract type AbstractScore end
 
 normalise!(data,score::AbstractScore) = @abstractmethod
 denormalise!(data,score::AbstractScore) = @abstractmethod
+combine_scores(scores::AbstractScore...;kwargs...) = @abstractmethod
+
+for f in (:normalise!,:denormalise!)
+  @eval begin
+    function $f(data::TwoStageBuckets,score::AbstractScore)
+      $f(data.first_stage,score)
+      $f(data.second_stage,score)
+      data
+    end
+  end
+end
+combine_scores(scores::Union{Tuple,AbstractVector};kwargs...) = combine_scores(scores...;kwargs...)
+
+struct MScore{A} <: AbstractScore
+  scale::A
+end
+
+const NoMScore = MScore{Nothing}
+
+MScore(::Nothing;kwargs...) = MScore(nothing)
+
+function MScore(data::AbstractInputData;normalise=true)
+  if normalise
+    stats = MScore(data;normalise=false)
+    normalise!(data,stats)
+    return stats
+  end
+  # Compute one scale factor per channel so multi-scale fields are balanced
+  s = dropdims(maximum(abs,data;dims=(2,3)),dims=(2,3))
+  T = eltype(s)
+  @inbounds for i in eachindex(s)
+    if s[i] <= floatmin(T)
+      s[i] = one(T)
+    end
+  end
+  return MScore(s)
+end
+
+normalise!(data::AbstractInputData,score::MScore{<:Number}) = (data ./= score.scale)
+denormalise!(data::AbstractInputData,score::MScore{<:Number}) = (data .*= score.scale)
+
+function normalise!(data::AbstractInputData,score::MScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd ./ score.scale[d]
+  end
+end
+
+function denormalise!(data::AbstractInputData,score::MScore)
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd .* score.scale[d]
+  end
+end
+
+function combine_scores(score::NoMScore...;kwargs...)
+  first(score)
+end
+
+function combine_scores(score::MScore{<:Number}...;kwargs...)
+  m = zero(first(score).scale)
+  for s in score
+    m = max(m,abs(s.scale))
+  end
+  return MScore(m)
+end
+
+function combine_scores(score::MScore...;kwargs...)
+  D = length(first(score).scale)
+  T = eltype(first(score).scale)
+  m = zeros(T,D)
+  @inbounds for s in score
+    for d in 1:D
+      m[d] = max(m[d],abs(s.scale[d]))
+    end
+  end
+  return MScore(m)
+end
 
 struct RScore{A} <: AbstractScore
   lower::A
@@ -169,6 +308,23 @@ function denormalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .* (score.upper[d] - score.lower[d])) .+ score.lower[d]
   end
+end
+
+function combine_scores(score::NoRScore...;kwargs...)
+  first(score)
+end
+
+function combine_scores(score::RScore...;kwargs...)
+  D = length(first(score).lower)
+  l = fill(typemax(TData),D)
+  u = fill(typemin(TData),D)
+  @inbounds for s in score
+    for d in 1:D
+      l[d] = min(l[d],s.lower[d])
+      u[d] = max(u[d],s.upper[d])
+    end
+  end
+  return RScore(l,u)
 end
 
 struct ZScore{A} <: AbstractScore
@@ -216,46 +372,6 @@ function ZScore(data::AbstractInputData;normalise=true)
   return ZScore(μ,σ)
 end
 
-struct MScore{A} <: AbstractScore
-  scale::A
-end
-
-const NoMScore = MScore{Nothing}
-
-MScore(::Nothing;kwargs...) = MScore(nothing)
-
-function MScore(data::AbstractInputData;normalise=true)
-  if normalise
-    stats = MScore(data;normalise=false)
-    normalise!(data,stats)
-    return stats
-  end
-  # Compute one scale factor per channel so multi-scale fields are balanced
-  s = dropdims(maximum(abs,data;dims=(2,3)),dims=(2,3))
-  T = eltype(s)
-  @inbounds for i in eachindex(s)
-    if s[i] <= floatmin(T)
-      s[i] = one(T)
-    end
-  end
-  return MScore(s)
-end
-
-normalise!(data::AbstractInputData,score::MScore{<:Number}) = (data ./= score.scale)
-denormalise!(data::AbstractInputData,score::MScore{<:Number}) = (data .*= score.scale)
-
-function normalise!(data::AbstractInputData,score::MScore)
-  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
-    data[d,:,:] .= vd ./ score.scale[d]
-  end
-end
-
-function denormalise!(data::AbstractInputData,score::MScore)
-  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
-    data[d,:,:] .= vd .* score.scale[d]
-  end
-end
-
 function normalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .- stats.μ[d]) ./ stats.σ[d]
@@ -272,6 +388,7 @@ for S in (NoRScore,NoZScore,NoMScore),f in (:normalise!,:denormalise!)
   @eval begin
     $f(data,score::$S) = data
     $f(data::AbstractInputData,score::$S) = data
+    $f(data::TwoStageBuckets,score::$S) = data
   end
 end
 
@@ -342,7 +459,7 @@ for f in (:normalise!,:denormalise!)
       $f(inputs,stats.input_score)
     end
 
-    function $f(outputs::AbstractInputData,stats::Normalisation)
+    function $f(outputs::Union{AbstractInputData,TwoStageBuckets},stats::Normalisation)
       $f(outputs,stats.output_score)
     end
   end
@@ -406,21 +523,59 @@ end
 
 # visualisation
 
+"""
+    visualise(dir,uh,ûh;trian,dir_name="plot",variable_name="uh",param_id=1)
+
+Writes the true field `uh`, the prediction `ûh` and their difference for the
+`param_id`-th parameter to `joinpath(dir,dir_name)`, as the cell fields
+`variable_name`, `"approx_"*variable_name` and `"err_"*variable_name` (one per
+field, suffixed `_field<i>`, for multi-field functions). For a steady `uh` (a
+`ParamFEFunction`) a single `.vtu` file is written; for a transient `uh` (a
+`TransientParamFESolution`), `ûh` stores every (parameter,time) pair with the
+parameter index running fastest, as returned by [`to_element`](@ref) on a rollout
+prediction, and one `.vtu` file per time step is written, collected into a `.pvd`
+time series.
+"""
 function visualise(
-  dir,uh,ûh;
+  dir,uh::ParamFEFunction,ûh::ParamFEFunction;
   trian=get_triangulation(get_fe_space(uh)),
-  dir_name="plot",variable_name="uh",
+  dir_name="plot",variable_name="uh",param_id=1
   )
 
   dir = joinpath(dir,dir_name)
   mkpath(dir)
-  fields = Pair{String}[]
-  for ip in param_eachindex(uh)
-    uhip = param_getindex(uh,ip)
-    ûhip = param_getindex(ûh,ip)
-    _push_fields!(fields,uhip,ûhip,"$(variable_name)_param_$(ip)")
-  end
+  fields = _get_fields(uh,param_id,ûh,param_id,variable_name)
   writevtk(trian,joinpath(dir,variable_name),cellfields=fields)
+end
+
+function visualise(
+  dir,uht::TransientParamFESolution,ûh::ParamFEFunction;
+  trian=get_triangulation(uht.trial),
+  dir_name="plot",variable_name="uh",param_id=1
+  )
+
+  r = uht.odesol.r
+  np = num_params(r)
+  times = get_times(r)
+  nt = param_length(ûh) ÷ np
+  dir = joinpath(dir,dir_name)
+  mkpath(dir)
+  createpvd(joinpath(dir,variable_name)) do pvd
+    for (it,uh) in enumerate(uht)
+      it > nt && break
+      fields = _get_fields(uh,param_id,ûh,(it-1)*np+param_id,variable_name)
+      file = joinpath(dir,"$(variable_name)_$(it).vtu")
+      pvd[times[it]] = createvtk(trian,file,cellfields=fields)
+    end
+  end
+end
+
+function _get_fields(uh,ip,ûh,îp,variable_name)
+  fields = Pair{String}[]
+  uhip = param_getindex(uh,ip)
+  ûhip = param_getindex(ûh,îp)
+  _push_fields!(fields,uhip,ûhip,variable_name)
+  fields
 end
 
 function _push_fields!(fields,uhip,ûhip,name)

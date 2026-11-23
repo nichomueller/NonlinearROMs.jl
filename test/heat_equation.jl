@@ -1,13 +1,22 @@
 using Gridap 
 using GridapROMs
+using GridapROMs.ParamDataStructures
 using GridapROMs.RBSteady
 using NonlinearROMs
+using DrWatson
 
+θ = 0.5
+dt = 0.01
+t0 = 0.0
+tf = 10*dt
+tdomain = t0:dt:tf
 pdomain = (1,10,1,10,1,10)
-pspace = ParamSpace(pdomain)
+ptspace = TransientParamSpace(pdomain,tdomain)
 
-domain = (0,1,0,1)
-partition = (5,5)
+L,W = 1,1
+N = 5
+domain = (0,L,0,W)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
 order = 1
@@ -43,52 +52,57 @@ trial = TransientTrialParamFESpace(test,gμt)
 
 uh0μ(μ) = interpolate_everywhere(u0μ(μ),trial(μ,t0))
 
-θ = 0.5
-dt = 0.01
-t0 = 0.0
-tf = 10*dt
-tdomain = t0:dt:tf
-
-ptspace = TransientParamSpace(pdomain,tdomain)
-
 fesolver = ThetaMethod(LUSolver(),dt,θ)
 feop = TransientLinearParamFEOperator(rhs,(stiffness,mass),ptspace,trial,test)
 
-μ = realisation(pspace;nparams=50)
-μt = TransientRealisation(μ,collect(tdomain))
+dir = datadir("heat_equation")
+mkpath(dir)
+
+μt_train = realisation(ptspace;nparams=50)
+μ_train = get_params(μt_train)
+uhμ_train = solve(fesolver,feop,μt_train,uh0μ)
+
+μt = realisation(ptspace;nparams=50)
+μ = get_params(μt)
 uhμ = solve(fesolver,feop,μt,uh0μ)
 
-using GridapROMs.ParamDataStructures
-using Gridap.Algebra
+x = get_coords(test)
+times = collect(dt:dt:tf)
+
+features(μ) = RolloutData(
+  FeatureBundle((aμt(μ,times),fμt(μ,times),gμt(μ,times),hμt(μ,times))),
+  times,2
+)
+input_space(μ) = InputSpace(x,features(μ))
+output_space = OutputSpace(RolloutData(uhμ_train,times,2))
+output_space0 = OutputSpace(uh0μ(μ))
+
+# test 1: Gridap-based spaces
 
 fspace = FunctionSpace(test)
-gspace = GraphInducedSpace(fspace;radius=0.3)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+solver = RolloutNeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-times = collect(tdomain)
-states = vcat(uh0μ(μ),collect(uhμ)...)
-features(t) = FeatureBundle((aμt(μ,t),fμt(μ,t),gμt(μ,t),hμt(μ,t)))
-input_space,output_space = rollout_data(fspace,features,times,states)
+# test 2: GNOs
 
-model = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(model;epochs=200,print_every=50)
+mesh_size = 1/N
+gspace = GraphInducedSpace(test;radius=mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = RolloutNeuralSolver(gmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 
-# offline phase: train the one-step (autoregressive) operator
-op = neural_operator(solver,input_space,output_space)
+# test 3: FNOs
 
-# online phase: roll the trained operator out over the whole trajectory, starting
-# from the true initial condition -- each step only ever sees its own prediction
-predicted_states = rollout(solver,op,fspace,features,times,states[1])
-
-# 
-
-A = NonlinearROMs.RolloutData(uhμ)
-
-using Gridap.ODEs
-using Gridap.Arrays
-
-x = [Point(0.1,0.1),Point(0.5,0.5),Point(0.9,0.9)]
-np = num_params(A.data.odesol.r)
-features,offsets = NonlinearROMs._init_data(A,x)
-(r,ah),state = iterate(A.data)
-ax = lazy_map(ah,x)
-cache = array_cache(ax)
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
+solver = RolloutNeuralSolver(kmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")

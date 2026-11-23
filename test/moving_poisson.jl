@@ -4,14 +4,14 @@ using GridapEmbedded
 using GridapROMs
 using NonlinearROMs
 
-const L = 2
-const W = 2
-const n = 20
-const γd = 10.0
-const hd = max(L,W)/n
+L = 2
+W = 2
+N = 20
+γd = 10.0
+hd = max(L,W)/N
 
 domain = (0,L,0,W)
-partition = (n,n)
+partition = (N,N)
 bgmodel = CartesianDiscreteModel(domain,partition)
 
 order = 1

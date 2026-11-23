@@ -30,8 +30,10 @@ using NonlinearROMs
 pdomain = (1,10,-1,5,1,2)
 pspace = ParamSpace(pdomain)
 
-domain = (0,1,0,1)
-partition = (8,8)
+L,H = 1,1
+N = 8
+domain = (0,L,0,H)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
 order = 2
@@ -146,7 +148,7 @@ pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-mesh_size = 1/8
+mesh_size = 1/(2*N)
 gspace = GraphInducedSpace(test;radius=2.4*mesh_size)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(fesolver,gmodel;epochs=200,loss=loss,print_every=50)

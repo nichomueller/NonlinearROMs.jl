@@ -1,7 +1,5 @@
 using DrWatson
-using LinearAlgebra
-using Lux
-using Gridap
+using Gridap 
 using GridapROMs
 using GridapROMs.RBSteady
 using NonlinearROMs
@@ -9,11 +7,12 @@ using NonlinearROMs
 pdomain = (1,10,1,10,1,10)
 pspace = ParamSpace(pdomain)
 
+N = 20
 domain = (0,1,0,1)
-partition = (50,50)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
-order = 2
+order = 1
 degree = 2*order
 
 Ω = Triangulation(model)
@@ -45,11 +44,10 @@ fesolver = LinearFESolver(LUSolver())
 
 # FE quantities (snapshots)
 
-nparams_train = 100
-μ_train = realisation(pspace;nparams=nparams_train,sampling=:halton)
+μ_train = realisation(pspace;nparams=50)
 uhμ_train = solve(fesolver,feop,μ_train)
 
-μ = realisation(pspace;nparams=5,sampling=:halton,start=nparams_train + 1)
+μ = realisation(pspace;nparams=1)
 uhμ = solve(fesolver,feop,μ)
 
 # NO setup
@@ -59,66 +57,34 @@ dir = datadir("poisson")
 x = get_coords(test)
 features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
 input_space(μ) = InputSpace(x,features(μ))
-in_train = input_space(μ_train)
-in_test = input_space(μ)
 output_space = OutputSpace(uhμ_train)
-out_test = OutputSpace(uhμ)
-uμ = out_test.values
 
 # test 1: Gridap-based spaces
 
 fspace = FunctionSpace(test)
-f_epochs = 50
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
-fsolver = NeuralSolver(
-  fmodel;
-  epochs=f_epochs,
-  batch_size=5,
-  lr_scheduler=CosineAnnealing(f_epochs;lr_max=Float32(5e-3),lr_min=Float32(1e-5)),
-  loss=EnergyLoss(H1(),fspace),
-  print_every=10
-)
-fop = neural_operator(fsolver,in_train,output_space)
-pred_uμ = solve(fsolver,fop,in_test)
-println("FunctionSpace relative L2 test error: $(norm(pred_uμ - uμ) / norm(uμ))")
-pred_uhμ = to_element(out_test,pred_uμ)
+solver = NeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-# test 2: GNOs (subsampled training via Sampler + zero-shot full-resolution inference)
+# test 2: GNOs
 
-# Quasi-uniform subgrid: 1 out of every 4 DoFs per axis (h_sub = 0.04, N_sub = 650)
-dof_res = 50 * order
-stride = 4
-sub_ids = findall(p -> (round(Int,p[1] * dof_res) % stride == 0) && (round(Int,p[2] * dof_res) % stride == 0),x)
-r_phys = 2 * stride / dof_res
-
-gspace_sub = GraphInducedSpace(x[sub_ids];radius=r_phys)
-g_epochs = 600
-gmodel = KernelNeuralModel(
-  gspace_sub;
-  hidden_layers=(24,24,24),
-  activation=tanh,
-  formatter=FeatureKernelFormatter(;sampler=Sampler(sub_ids))
-)
-gsolver = NeuralSolver(
-  gmodel;
-  epochs=g_epochs,
-  batch_size=10,
-  lr_scheduler=CosineAnnealing(g_epochs;lr_max=Float32(5e-3),lr_min=Float32(1e-5)),
-  loss=Lux.MSELoss(),
-  print_every=100
-)
-gop_sub = neural_operator(gsolver,in_train,output_space)
-
-# Transfer trained operator to the full 50x50 Q2 mesh with the same physical radius
-gspace_full = GraphInducedSpace(test;radius=r_phys)
-gop_full = replace_space(gop_sub,gspace_full)
-gsolver_infer = NeuralSolver(gmodel;formatter=DataFormatter())
-pred_gno = similar(uμ)
-for k in axes(uμ,3)
-  in_k = InputSpace(in_test.coords[:,:,k:k],in_test.features[:,:,k:k])
-  pred_gno[:,:,k:k] = solve(gsolver_infer,gop_full,in_k)
-end
-println("GraphInducedSpace relative L2 test error: $(norm(pred_gno - uμ) / norm(uμ))")
-pred_uhμ = to_element(out_test,pred_gno)
+mesh_size = 1/N
+gspace = GraphInducedSpace(test;radius=2*mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(gmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
+
+# test 3: FNOs
+
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(kmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")

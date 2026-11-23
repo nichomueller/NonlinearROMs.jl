@@ -16,6 +16,24 @@ Literate.markdown(
   documenter=true,
 )
 
+Literate.markdown(
+  joinpath(@__DIR__,"literate","heat_equation.jl"),
+  joinpath(@__DIR__,"src");
+  name="heat_equation",
+  documenter=true,
+)
+
+# `green.jl` trains for several minutes and plots with Plots.jl (not a docs
+# dependency): its blocks are rendered as plain Julia code, illustrated by the
+# figures it produced, stored in `src/assets/green`.
+Literate.markdown(
+  joinpath(@__DIR__,"literate","green.jl"),
+  joinpath(@__DIR__,"src");
+  name="green",
+  documenter=true,
+  codefence="```julia" => "```",
+)
+
 # `moving_poisson.jl` is a documented work-in-progress (see the warning at the
 # top of the generated page): its code does not run yet, so its blocks are
 # rendered as plain (non-executed) Julia code rather than `@example` blocks.
@@ -38,7 +56,12 @@ makedocs(;
     "Tutorials" => [
       "Poisson equation" => "example.md",
       "Stokes flow" => "stokes.md",
+      "Heat equation (rollout)" => "heat_equation.md",
+      "Learning a Green function" => "green.md",
       "Moving Poisson (WIP)" => "moving_poisson.md",
+    ],
+    "Results" => [
+      "Preliminary results: Poisson equation" => "poisson_results.md",
     ],
   ],
   sitename="NonlinearROMs.jl",

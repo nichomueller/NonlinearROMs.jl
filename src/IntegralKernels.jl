@@ -8,17 +8,6 @@ get_out_dimension(k::Lux.Dense) = k.out
 get_in_dimension(k::Lux.Conv) = k.in
 get_out_dimension(k::Lux.Conv) = k.out
 
-function Arrays.evaluate(layer::AbstractLuxLayer,x::Union{AbstractVector,AbstractMatrix},ps,st)
-  layer(x,ps,st)
-end
-
-function Arrays.evaluate(layer::AbstractLuxLayer,x::AbstractArray,ps,st)
-  a = reshape(x,size(x,1),:)
-  b,st = layer(a,ps,st)
-  y = reshape(b,size(b,1),Base.tail(size(x))...)
-  return y,st
-end
-
 """
     kv(k,v,meas::InducedMeasure)
 
@@ -32,42 +21,56 @@ matrix-vector product is independent of whether `v` is ALSO fed as one of
 `κ_θ`'s own inputs -- that's `formatter`'s/`pass_new_data`'s concern, orthogonal
 to this one.
 """
-function kv(k,v,meas::InducedMeasure)
-  _kv(k,v)
-end
-
-function kv(k,v,meas::Union{GraphMeasure,FESpaceMeasure,MultipleMeasure})
+function kv(k,v,meas)
   v′ = permutedims(v,(1,3,2))
   v′_src = NNlib.gather(v′,get_src_ids(meas))
   v_src = permutedims(v′_src,(1,3,2))
   _kv(k,v_src)
 end
 
+"""
+    struct FourierKernel <: AbstractIntegralKernel
+      in_dims::Int
+      out_dims::Int
+      truncation::Int
+    end
+
+FNO-style spectral convolution (Li et al.): `v` of size `(in_dims,N,K)` is
+Fourier-transformed along the point axis, its first `truncation` modes are mixed
+across channels by one real `(out_dims,in_dims)` matrix per mode (the
+remaining modes are zeroed), and the result is transformed back to `N` points.
+Real per-mode weights scale the real and imaginary parts of each mode alike:
+in physical space they give an even (symmetric) convolution kernel.
+
+The FFT treats the `N` points as uniformly spaced samples in the order they are
+stored, so the kernel is only a convolution in physical space if the points are
+ordered on a uniform 1D grid; for any other point set it is a (still trainable)
+global operator whose meaning depends on the point ordering.
+"""
 struct FourierKernel <: AbstractIntegralKernel
   in_dims::Int
   out_dims::Int
   truncation::Int
 end
 
-get_in_dimension(k::FourierKernel) = k.in_dims
-get_out_dimension(k::FourierKernel) = k.out_dims
+get_in_dimension(l::FourierKernel) = l.in_dims
+get_out_dimension(l::FourierKernel) = l.out_dims
 
 function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
+  scale = TData(l.in_dims*l.out_dims)
   return (
-    kernel = TData(2) .* rand(rng,TData,l.truncation,l.out_dims,l.in_dims) .- TData(1),
+    weight_re = rand(rng,TData,l.out_dims,l.in_dims,l.truncation) ./ scale,
+    weight_im = rand(rng,TData,l.out_dims,l.in_dims,l.truncation) ./ scale,
   )
 end
 
-function Lux.initialstates(rng::AbstractRNG,l::FourierKernel)
-  return (
-    kernel = NamedTuple(),
-  )
-end
+Lux.initialstates(rng::AbstractRNG,l::FourierKernel) = NamedTuple()
 
-function (l::FourierKernel)((fixed_data,x),ps,st)
-  x̂ = rfft(x)
-  ŷ = fapply(ps.kernel,x̂)
-  y = irfft(ŷ)
+function (l::FourierKernel)((fixed_data,v),ps,st)
+  N = size(v,2)
+  v̂ = rfft(v,2) # (in_dims,N÷2+1,K)
+  ŷ = _fft_modes(v̂,ps,l.truncation)
+  y = irfft(ŷ,N,2)
   return (fixed_data,y),st
 end
 
@@ -473,13 +476,6 @@ select_channels(data,::Colon) = data
 select_channels(data,::Nothing) = nothing
 select_channels(data::AbstractInputData,ids::AbstractUnitRange) = view(data,ids,:,:)
 
-function fapply(W::AbstractArray{T,3},x::AbstractMatrix) where T
-  k,in_dims,out_dims = size(W)
-  A = reshape(permutedims(W,(2,1,3)),k*out_dims,in_dims)
-  b = vec(x)
-  reshape(A*b,k,out_dims)
-end
-
 function attention_integral(scores,values,meas::InducedMeasure)
   @notimplemented "Attention integration is not implemented for measure type $(typeof(meas))."
 end
@@ -507,4 +503,24 @@ function _kv(k::AbstractInputData,v::AbstractInputData)
     v_r = reshape(v,1,din,n2,n3)
     return dropdims(sum(k_r .* v_r,dims=2),dims=2)
   end
+end
+
+function _fft_modes(v̂,ps,k)
+  nf = size(v̂,2)
+  m = min(k,nf)
+  v̂m = permutedims(v̂[:,1:m,:],(1,3,2)) # (in_dims,K,m)
+  vr,vi = real.(v̂m),imag.(v̂m)
+  Wr = ps.weight_re[:,:,1:m]
+  Wi = ps.weight_im[:,:,1:m]
+  # per mode: ŷ = W*v̂, with W = Wr + i*Wi
+  yr = batched_mul(Wr,vr) .- batched_mul(Wi,vi)
+  yi = batched_mul(Wr,vi) .+ batched_mul(Wi,vr)
+  ŷ = permutedims(complex.(yr,yi),(1,3,2)) # (out_dims,m,K)
+  m == nf ? ŷ : cat(ŷ,_zeros_like(ŷ,size(ŷ,1),nf-m,size(ŷ,3));dims=2)
+end
+
+function _zeros_like(x,dims...)
+  z = similar(x,dims...)
+  fill!(z,zero(eltype(z)))
+  z
 end
