@@ -13,8 +13,10 @@ tdomain = t0:dt:tf
 pdomain = (1,10,1,10,1,10)
 ptspace = TransientParamSpace(pdomain,tdomain)
 
-domain = (0,1,0,1)
-partition = (5,5)
+L,W = 1,1
+N = 5
+domain = (0,L,0,W)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
 order = 1
@@ -73,6 +75,7 @@ features(μ) = RolloutData(
 )
 input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(RolloutData(uhμ_train,times,2))
+output_space0 = OutputSpace(uh0μ(μ))
 
 # test 1: Gridap-based spaces
 
@@ -80,8 +83,26 @@ fspace = FunctionSpace(test)
 fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
 solver = RolloutNeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
-
-output_space0 = OutputSpace(uh0μ(μ))
 pred_uμ = solve(solver,op,input_space(μ),output_space0)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
+
+# test 2: GNOs
+
+mesh_size = 1/N
+gspace = GraphInducedSpace(test;radius=mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = RolloutNeuralSolver(gmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
+
+# test 3: FNOs
+
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
+solver = RolloutNeuralSolver(kmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ),output_space0)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")

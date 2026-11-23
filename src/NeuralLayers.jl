@@ -25,7 +25,7 @@ Lux.initialparameters(rng::AbstractRNG,l::Lift) = Lux.initialparameters(rng,l.la
 Lux.initialstates(rng::AbstractRNG,l::Lift) = Lux.initialstates(rng,l.layer)
 
 function (l::Lift)(fixed_data,ps,st)
-  v = evaluate(l.layer,fixed_data,ps,st)
+  v,st = evaluate(l.layer,fixed_data,ps,st)
   return (fixed_data,v),st
 end
 

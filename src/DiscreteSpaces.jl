@@ -149,7 +149,7 @@ get_edge_weights(space::GraphInducedSpace) = space.edge_weights
 # multiple spaces
 
 """
-    struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{Int}}} <: DiscreteSpace
+    struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{<:Integer}}} <: DiscreteSpace
       gspace::A
       lspaces::B
       l_to_lcoord_to_coords::C
@@ -176,7 +176,7 @@ Built by [`InputSpace`](@ref)/[`OutputSpace`](@ref)/[`FunctionSpace`](@ref)/
 scenario). `FunctionSpace(f::MultipleSpaces)`/`GraphInducedSpace(f::MultipleSpaces)`
 build the integration spaces matching the layout (and samples) of `f`.
 """
-struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{Int}}} <: DiscreteSpace
+struct MultipleSpaces{N,A<:DiscreteSpace,B<:NTuple{N,DiscreteSpace},C<:Table,D<:Union{Nothing,AbstractVector{<:Integer}}} <: DiscreteSpace
   gspace::A
   lspaces::B
   l_to_lcoord_to_coords::C

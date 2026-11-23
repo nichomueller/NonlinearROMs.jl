@@ -59,70 +59,32 @@ features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ),hμ(μ)))
 input_space(μ) = InputSpace(x,features(μ))
 output_space = OutputSpace(uhμ_train)
 
-for epochs in (200,500,1000)
-  for lsize in (8,16,64)
-    for nsize in (2,3)
-      hidden_layers = ntuple(i->lsize,nsize)
-      case = "e=$(epochs)_l=$(lsize)_n=$(nsize)"
-      # test 1: Gridap-based spaces
+# test 1: Gridap-based spaces
 
-      fspace = FunctionSpace(test)
-      fmodel = KernelNeuralModel(fspace;hidden_layers,activation=tanh)
-      solver = NeuralSolver(fmodel;epochs,loss=EnergyLoss(H1(),fspace),print_every=50)
-      op = neural_operator(solver,input_space(μ_train),output_space)
-      pred_uμ = solve(solver,op,input_space(μ))
-      pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-      visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap_$(case)")
+fspace = FunctionSpace(test)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(fmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
-      # test 2: GNOs
+# test 2: GNOs
 
-      mesh_size = 1/N
-      gspace = GraphInducedSpace(test;radius=2*mesh_size)
-      gmodel = KernelNeuralModel(gspace;hidden_layers,activation=tanh)
-      solver = NeuralSolver(gmodel;epochs,loss=EnergyLoss(H1(),fspace),print_every=50)
-      op = neural_operator(solver,input_space(μ_train),output_space)
-      pred_uμ = solve(solver,op,input_space(μ))
-      pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-      visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno_$(case)")
+mesh_size = 1/N
+gspace = GraphInducedSpace(test;radius=2*mesh_size)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(gmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 
-      # test 3: FNOs
+# test 3: FNOs
 
-      kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers,activation=tanh)
-      solver = NeuralSolver(kmodel;epochs,loss=EnergyLoss(H1(),fspace),print_every=50)
-      op = neural_operator(solver,input_space(μ_train),output_space)
-      pred_uμ = solve(solver,op,input_space(μ))
-      pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-      visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno_$(case)")
-    end
-  end
-end
-
-# # test 1: Gridap-based spaces
-
-# fspace = FunctionSpace(test)
-# fmodel = KernelNeuralModel(fspace;hidden_layers=(64,64,64),activation=tanh)
-# solver = NeuralSolver(fmodel;epochs=1000,loss=EnergyLoss(H1(),fspace),print_every=50)
-# op = neural_operator(solver,input_space(μ_train),output_space)
-# pred_uμ = solve(solver,op,input_space(μ))
-# pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-# visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
-
-# # test 2: GNOs
-
-# mesh_size = 1/5
-# gspace = GraphInducedSpace(test;radius=2*mesh_size)
-# gmodel = KernelNeuralModel(gspace;hidden_layers=(64,64,64),activation=tanh)
-# solver = NeuralSolver(gmodel;epochs=1000,loss=EnergyLoss(H1(),fspace),print_every=50)
-# op = neural_operator(solver,input_space(μ_train),output_space)
-# pred_uμ = solve(solver,op,input_space(μ))
-# pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-# visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
-
-# # test 3: FNOs
-
-# kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(64,64,64),activation=tanh)
-# solver = NeuralSolver(kmodel;epochs=1000,loss=EnergyLoss(H1(),fspace),print_every=50)
-# op = neural_operator(solver,input_space(μ_train),output_space)
-# pred_uμ = solve(solver,op,input_space(μ))
-# pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
-# visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
+solver = NeuralSolver(kmodel;epochs=200,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space(μ_train),output_space)
+pred_uμ = solve(solver,op,input_space(μ))
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")

@@ -22,11 +22,11 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
   @testset "InducedMeasures & Integration" begin
     model = CartesianDiscreteModel((0,1,0,1),(6,6))
     reffe = ReferenceFE(lagrangian,Float64,1)
-    V = TestFESpace(model,reffe; conformity=:H1,dirichlet_tags="boundary")
+    V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
 
     # 1. GraphMeasure integration: integrating a constant message c across all incoming
     # edges of each node must yield exactly c at every node (degree-normalized average)
-    gspace = GraphInducedSpace(V; radius=0.35)
+    gspace = GraphInducedSpace(V;radius=0.35)
     g = get_graph(gspace)
     gmeas = InducedMeasure(gspace)
 
@@ -37,7 +37,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     edge_const = fill(c_val,D,E,K)
     node_int = integration(edge_const,gmeas)
     @test size(node_int) == (D,N,K)
-    @test all(x -> isapprox(x,c_val; atol=1e-5),node_int)
+    @test all(x -> isapprox(x,c_val;atol=1e-5),node_int)
 
     # 2. FESpaceMeasure integration & Sobolev Energy Losses
     fspace = FunctionSpace(V)
@@ -62,8 +62,8 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
   @testset "Kernel Network Non-Linearity & _kv Modes" begin
     model = CartesianDiscreteModel((0,1,0,1),(5,5))
     reffe = ReferenceFE(lagrangian,Float64,1)
-    V = TestFESpace(model,reffe; conformity=:H1,dirichlet_tags="boundary")
-    gspace = GraphInducedSpace(V; radius=0.3)
+    V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
+    gspace = GraphInducedSpace(V;radius=0.3)
     fspace = FunctionSpace(V)
 
     N = num_coords(gspace)
@@ -137,12 +137,12 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     rhs(μ,v) = ∫(fμ(μ) * v)dΩ
 
     reffe = ReferenceFE(lagrangian,Float64,1)
-    test_space = TestFESpace(Ω,reffe; conformity=:H1,dirichlet_tags="boundary")
+    test_space = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags="boundary")
     trial_space = ParamTrialFESpace(test_space,gμ)
     feop = LinearParamFEOperator(rhs,stiffness,pspace,trial_space,test_space)
     fesolver = LinearFESolver(LUSolver())
 
-    μ_train = realisation(pspace; nparams=8,sampling=:halton)
+    μ_train = realisation(pspace;nparams=8,sampling=:halton)
     uh_train = solve(fesolver,feop,μ_train)
 
     x_coords = get_coords(test_space)
@@ -153,9 +153,9 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     features_backup = copy(in_train.features)
     values_backup = copy(out_train.values)
 
-    gspace = GraphInducedSpace(test_space; radius=0.35)
-    gno = KernelNeuralModel(gspace; hidden_layers=(8,8),activation=tanh)
-    solver = NeuralSolver(gno; epochs=5,batch_size=4,verbose=false)
+    gspace = GraphInducedSpace(test_space;radius=0.35)
+    gno = KernelNeuralModel(gspace;hidden_layers=(8,8),activation=tanh)
+    solver = NeuralSolver(gno;epochs=5,batch_size=4,verbose=false)
 
     op = neural_operator(solver,in_train,out_train)
 
@@ -165,7 +165,7 @@ using NonlinearROMs: TData,num_coords,get_weights,_kv,build_model
     @test out_train.values ≈ values_backup
 
     # Repeated online solve calls on the same InputSpace must be idempotent
-    μ_test = realisation(pspace; nparams=3,sampling=:halton,start=9)
+    μ_test = realisation(pspace;nparams=3,sampling=:halton,start=9)
     in_test = InputSpace(x_coords,FeatureBundle((aμ(μ_test),fμ(μ_test))))
     test_coords_backup = copy(in_test.coords)
     test_features_backup = copy(in_test.features)

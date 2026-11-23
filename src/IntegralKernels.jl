@@ -21,11 +21,7 @@ matrix-vector product is independent of whether `v` is ALSO fed as one of
 `κ_θ`'s own inputs -- that's `formatter`'s/`pass_new_data`'s concern, orthogonal
 to this one.
 """
-function kv(k,v,meas::InducedMeasure)
-  _kv(k,v)
-end
-
-function kv(k,v,meas::Union{GraphMeasure,FESpaceMeasure,MultipleMeasure})
+function kv(k,v,meas)
   v′ = permutedims(v,(1,3,2))
   v′_src = NNlib.gather(v′,get_src_ids(meas))
   v_src = permutedims(v′_src,(1,3,2))
@@ -41,10 +37,10 @@ end
 
 FNO-style spectral convolution (Li et al.): `v` of size `(in_dims,N,K)` is
 Fourier-transformed along the point axis, its first `truncation` modes are mixed
-across channels by one complex `(out_dims,in_dims)` matrix per mode (the
+across channels by one real `(out_dims,in_dims)` matrix per mode (the
 remaining modes are zeroed), and the result is transformed back to `N` points.
-The complex weights are stored as real and imaginary parts, so that the
-parameters seen by the optimiser/AD are real.
+Real per-mode weights scale the real and imaginary parts of each mode alike:
+in physical space they give an even (symmetric) convolution kernel.
 
 The FFT treats the `N` points as uniformly spaced samples in the order they are
 stored, so the kernel is only a convolution in physical space if the points are
@@ -57,18 +53,14 @@ struct FourierKernel <: AbstractIntegralKernel
   truncation::Int
 end
 
-# here i am assuming the input is real, so the output of rfft has zero
-# imaginary part. however, for complex-valued inputs, this is not true.
-# i think the dispatch should be at the layer level, that is: we should 
-# implement a ComplexFourierKernel
-
 get_in_dimension(l::FourierKernel) = l.in_dims
 get_out_dimension(l::FourierKernel) = l.out_dims
 
 function Lux.initialparameters(rng::AbstractRNG,l::FourierKernel)
   scale = TData(l.in_dims*l.out_dims)
   return (
-    weight = rand(rng,TData,l.out_dims,l.truncation,l.in_dims) ./ scale,
+    weight_re = rand(rng,TData,l.out_dims,l.in_dims,l.truncation) ./ scale,
+    weight_im = rand(rng,TData,l.out_dims,l.in_dims,l.truncation) ./ scale,
   )
 end
 
@@ -377,14 +369,19 @@ end
 function _fft_modes(v̂,ps,k)
   nf = size(v̂,2)
   m = min(k,nf)
-  v = real.(v̂[:,1:m,:]) # (in_dims,m,K)
-  W = ps.weight[:,1:m,:]
-  y = batched_mul(W,v) # per mode: ŷ = W*v̂
-  ŷ = complex(y) # (out_dims,m,K)
-  if m == nf
-    ŷ
-  else
-    z = zeros(eltype(ŷ),size(ŷ,1),nf-size(ŷ,2),size(ŷ,3))
-    cat(ŷ,z;dims=2)
-  end
+  v̂m = permutedims(v̂[:,1:m,:],(1,3,2)) # (in_dims,K,m)
+  vr,vi = real.(v̂m),imag.(v̂m)
+  Wr = ps.weight_re[:,:,1:m]
+  Wi = ps.weight_im[:,:,1:m]
+  # per mode: ŷ = W*v̂, with W = Wr + i*Wi
+  yr = batched_mul(Wr,vr) .- batched_mul(Wi,vi)
+  yi = batched_mul(Wr,vi) .+ batched_mul(Wi,vr)
+  ŷ = permutedims(complex.(yr,yi),(1,3,2)) # (out_dims,m,K)
+  m == nf ? ŷ : cat(ŷ,_zeros_like(ŷ,size(ŷ,1),nf-m,size(ŷ,3));dims=2)
+end
+
+function _zeros_like(x,dims...)
+  z = similar(x,dims...)
+  fill!(z,zero(eltype(z)))
+  z
 end

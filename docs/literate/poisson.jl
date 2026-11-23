@@ -50,8 +50,10 @@ pspace = ParamSpace(pdomain)
 # `BoundaryTriangulation`/`Measure` pair for the Neumann boundary (tag `8`,
 # one side of the square).
 
-domain = (0,1,0,1)
-partition = (50,50)
+L,H = 1,1
+N = 50
+domain = (0,L,0,H)
+partition = (N,N)
 model = CartesianDiscreteModel(domain,partition)
 
 order = 1
@@ -259,7 +261,7 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 # backs the kernel) is the point of the `KernelStyle`/`InducedMeasure`
 # abstraction.
 
-mesh_size = 1/50
+mesh_size = 1/N
 gspace = GraphInducedSpace(test;radius=2*mesh_size)
 gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
 solver = NeuralSolver(gmodel;epochs=200,loss=loss,print_every=50)
