@@ -1,39 +1,25 @@
 """
     module NonlinearROMs
 
-Neural-network-based surrogate modelling and hyper-reduction components for
+Neural-operator surrogates for parameterised PDEs, built on
+[`Gridap.jl`](https://github.com/gridap/Gridap.jl) and
 [`GridapROMs.jl`](https://github.com/gridap/GridapROMs.jl).
 
-This package was extracted out of `GridapROMs.RBSteady`/`GridapROMs.RBTransient`
-into its own repository, and plugs back into them via multiple dispatch:
+- **Data** — [`InputSpace`](@ref)/[`OutputSpace`](@ref) evaluate coordinates, a
+  [`FeatureBundle`](@ref) of parameterised coefficients and FE solutions as
+  `(D,N,K)` arrays; [`to_element`](@ref) maps predictions back to `FEFunction`s.
 
-- **Neural network models** (`NeuralModels.jl`/`NeuralLayers.jl`) — `DeepONet`,
-  `NOMAD`, `MultiLayerPerceptron`, `AutoEncoder`, `VariationalAutoEncoder`,
-  `AutoDecoder`, `KernelNeuralModel`; all trained through the same
-  Lux/Reactant/Enzyme pipeline (`NeuralSolver`, `train_model!`).
+- **Models** — [`KernelNeuralModel`](@ref): kernel neural operators, with the
+  integral kernel discretised by FE quadrature ([`FunctionSpace`](@ref)) or on a
+  radius graph ([`GraphInducedSpace`](@ref), [`MultiGraphInducedSpace`](@ref)),
+  or spectral ([`FourierStyle`](@ref)); multi-field problems and several meshes
+  are handled by gluing local spaces into a [`MultipleSpaces`](@ref).
 
-- **Direct neural surrogates** — [`NeuralSolver`](@ref)/[`NeuralOperator`](@ref)
-  train a model (through its `DeepONetReduction`/`NOMADReduction`/
-  `KernelReduction`/`AutoEncoderReduction`/`AutoDecoderReduction`/`VAEReduction`/
-  `MLPReduction` alias) to map parameters directly to the full-order solution,
-  bypassing FE assembly entirely; `reduced_operator` plugs this into the same
-  offline/online API as `GridapROMs`' RB solvers.
-
-- **Steady hyper-reduction** — `NNRegression` (operator regression),
-  `NNHyperReduction` (NN-predicted EIM coefficients), `NNRegressor`,
-  `NNInterpolation`, extending `RBSteady.HRProjection`/`RBSteady.Interpolation`
-  and the `Algebra.residual!`/`Algebra.jacobian!` dispatch for `RBOperator`.
-
-- **Transient hyper-reduction** — `TransientNNRegression`,
-  `TransientNNHyperReduction`, the transient counterparts extending
-  `RBTransient`'s space-time hyper-reduction machinery analogously.
-
-- **Mesh graph utilities** (`GraphsInterface.jl`/`WeightedSimpleDiGraphs.jl`) —
-  `build_graph(coords;radius)` turns a point set into a radius-neighbourhood
-  `WeightedSimpleDiGraph` (edge weights = Euclidean distance), wrapped in a
-  [`GraphInducedSpace`](@ref), for graph-based neural architectures. Multi-field
-  problems and several PDEs (e.g. on a moving geometry) are handled by gluing
-  local spaces into a [`MultipleSpaces`](@ref).
+- **Training** — [`NeuralSolver`](@ref)/[`neural_operator`](@ref) train through
+  a Lux/Reactant/Enzyme pipeline, with configurable normalisation and
+  [`EnergyLoss`](@ref)es in the norms of the FE space;
+  [`RolloutNeuralSolver`](@ref) trains autoregressive operators for transient
+  problems ([`RolloutData`](@ref)).
 """
 module NonlinearROMs
 

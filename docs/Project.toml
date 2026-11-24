@@ -13,5 +13,5 @@ NonlinearROMs = {path = ".."}
 [compat]
 DrWatson = "2.19.1"
 Documenter = "1.8"
-Gridap = "0.20"
+Gridap = "0.20 - 0.20.10" # 0.20.11 + Reactant: minutes-long first compile of FE spaces
 Lux = "1.31.4"
