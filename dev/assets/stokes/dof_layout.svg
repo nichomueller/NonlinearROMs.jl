@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 600" font-family="Helvetica, Arial, sans-serif">
+  <rect x="0" y="0" width="760" height="600" fill="#ffffff"/>
+
+  <text x="380" y="28" text-anchor="middle" font-size="17" font-weight="bold" fill="#1a1a1a">
+    One Taylor&#8211;Hood element: velocity (Q2) vs. pressure (Q1) nodes
+  </text>
+
+  <!-- physical element -->
+  <rect x="260" y="50" width="240" height="240" fill="none" stroke="#333333" stroke-width="2"/>
+  <line x1="380" y1="50" x2="380" y2="290" stroke="#333333" stroke-width="1"/>
+  <line x1="260" y1="170" x2="500" y2="170" stroke="#333333" stroke-width="1"/>
+
+  <!-- corner nodes: velocity + pressure -->
+  <circle cx="260" cy="50"  r="11" fill="#1f7a8c" stroke="#0d3b45" stroke-width="1.5"/>
+  <circle cx="500" cy="50"  r="11" fill="#1f7a8c" stroke="#0d3b45" stroke-width="1.5"/>
+  <circle cx="260" cy="290" r="11" fill="#1f7a8c" stroke="#0d3b45" stroke-width="1.5"/>
+  <circle cx="500" cy="290" r="11" fill="#1f7a8c" stroke="#0d3b45" stroke-width="1.5"/>
+  <text x="260" y="38"  text-anchor="middle" font-size="13" fill="#0d3b45">C1 (p1)</text>
+  <text x="500" y="38"  text-anchor="middle" font-size="13" fill="#0d3b45">C2 (p2)</text>
+  <text x="260" y="316" text-anchor="middle" font-size="13" fill="#0d3b45">C3 (p3)</text>
+  <text x="500" y="316" text-anchor="middle" font-size="13" fill="#0d3b45">C4 (p4)</text>
+
+  <!-- edge/centre nodes: velocity only -->
+  <circle cx="380" cy="50"  r="7" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <circle cx="260" cy="170" r="7" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <circle cx="380" cy="170" r="7" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <circle cx="500" cy="170" r="7" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <circle cx="380" cy="290" r="7" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <text x="380" y="38"  text-anchor="middle" font-size="12" fill="#5a6064">E1</text>
+  <text x="240" y="174" text-anchor="end"    font-size="12" fill="#5a6064">E2</text>
+  <text x="398" y="166" text-anchor="start"  font-size="12" fill="#5a6064">Ctr</text>
+  <text x="520" y="174" text-anchor="start"  font-size="12" fill="#5a6064">E3</text>
+  <text x="380" y="316" text-anchor="middle" font-size="12" fill="#5a6064">E4</text>
+
+  <!-- arrow down to array -->
+  <line x1="380" y1="300" x2="380" y2="368" stroke="#333333" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="396" y="330" font-size="13" fill="#333333">join_spaces</text>
+  <text x="396" y="346" font-size="13" fill="#333333">(shared union of points)</text>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#333333"/>
+    </marker>
+  </defs>
+
+  <!-- shared (D,N,K) array strip -->
+  <text x="30" y="395" font-size="13" fill="#1a1a1a">channel</text>
+  <text x="30" y="416" font-size="13" font-weight="bold" fill="#0d3b45">ux,uy</text>
+  <text x="30" y="469" font-size="13" font-weight="bold" fill="#0d3b45">p</text>
+
+  <!-- column order matches element traversal: C1,E1,C2,E2,Ctr,E3,C3,E4,C4 -->
+  <!-- u row: populated everywhere -->
+  <g>
+    <rect x="80"  y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="150" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="220" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="290" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="360" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="430" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="500" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="570" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+    <rect x="640" y="395" width="70" height="45" fill="#cfe8ec" stroke="#333333"/>
+  </g>
+  <g font-size="12" fill="#0d3b45" text-anchor="middle">
+    <text x="115" y="421">u(C1)</text>
+    <text x="185" y="421">u(E1)</text>
+    <text x="255" y="421">u(C2)</text>
+    <text x="325" y="421">u(E2)</text>
+    <text x="395" y="421">u(Ctr)</text>
+    <text x="465" y="421">u(E3)</text>
+    <text x="535" y="421">u(C3)</text>
+    <text x="605" y="421">u(E4)</text>
+    <text x="675" y="421">u(C4)</text>
+  </g>
+
+  <!-- p row: populated only at corners, zero elsewhere -->
+  <g>
+    <rect x="80"  y="448" width="70" height="45" fill="#1f7a8c"/>
+    <rect x="150" y="448" width="70" height="45" fill="#eeeeee" stroke="#999999" stroke-dasharray="3,2"/>
+    <rect x="220" y="448" width="70" height="45" fill="#1f7a8c"/>
+    <rect x="290" y="448" width="70" height="45" fill="#eeeeee" stroke="#999999" stroke-dasharray="3,2"/>
+    <rect x="360" y="448" width="70" height="45" fill="#eeeeee" stroke="#999999" stroke-dasharray="3,2"/>
+    <rect x="430" y="448" width="70" height="45" fill="#eeeeee" stroke="#999999" stroke-dasharray="3,2"/>
+    <rect x="500" y="448" width="70" height="45" fill="#1f7a8c"/>
+    <rect x="570" y="448" width="70" height="45" fill="#eeeeee" stroke="#999999" stroke-dasharray="3,2"/>
+    <rect x="640" y="448" width="70" height="45" fill="#1f7a8c"/>
+    <rect x="80"  y="448" width="630" height="45" fill="none" stroke="#333333"/>
+    <line x1="150" y1="448" x2="150" y2="493" stroke="#333333"/>
+    <line x1="220" y1="448" x2="220" y2="493" stroke="#333333"/>
+    <line x1="290" y1="448" x2="290" y2="493" stroke="#333333"/>
+    <line x1="360" y1="448" x2="360" y2="493" stroke="#333333"/>
+    <line x1="430" y1="448" x2="430" y2="493" stroke="#333333"/>
+    <line x1="500" y1="448" x2="500" y2="493" stroke="#333333"/>
+    <line x1="570" y1="448" x2="570" y2="493" stroke="#333333"/>
+    <line x1="640" y1="448" x2="640" y2="493" stroke="#333333"/>
+  </g>
+  <g font-size="13" font-weight="bold" text-anchor="middle">
+    <text x="115" y="476" fill="#ffffff">p1</text>
+    <text x="185" y="476" fill="#777777">0</text>
+    <text x="255" y="476" fill="#ffffff">p2</text>
+    <text x="325" y="476" fill="#777777">0</text>
+    <text x="395" y="476" fill="#777777">0</text>
+    <text x="465" y="476" fill="#777777">0</text>
+    <text x="535" y="476" fill="#ffffff">p3</text>
+    <text x="605" y="476" fill="#777777">0</text>
+    <text x="675" y="476" fill="#ffffff">p4</text>
+  </g>
+
+  <!-- point order axis -->
+  <g font-size="11" fill="#5a6064" text-anchor="middle">
+    <text x="115" y="507">C1</text>
+    <text x="185" y="507">E1</text>
+    <text x="255" y="507">C2</text>
+    <text x="325" y="507">E2</text>
+    <text x="395" y="507">Ctr</text>
+    <text x="465" y="507">E3</text>
+    <text x="535" y="507">C3</text>
+    <text x="605" y="507">E4</text>
+    <text x="675" y="507">C4</text>
+  </g>
+  <text x="395" y="524" text-anchor="middle" font-size="12" fill="#333333">shared point axis N (union of velocity &amp; pressure points, same order on every channel)</text>
+
+  <!-- legend + explanation -->
+  <circle cx="38" cy="549" r="7" fill="#1f7a8c" stroke="#0d3b45" stroke-width="1.5"/>
+  <text x="52" y="554" font-size="13" fill="#1a1a1a">corner node: has a velocity dof AND a pressure dof</text>
+  <circle cx="38" cy="570" r="6" fill="#aeb4b8" stroke="#5a6064" stroke-width="1.5"/>
+  <text x="52" y="575" font-size="13" fill="#1a1a1a">edge/centre node: has a velocity dof only (pressure left at 0)</text>
+  <text x="30" y="593" font-size="12.5" fill="#333333">`join_spaces` scatters each field onto this shared point axis, zero-filling wherever a field has no dof.</text>
+</svg>
