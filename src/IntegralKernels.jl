@@ -298,9 +298,8 @@ One iterative layer of a kernel neural operator (Kovachki et al.):
 v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 ```
 with an optional residual skip connection `+ v_t(x)` enabled when
-`residual == true` and `in_dims == out_dims` (defaulting to
-`in_dims == out_dims && activation !== identity` so linear/affine operators
-remain strictly affine). `kernel` (`K_t`) is the non-local integral operator --
+`residual == true` and `in_dims == out_dims` (defaulting to `false`).
+`kernel` (`K_t`) is the non-local integral operator --
 any `AbstractIntegralKernel` (`IntegralKernel` wrapping a graph/FE-quadrature
 `InducedMeasure`, `FourierKernel`, `AttentionKernel`, ...). The pointwise local
 linear term `W`, bias `b`, and nonlinearity `σ` are owned by this layer, not by
@@ -332,7 +331,7 @@ function KernelNeuralLayer(
   in_dims::Int,
   out_dims::Int,
   activation::Function;
-  residual::Bool=(in_dims == out_dims && activation !== identity)
+  residual::Bool=false
   )
 
   KernelNeuralLayer(kernel,in_dims,out_dims,activation,residual)
@@ -343,7 +342,7 @@ function KernelNeuralLayer(
   in_dims::Int,
   out_dims::Int;
   activation=identity,
-  residual::Bool=(in_dims == out_dims && activation !== identity)
+  residual::Bool=false
   )
 
   KernelNeuralLayer(kernel,in_dims,out_dims,activation,residual)

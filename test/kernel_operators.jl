@@ -25,8 +25,8 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     reffe = ReferenceFE(lagrangian,Float64,1)
     V = TestFESpace(model,reffe;conformity=:H1,dirichlet_tags="boundary")
 
-    # 1. GraphMeasure integration: interior nodes integrate a constant message c to c,
-    # while clipped boundary neighborhoods scale proportionally to in_degree / max_degree
+    # 1. GraphMeasure integration: integrating a constant message c across all incoming
+    # edges of each node must yield exactly c at every node (degree-normalized average)
     gspace = GraphInducedSpace(V;radius=0.35)
     g = get_graph(gspace)
     gmeas = InducedMeasure(gspace)
@@ -38,13 +38,7 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     edge_const = fill(c_val,D,E,K)
     node_int = integration(edge_const,gmeas)
     @test size(node_int) == (D,N,K)
-    in_degs = [length(inneighbors(g,v)) for v in vertices(g)]
-    max_deg = maximum(in_degs)
-    for v in vertices(g)
-      expected_v = c_val * TData(in_degs[v]) / TData(max_deg)
-      @test all(x -> isapprox(x,expected_v;atol=1e-5),node_int[:,v,:])
-    end
-    @test any(d -> d == max_deg,in_degs) && any(d -> d < max_deg,in_degs)
+    @test all(x -> isapprox(x,c_val;atol=1e-5),node_int)
 
     # 2. FESpaceMeasure integration & Sobolev Energy Losses
     fspace = FunctionSpace(V)

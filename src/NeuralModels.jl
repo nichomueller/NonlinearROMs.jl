@@ -64,7 +64,7 @@ are the hidden widths/nonlinearity of `κ_θ`'s own network (by default
 passing `()` makes `κ_θ` a single affine `Dense`). When `channel_wise=true`
 (default) and `in_dims == out_dims`, `κ_θ` outputs a diagonal channel-wise multiplier
 instead of a full `out_dims × in_dims` matrix per edge.
-When `residual=true` (default), same-width nonlinear `KernelNeuralLayer`s include a `+ v` skip connection.
+When `residual=true` (default `false`), same-width nonlinear `KernelNeuralLayer`s include a `+ v` skip connection.
 
 `build_model` turns this recipe into an actual `Lux.Chain`:
 1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
@@ -88,7 +88,7 @@ function KernelNeuralModel(
   hidden_layers=(16,16,16),
   kernel_layers=nothing,
   channel_wise::Bool=true,
-  residual::Bool=true,
+  residual::Bool=false,
   activation=tanh,
   formatter=DataFormatter(style),
   kernel_activation=activation

@@ -2,7 +2,7 @@
 
 abstract type MPRule end
 
-MPRule() = AnchoredMP()
+MPRule() = PlainMP()
 
 combine_message(::MPRule,src,dst,args...) = @abstractmethod
 
@@ -53,12 +53,8 @@ function compute_weights(f::GraphInducedSpace)
   for d in get_dst_ids(f)
     deg[d] += 1
   end
-  # Normalize by reference interior degree to avoid amplifying clipped boundary
-  # neighborhoods (assumes a quasi-uniform point distribution across the domain)
-  max_deg = maximum(deg;init=0)
-  w_ref = max_deg > 0 ? inv(TData(max_deg)) : zero(TData)
-  w = TData[d > 0 ? w_ref : zero(TData) for d in deg]
-  return reshape(w,1,nv(graph),1)
+  inv_deg = TData[d > 0 ? inv(TData(d)) : zero(TData) for d in deg]
+  return reshape(inv_deg,1,nv(graph),1)
 end
 
 compute_weights(f::MultipleSpaces) = map(compute_weights,f.lspaces)
@@ -188,7 +184,7 @@ its destination vertex: `out[...,dst(e_k)] += vals[...,k]`. The shared building 
 behind both the uniform-mean aggregation used by `_integration(a,::AbstractGraph)`
 (plain GNO) and the softmax-weighted aggregation in `attention`/`AttentionKernel`
 (HAMLET): the only difference between the two is what's summed -- `vals` itself for a
-fixed `1/max_deg` reference-degree weight, or `α .* vals` for a learned, data-dependent one.
+fixed `1/degree` weight, or `α .* vals` for a learned, data-dependent one.
 
 Unlike `gather_data`, this genuinely needs to accumulate (several edges can share a
 destination vertex), so a plain vectorised `getindex`-style gather doesn't suffice --

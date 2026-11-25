@@ -120,8 +120,8 @@ end
     g = get_graph(gspace)
 
     # gather_data/scatter_data/attention run on an InducedMeasure, not a bare space --
-    # PlainMP is requested explicitly here (vcat(src,dst,weight)) since the default
-    # message_rule is AnchoredMP, which this test's shape/content assertions don't match.
+    # PlainMP is requested explicitly here (vcat(src,dst,weight)) so the assertions
+    # below do not depend on the default message_rule.
     gmeas = InducedMeasure(gspace; message_rule=PlainMP())
 
     src_ids = NonlinearROMs.get_src_ids(gmeas)
