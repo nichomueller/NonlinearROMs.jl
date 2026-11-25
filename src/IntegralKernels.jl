@@ -290,15 +290,12 @@ end
       in_dims::Int
       out_dims::Int
       activation::B
-      residual::Bool
     end
 
 One iterative layer of a kernel neural operator (Kovachki et al.):
 ```
 v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 ```
-with an optional residual skip connection `+ v_t(x)` enabled when
-`residual == true` and `in_dims == out_dims` (defaulting to `false`).
 `kernel` (`K_t`) is the non-local integral operator --
 any `AbstractIntegralKernel` (`IntegralKernel` wrapping a graph/FE-quadrature
 `InducedMeasure`, `FourierKernel`, `AttentionKernel`, ...). The pointwise local
@@ -323,29 +320,10 @@ struct KernelNeuralLayer{A<:AbstractIntegralKernel,B<:Function} <: AbstractLuxLa
   in_dims::Int
   out_dims::Int
   activation::B
-  residual::Bool
 end
 
-function KernelNeuralLayer(
-  kernel::AbstractIntegralKernel,
-  in_dims::Int,
-  out_dims::Int,
-  activation::Function;
-  residual::Bool=false
-  )
-
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation,residual)
-end
-
-function KernelNeuralLayer(
-  kernel::AbstractIntegralKernel,
-  in_dims::Int,
-  out_dims::Int;
-  activation=identity,
-  residual::Bool=false
-  )
-
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation,residual)
+function KernelNeuralLayer(kernel::AbstractIntegralKernel,in_dims::Int,out_dims::Int;activation=identity)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
 function Lux.initialparameters(rng::AbstractRNG,l::KernelNeuralLayer)
@@ -368,9 +346,6 @@ function (l::KernelNeuralLayer)((carrier,v),ps,st)
   sz = size(v)
   wout = reshape(ps.weights * reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
   y = l.activation.(wout .+ kout .+ ps.bias)
-  if l.residual && l.in_dims == l.out_dims
-    y = y .+ v
-  end
   return (next_carrier,y),(kernel=kst,measure=st.measure)
 end
 
@@ -385,7 +360,7 @@ function replace_measure(c::Lux.Chain,meas::InducedMeasure)
 end
 
 function replace_measure(l::KernelNeuralLayer,meas::InducedMeasure)
-  KernelNeuralLayer(replace_measure(l.kernel,meas),l.in_dims,l.out_dims,l.activation,l.residual)
+  KernelNeuralLayer(replace_measure(l.kernel,meas),l.in_dims,l.out_dims,l.activation)
 end
 
 function replace_measure(k::IntegralKernel,meas::InducedMeasure)

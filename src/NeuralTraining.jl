@@ -23,7 +23,6 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
-  residual::Bool,
   activation,
   kernel_activation
   )
@@ -33,8 +32,7 @@ function build_kernel_neural_layer(
   k_out = (channel_wise && in_dims == out_dims) ? out_dims : out_dims*in_dims
   inner = build_lux_chain((inner_dims,kernel_layers...,k_out),kernel_activation)
   kernel = IntegralKernel(inner,style.measure,formatter,c_dims)
-  use_res = residual && in_dims == out_dims && activation !== identity
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation;residual=use_res)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
 function build_kernel_neural_layer(
@@ -43,15 +41,13 @@ function build_kernel_neural_layer(
   fixed_dims::Int,in_dims::Int,out_dims::Int,
   kernel_layers::Tuple,
   channel_wise::Bool,
-  residual::Bool,
   activation,
   kernel_activation
   )
 
   inner_dims = _get_inner_dims(style,formatter,fixed_dims,in_dims,0)
   kernel = FourierKernel(inner_dims,out_dims,style.truncation)
-  use_res = residual && in_dims == out_dims && activation !== identity
-  KernelNeuralLayer(kernel,in_dims,out_dims,activation;residual=use_res)
+  KernelNeuralLayer(kernel,in_dims,out_dims,activation)
 end
 
 function build_kernel_network(in_dims,out_dims::Tuple{},activation)
@@ -76,7 +72,6 @@ function build_model(model::KernelNeuralModel,(inputs,outputs))
       widths[i+2],
       model.kernel_layers,
       model.channel_wise,
-      model.residual,
       model.activation,
       model.kernel_activation
     ),

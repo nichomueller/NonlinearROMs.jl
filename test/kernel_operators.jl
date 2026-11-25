@@ -183,18 +183,6 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
       @test pred_sv[:,:,k:k] ≈ pred_k atol=1e-5
     end
 
-    # Residual flag controls skip connection on same-width nonlinear KernelNeuralLayers
-    kno_res = KernelNeuralModel(gspace;hidden_layers=(8,8),residual=true,activation=tanh)
-    kno_nores = KernelNeuralModel(gspace;hidden_layers=(8,8),residual=false,activation=tanh)
-    ch_res = build_model(kno_res,(dummy_in,dummy_out))
-    ch_nores = build_model(kno_nores,(dummy_in,dummy_out))
-    @test ch_res.layers.layer_2.residual
-    @test !ch_nores.layers.layer_2.residual
-    ps_r,st_r = Lux.setup(Random.default_rng(),ch_res)
-    pred_res,_ = ch_res(dummy_in,ps_r,st_r)
-    pred_nores,_ = ch_nores(dummy_in,ps_r,st_r)
-    @test !(pred_res ≈ pred_nores)
-
     # MultipleAttentionKernel concatenates heads along dims=1 and handles EdgeDataCache carriers
     gmeas_att = InducedMeasure(gspace)
     att_in_dim = 2 * in_dims + 1
@@ -210,8 +198,10 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     @test size(z_att) == (6,N,1)
     @test all(isfinite,z_att)
     # Passing an EdgeDataCache produced by a preceding KernelNeuralLayer must also work
-    kl_cache = ch_res.layers.layer_2
-    (cached_carrier,_),_ = kl_cache((att_in,att_v),ps_r.layer_2,st_r.layer_2)
+    ch_cache = build_model(KernelNeuralModel(gspace;hidden_layers=(8,8),activation=tanh),(dummy_in,dummy_out))
+    ps_c,st_c = Lux.setup(Random.default_rng(),ch_cache)
+    kl_cache = ch_cache.layers.layer_2
+    (cached_carrier,_),_ = kl_cache((att_in,att_v),ps_c.layer_2,st_c.layer_2)
     (_,z_att_cached),_ = mak((cached_carrier,att_v),ps_att,st_att)
     @test z_att_cached ≈ z_att
 
