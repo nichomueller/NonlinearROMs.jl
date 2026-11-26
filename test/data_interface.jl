@@ -11,7 +11,7 @@ using GridapSolvers
 using GridapSolvers.LinearSolvers
 using NonlinearROMs
 
-using NonlinearROMs: TData,MScore,ZScore,RScore,NormStyle,Normalisation,normalise!,denormalise!
+using NonlinearROMs: TData,MScore,ZScore,RScore,NormStyle,Normalisation,TwoStageBuckets,normalise!,denormalise!
 using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
 
 @testset "DataInterface & Normalisation" begin
@@ -126,6 +126,24 @@ using NonlinearROMs: fetch_data,fetch_stats,merge_data,num_coords,num_samples
     normalise!(in_raw,stats_off)
     denormalise!(out_raw,stats_off)
     @test (in_raw.coords ≈ coords_raw) && (in_raw.features ≈ feats_raw) && (out_raw ≈ vals_raw)
+    
+    # NormStyle(;normalise=false) also leaves TwoStageBuckets inputs and outputs untouched
+    f1_raw = rand(TData,2,N,K) .* 3.0f0 .+ 1.0f0
+    f2_raw = rand(TData,2,N,K) .* 3.0f0 .+ 2.0f0
+    b1_raw = rand(TData,1,N,K) .* 5.0f0 .+ 1.0f0
+    b2_raw = rand(TData,1,N,K) .* 5.0f0 .+ 2.0f0
+    in_b_raw = (coords=copy(coords_raw),features=TwoStageBuckets(copy(f1_raw),copy(f2_raw),2))
+    out_b_raw = TwoStageBuckets(copy(b1_raw),copy(b2_raw),2)
+    stats_b_off = Normalisation(ns_off,(in_b_raw,out_b_raw))
+    @test in_b_raw.coords ≈ coords_raw
+    @test (in_b_raw.features.first_stage ≈ f1_raw) && (in_b_raw.features.second_stage ≈ f2_raw)
+    @test (out_b_raw.first_stage ≈ b1_raw) && (out_b_raw.second_stage ≈ b2_raw)
+    normalise!(in_b_raw,stats_b_off)
+    normalise!(out_b_raw,stats_b_off)
+    denormalise!(out_b_raw,stats_b_off)
+    @test in_b_raw.coords ≈ coords_raw
+    @test (in_b_raw.features.first_stage ≈ f1_raw) && (in_b_raw.features.second_stage ≈ f2_raw)
+    @test (out_b_raw.first_stage ≈ b1_raw) && (out_b_raw.second_stage ≈ b2_raw)
 
     # Small-magnitude physical fields (< 1e-6) must still be normalised properly
     small_base = zeros(TData,1,N,K)

@@ -157,7 +157,7 @@ end
 
 function _apply_kernel(
   l::IntegralKernel{<:Any,<:Union{GraphMeasure,FESpaceMeasure,MultipleMeasure},F},
-  (carrier,v),ps,st,mst
+  (carrier,v),ps,st,mst::NamedTuple
   ) where {F<:DataFormatter}
 
   fd = _unwrap_fixed_data(carrier)

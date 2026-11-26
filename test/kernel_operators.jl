@@ -145,6 +145,12 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     slv_ns = NeuralSolver(gno_ns;epochs=1,verbose=false)
     @test get_formatter(slv_ns).norm_style.output_style isa MScoreStyle
 
+    # Default kernel_layers scales with hidden_layers (floor 16), while explicit () stays affine
+    @test KernelNeuralModel(gspace;hidden_layers=(32,32)).kernel_layers == (32,)
+    @test KernelNeuralModel(gspace;hidden_layers=(8,8)).kernel_layers == (16,)
+    @test KernelNeuralModel(gspace;hidden_layers=(32,32),kernel_layers=()).kernel_layers == ()
+
+
     # Opt-in SpatialKernelFormatter(;shared_coords=true) K=1 fast-path matches sample-by-sample
     shared_coords = repeat(rand(TData,2,N,1),1,1,K)
     var_feats = rand(TData,in_dims - 2,N,K)
@@ -296,9 +302,10 @@ using NonlinearROMs: TData,NormStyle,MultipleMeasure,num_coords,num_edges,get_we
     dummy_dl_data = (rand(TData,2,4,8),rand(TData,1,4,8))
     @test_logs (:warn,r"Dropping") NonlinearROMs.get_data_loader(slv_drop,dummy_dl_data;shuffle=false)
 
-    # End-to-end training with SpatialKernelFormatter, StateKernelFormatter, and non-uniform widths
+    # # End-to-end training with SpatialKernelFormatter (standard & shared_coords), StateKernelFormatter, and non-uniform widths
     for (fmt,hlayers) in (
       (SpatialKernelFormatter(),(8,8)),
+      (SpatialKernelFormatter(;shared_coords=true),(8,8,8)),
       (StateKernelFormatter(),(8,8)),
       (FeatureKernelFormatter(),(8,12,8))
     )

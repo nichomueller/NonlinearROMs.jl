@@ -30,12 +30,16 @@ function update!(log::TrainingLog,epoch::Int,current_loss::Real)
     @info "Compilation finished in $comp_mins min. Fast training started."
   end
 
-  if epoch == 1 || epoch % log.print_every == 0 || epoch == log.max_epochs
-    elapsed_fast = time() - log.t_start_fast
-    time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
-    eta_seconds = time_per_epoch * (log.max_epochs - epoch)
+  if epoch == 2 || epoch % log.print_every == 0 || epoch == log.max_epochs
+    eta_str = if epoch == 1 && log.max_epochs > 1
+      "--:--"
+    else
+      elapsed_fast = time() - log.t_start_fast
+      time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
+      format_eta(time_per_epoch * (log.max_epochs - epoch))
+    end
 
-    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $(format_eta(eta_seconds))"
+    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $eta_str"
     println(msg)
   end
   return nothing
