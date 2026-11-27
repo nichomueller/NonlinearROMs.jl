@@ -74,6 +74,18 @@ function (l::FourierKernel)((fixed_data,v),ps,st)
   return (fixed_data,y),st
 end
 
+# Carries hoisted per-edge inputs across layers sharing the same formatter/measure
+struct EdgeDataCache{F<:DataFormatter,A,B}
+  fixed_data::A
+  edge_data::B
+  measure_id::UInt
+  coord_dims::Int
+  shared_coords::Bool
+end
+
+_unwrap_fixed_data(x) = x
+_unwrap_fixed_data(x::EdgeDataCache) = x.fixed_data
+
 """
     struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
       kernel::A
@@ -93,8 +105,13 @@ and fed to `kernel` -- different layers legitimately want different subsets
 are exactly a choice of `formatter`). `coord_dims` is how many of `fixed_data`'s
 leading rows are coordinates (vs. features), which `formatter`'s
 `pass_coords`/`pass_features` use to select which part of `fixed_data` to keep
-(see [`DataInterface.merge_data`](@ref)). `fixed_data` passes through unchanged
-so the next layer can use it too.
+(see [`DataInterface.merge_data`](@ref)). For coordinate-only formatters
+(`pass_coords=Val(true)`, `pass_features=Val(false)`, `pass_new_data=Val(false)`,
+e.g. [`SpatialKernelFormatter`](@ref)) with `shared_coords=true` and
+`coord_dims > 0`, the spatial coordinates are assumed to be shared across
+samples in a batch so `kernel` is evaluated on a single slice (`K=1`) and
+broadcast in `_kv`. `fixed_data` passes through unchanged so the next layer can
+use it too.
 """
 struct IntegralKernel{A<:AbstractLuxLayer,B<:InducedMeasure,C<:DataFormatter} <: AbstractIntegralKernel
   kernel::A
@@ -117,12 +134,79 @@ function Lux.initialstates(rng::AbstractRNG,l::IntegralKernel)
 end
 
 function (l::IntegralKernel)((fixed_data,v),ps,st)
-  x = merge_data(l.formatter,fixed_data,v,l.coord_dims)
-  xk = gather_data(x,l.measure)
-  k,st = evaluate(l.kernel,xk,ps,st)
-  y = kv(k,v,l.measure)
-  z = integration(y,l.measure)
-  return (fixed_data,z),st
+  mst = measure_state(l.measure)
+  if isnothing(mst)
+    fd = _unwrap_fixed_data(fixed_data)
+    x = merge_data(l.formatter,fd,v,l.coord_dims)
+    xk = gather_data(x,l.measure)
+    k,st = evaluate(l.kernel,xk,ps,st)
+    y = kv(k,v,l.measure)
+    z = integration(y,l.measure)
+    return (fd,z),st
+  end
+  (next_carrier,z),st = _apply_kernel(l,(fixed_data,v),ps,st,mst)
+  return (_unwrap_fixed_data(next_carrier),z),st
+end
+
+_kernel_measure_state(::AbstractIntegralKernel) = nothing
+_kernel_measure_state(k::IntegralKernel) = measure_state(k.measure)
+
+function _apply_kernel(k::AbstractIntegralKernel,(carrier,v),ps,st,mst)
+  k((_unwrap_fixed_data(carrier),v),ps,st)
+end
+
+function _apply_kernel(
+  l::IntegralKernel{<:Any,<:Union{GraphMeasure,FESpaceMeasure,MultipleMeasure},F},
+  (carrier,v),ps,st,mst::NamedTuple
+  ) where {F<:DataFormatter}
+
+  fd = _unwrap_fixed_data(carrier)
+  xk′,next_carrier = _get_edge_input_last(l,carrier,fd,v,mst)
+  k′,st = evaluate(l.kernel,xk′,ps,st)
+  v′ = permutedims(v,(1,3,2))
+  v′_src = NNlib.gather(v′,mst.src_ids)
+  y′ = _kv(k′,v′_src)
+  z′ = _integration_last(y′,l.measure,mst)
+  z = permutedims(z′,(1,3,2))
+  return (next_carrier,z),st
+end
+
+function _get_edge_input_last(
+  l::IntegralKernel{<:Any,<:Any,<:DataFormatter{<:Any,<:Any,true}},
+  carrier,fd,v,mst
+  )
+
+  x = merge_data(l.formatter,fd,v,l.coord_dims)
+  x′ = permutedims(x,(1,3,2))
+  xk′ = _gather_data_last(x′,mst.src_ids,mst.dst_ids,mst.edge_weights,get_message_rule(l.measure))
+  return xk′,carrier
+end
+
+function _get_edge_input_last(
+  l::IntegralKernel{<:Any,<:Any,F},
+  carrier,fd,v,mst
+  ) where {A,B,F<:DataFormatter{A,B,false}}
+
+  mid = objectid(l.measure)
+  use_k1 = A && !B && l.formatter.shared_coords && l.coord_dims > 0 && size(fd,1) >= l.coord_dims
+  if (
+    carrier isa EdgeDataCache{F} &&
+    carrier.measure_id == mid &&
+    carrier.coord_dims == l.coord_dims &&
+    carrier.shared_coords == use_k1 &&
+    size(carrier.edge_data,3) == num_edges(l.measure)
+  )
+    return carrier.edge_data,carrier
+  end
+  x = merge_data(l.formatter,fd,v,l.coord_dims)
+  # Opt-in K=1 fast path for coordinate-only kernels κ(x,y) on a shared mesh
+  x′ = if use_k1
+    permutedims(view(x,:,:,1:1),(1,3,2))
+  else
+    permutedims(x,(1,3,2))
+  end
+  xk′ = _gather_data_last(x′,mst.src_ids,mst.dst_ids,mst.edge_weights,get_message_rule(l.measure))
+  return xk′,EdgeDataCache{F,typeof(fd),typeof(xk′)}(fd,xk′,mid,l.coord_dims,use_k1)
 end
 
 struct AttentionKernel{A<:AbstractLuxLayer,B<:AbstractLuxLayer,C<:InducedMeasure,D<:DataFormatter} <: AbstractIntegralKernel
@@ -147,12 +231,13 @@ function Lux.initialstates(rng::AbstractRNG,l::AttentionKernel)
 end
 
 function (l::AttentionKernel)((fixed_data,v),ps,st)
-  x = merge_data(l.formatter,fixed_data,v)
+  fd = _unwrap_fixed_data(fixed_data)
+  x = merge_data(l.formatter,fd,v)
   xk = gather_data(x,l.measure)
   s,st_score = evaluate(l.score,xk,ps.score,st.score)
   val,st_value = evaluate(l.value,xk,ps.value,st.value)
   y = attention_integral(s,val,l.measure)
-  return (fixed_data,y),(score=st_score,value=st_value)
+  return (fd,y),(score=st_score,value=st_value)
 end
 
 struct MultipleAttentionKernel{N,A<:NTuple{N,AbstractLuxLayer},B<:NTuple{N,AbstractLuxLayer},C<:AbstractLuxLayer,D<:InducedMeasure,E<:DataFormatter} <: AbstractIntegralKernel
@@ -180,7 +265,8 @@ function Lux.initialstates(rng::AbstractRNG,l::MultipleAttentionKernel{N}) where
 end
 
 function (l::MultipleAttentionKernel{N})((fixed_data,v),ps,st) where N
-  x = merge_data(l.formatter,fixed_data,v)
+  fd = _unwrap_fixed_data(fixed_data)
+  x = merge_data(l.formatter,fd,v)
   xk = gather_data(x,l.measure)
   st_score = ()
   st_value = ()
@@ -192,8 +278,8 @@ function (l::MultipleAttentionKernel{N})((fixed_data,v),ps,st) where N
     st_value = (st_value...,st_valuei)
     y = (y...,attention_integral(si,vali,l.measure))
   end
-  z,st_aggregation = evaluate(l.aggregation,hcat(y...),ps.aggregation,st.aggregation)
-  return (fixed_data,z),(score=st_score,value=st_value,aggregation=st_aggregation)
+  z,st_aggregation = evaluate(l.aggregation,cat(y...;dims=1),ps.aggregation,st.aggregation)
+  return (fd,z),(score=st_score,value=st_value,aggregation=st_aggregation)
 end
 
 # implement the attention layer + RoPE
@@ -210,15 +296,17 @@ One iterative layer of a kernel neural operator (Kovachki et al.):
 ```
 v_{t+1}(x) = σ(W v_t(x) + (K_t v_t)(x) + b(x))
 ```
-`kernel` (`K_t`) is the non-local integral operator -- any `AbstractIntegralKernel`
-(`IntegralKernel` wrapping a graph/FE-quadrature `InducedMeasure`, `FourierKernel`,
-`AttentionKernel`, ...). The pointwise local linear term `W`, bias `b`, and
-nonlinearity `σ` are owned by this layer, not by `kernel`, since they're the same
-shape/role regardless of which non-local discretization `kernel` uses. Called as
-`l((fixed_data,v),ps,st)`: `v` feeds both the local `W v` term and `kernel`
-directly; `fixed_data` (the per-sample `(x,a(x))` tensor) is only relevant to
-`kernel` (via its own `formatter`) and passes through untouched, so the next
-layer in the stack can use it too.
+`kernel` (`K_t`) is the non-local integral operator --
+any `AbstractIntegralKernel` (`IntegralKernel` wrapping a graph/FE-quadrature
+`InducedMeasure`, `FourierKernel`, `AttentionKernel`, ...). The pointwise local
+linear term `W`, bias `b`, and nonlinearity `σ` are owned by this layer, not by
+`kernel`, since they're the same shape/role regardless of which non-local
+discretization `kernel` uses. Called as `l((carrier,v),ps,st)`: `v` feeds both
+the local `W v` term and `kernel` directly; `carrier` holds the per-sample
+`(x,a(x))` tensor (which may be wrapped in an internal `EdgeDataCache` in the
+returned tuple so downstream layers sharing the same formatter and measure reuse
+gathered edge inputs). Precomputed measure topology and weights are stored in
+`st.measure` so they are transferred once to `XDEV`.
 
 `in_dims`/`out_dims` are the running hidden state's channel counts (`v_t`'s and
 `v_{t+1}`'s), sizing `W`/`b` -- **not** `kernel`'s own internal input width.
@@ -249,19 +337,21 @@ end
 function Lux.initialstates(rng::AbstractRNG,l::KernelNeuralLayer)
   return (
     kernel = Lux.initialstates(rng,l.kernel),
+    measure = _kernel_measure_state(l.kernel),
   )
 end
 
-function (l::KernelNeuralLayer)((fixed_data,v),ps,st)
-  (_,kout),kst = l.kernel((fixed_data,v),ps.kernel,st.kernel)
+function (l::KernelNeuralLayer)((carrier,v),ps,st)
+  (next_carrier,kout),kst = _apply_kernel(l.kernel,(carrier,v),ps.kernel,st.kernel,st.measure)
   sz = size(v)
-  wout = reshape(ps.weights*reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
+  wout = reshape(ps.weights * reshape(v,sz[1],:),l.out_dims,Base.tail(sz)...)
   y = l.activation.(wout .+ kout .+ ps.bias)
-  return (fixed_data,y),(kernel=kst,)
+  return (next_carrier,y),(kernel=kst,measure=st.measure)
 end
 
 # swapping the discretisation (e.g. to evaluate on a new mesh), keeping the
-# trained network: the new measure must be fed per-point/per-edge data alike
+# trained network: callers must also refresh `st.measure` via `replace_measure_state`
+# (see `replace_space`)
 
 replace_measure(l::AbstractLuxLayer,meas::InducedMeasure) = l
 
@@ -286,6 +376,28 @@ end
 function replace_measure(k::MultipleAttentionKernel,meas::InducedMeasure)
   _check_measure(k.measure,meas)
   MultipleAttentionKernel(k.scores,k.values,k.aggregation,meas,k.formatter)
+end
+
+_get_message_rule(::AbstractLuxLayer) = nothing
+_get_message_rule(l::KernelNeuralLayer) = _get_message_rule(l.kernel)
+_get_message_rule(k::Union{IntegralKernel,AttentionKernel,MultipleAttentionKernel}) = get_message_rule(k.measure)
+
+function _get_message_rule(c::Lux.Chain)
+  for l in c.layers
+    r = _get_message_rule(l)
+    !isnothing(r) && return r
+  end
+  return nothing
+end
+
+replace_measure_state(::AbstractLuxLayer,st) = st
+
+function replace_measure_state(c::Lux.Chain,st::NamedTuple)
+  NamedTuple{keys(st)}(map(replace_measure_state,values(c.layers),values(st)))
+end
+
+function replace_measure_state(l::KernelNeuralLayer,st::NamedTuple)
+  (kernel=st.kernel,measure=_kernel_measure_state(l.kernel))
 end
 
 function _check_measure(old::InducedMeasure,new::InducedMeasure)
@@ -352,17 +464,18 @@ function attention_integral(scores,values,meas::MultipleMeasure)
 end
 
 # reconstructs the (dout x din) matrix flattened into k's first axis and applies
-# it to v, batched over the (N,K) = (num_points,num_samples) trailing axes
+# it to v, batched over the two trailing axes (either (E,K) or (K,E), allowing
+# singleton broadcast axes in k such as K=1)
 function _kv(k::AbstractInputData,v::AbstractInputData)
-  din,N,nbatch = size(v)
+  din,n2,n3 = size(v)
   kdim = size(k,1)
   if kdim == din
     return k .* v
   else
     dout = div(kdim,din)
-    k_r = reshape(k,dout,din,N,nbatch)
-    v_r = reshape(v,1,din,N,nbatch)
-    return dropdims(sum(k_r.*v_r,dims=2),dims=2)
+    k_r = reshape(k,dout,din,size(k,2),size(k,3))
+    v_r = reshape(v,1,din,n2,n3)
+    return dropdims(sum(k_r .* v_r,dims=2),dims=2)
   end
 end
 

@@ -36,12 +36,13 @@ function DataFormatter(style::FourierStyle)
 end
 
 """
-    struct KernelNeuralModel{A<:KernelStyle,N,B<:Function,C<:DataFormatter,M,D<:Function} <: NeuralModel
+    struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter,D<:Function} <: NeuralModel
       style::A
       hidden_layers::NTuple{N,Int}
+      kernel_layers::NTuple{M,Int}
+      channel_wise::Bool
       activation::B
       formatter::C
-      kernel_layers::NTuple{M,Int}
       kernel_activation::D
     end
 
@@ -57,15 +58,17 @@ and `pass_new_data` whether the running hidden state `v` is folded in too (e.g.
 `pass_features=Val(false)` gives Kovachki et al.'s `κ(x,y)` case). What the fixed
 input itself is made of is decided by the [`NeuralSolver`](@ref)'s own formatter,
 which by default passes both `x` and `a(x)`. `kernel_layers`/`kernel_activation`
-are the hidden widths/nonlinearity of `κ_θ`'s own network; the default `()` makes
-`κ_θ` a single affine `Dense`, which cannot represent a non-affine kernel such as
-a Green's function.
+are the hidden widths/nonlinearity of `κ_θ`'s own network (by default
+`kernel_layers` scales automatically to `(maximum(hidden_layers;init=16),)`;
+passing `()` makes `κ_θ` a single affine `Dense`). When `channel_wise=true`
+(default) and `in_dims == out_dims`, `κ_θ` outputs a diagonal channel-wise multiplier
+instead of a full `out_dims × in_dims` matrix per edge.
 
 `build_model` turns this recipe into an actual `Lux.Chain`:
 1. Lifting (P): a local `Dense` layer mapping the fixed input to the first hidden width.
 2. Iterative Kernel Integration: a stack of `KernelNeuralLayer`s (one per interior
    hidden-width transition) performing the non-local processing.
-3. Projection (Q): a local `Dense` layer mapping the final hidden state to the output dimension.
+3. Projection (Q): a local two-layer MLP mapping the final hidden state to the output dimension.
 """
 struct KernelNeuralModel{A<:KernelStyle,N,M,B<:Function,C<:DataFormatter,D<:Function} <: NeuralModel
   style::A
@@ -80,14 +83,16 @@ end
 function KernelNeuralModel(
   style::KernelStyle;
   hidden_layers=(16,16,16),
-  kernel_layers=(16,),
+  kernel_layers=nothing,
   channel_wise::Bool=true,
   activation=tanh,
   formatter=DataFormatter(style),
   kernel_activation=activation
   )
 
-  KernelNeuralModel(style,Tuple(hidden_layers),Tuple(kernel_layers),channel_wise,activation,formatter,kernel_activation)
+  hlayers = Tuple(hidden_layers)
+  klayers = isnothing(kernel_layers) ? (maximum(hlayers;init=16),) : Tuple(kernel_layers)
+  KernelNeuralModel(style,hlayers,klayers,channel_wise,activation,formatter,kernel_activation)
 end
 
 function KernelNeuralModel(f::DiscreteSpace,args...;kwargs...)

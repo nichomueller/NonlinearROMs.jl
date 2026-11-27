@@ -108,7 +108,7 @@ end
 
 # weighted edge insertion/removal
 
-function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},e::Edge{Ti},fw::Tv,bw::Tv=fw) where {Ti,Tv}
+function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},e::Edge{Ti},fw::Real,bw::Real=fw) where {Ti,Tv}
   s,d = Ti.(Tuple(e))
   verts = vertices(g)
   (s in verts && d in verts) || return false
@@ -117,14 +117,14 @@ function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},e::Edge{Ti},fw::Tv,bw:
   findex = searchsortedfirst(flist,d)
   @inbounds (findex <= length(flist) && flist[findex] == d) && return false
   insert!(flist,findex,d)
-  insert!(g.fweights[s],findex,fw)
+  insert!(g.fweights[s],findex,Tv(fw))
 
   g.ne += 1
 
   @inbounds blist = g.badjlist[d]
   bindex = searchsortedfirst(blist,s)
   insert!(blist,bindex,s)
-  insert!(g.bweights[d],bindex,bw)
+  insert!(g.bweights[d],bindex,Tv(bw))
 
   return true
 end
@@ -133,8 +133,8 @@ function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},e::Edge{Ti}) where {Ti
   return add_edge!(g,e,one(Tv))
 end
 
-function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},s::Integer,d::Integer,fw::Tv,bw::Tv=fw) where {Ti,Tv}
-  return add_edge!(g,Edge{Ti}(Ti(s),Ti(d)),fw,bw)
+function Graphs.add_edge!(g::WeightedSimpleDiGraph{Ti,Tv},s::Integer,d::Integer,fw::Real,bw::Real=fw) where {Ti,Tv}
+  return add_edge!(g,Edge{Ti}(Ti(s),Ti(d)),Tv(fw),Tv(bw))
 end
 
 function Graphs.rem_edge!(g::WeightedSimpleDiGraph{Ti},e::Edge{Ti}) where {Ti}
@@ -256,7 +256,7 @@ function Graphs.has_edge(g::NystromSubgraph{Ti},e::Edge{Ti}) where {Ti}
   has_edge(g.graph,e)
 end
 
-function Graphs.add_edge!(g::NystromSubgraph{Ti},e::Edge{Ti},fw::Tv,bw::Tv=fw) where {Ti,Tv}
+function Graphs.add_edge!(g::NystromSubgraph{Ti},e::Edge{Ti},fw::Real,bw::Real=fw) where {Ti}
   add_edge!(g.graph,e,fw,bw)
 end
 
@@ -264,7 +264,7 @@ function Graphs.add_edge!(g::NystromSubgraph{Ti},e::Edge{Ti}) where {Ti}
   add_edge!(g.graph,e)
 end
 
-function Graphs.add_edge!(g::NystromSubgraph{Ti},s::Integer,d::Integer,fw::Tv,bw::Tv=fw) where {Ti,Tv}
+function Graphs.add_edge!(g::NystromSubgraph{Ti},s::Integer,d::Integer,fw::Real,bw::Real=fw) where {Ti}
   add_edge!(g.graph,s,d,fw,bw)
 end
 
@@ -291,9 +291,13 @@ function build_graph(coords::AbstractVector;kwargs...)
 end
 
 function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
+  # Scale tolerance with coordinate precision and magnitude so exact distance edges are not dropped
+  rf = float(radius)
+  cmax = isempty(coords) ? zero(rf) : maximum(norm,coords)
+  r_tol = rf + 16 * max(eps(rf),eps(float(cmax)))
   for (i,coord) in enumerate(coords)
     q = SVector(Tuple(coord))
-    neighbors = inrange(tree,q,radius)
+    neighbors = inrange(tree,q,r_tol)
     for neighbor in neighbors
       w = norm(coord - coords[neighbor])
       add_edge!(g,i,neighbor,w)

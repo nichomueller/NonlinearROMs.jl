@@ -194,8 +194,11 @@ training space is a [`MultipleSpaces`](@ref) of graphs, e.g. a moving geometry),
 the inputs must then live on `get_coords(space)`.
 """
 function replace_space(op::NeuralOperator,space::DiscreteSpace)
-  chain = replace_measure(op.chain,InducedMeasure(space))
-  NeuralOperator(chain,op.parameters,op.states,op.stats)
+  rule = _get_message_rule(op.chain)
+  meas = isnothing(rule) ? InducedMeasure(space) : InducedMeasure(space;message_rule=rule)
+  chain = replace_measure(op.chain,meas)
+  states = replace_measure_state(chain,op.states)
+  NeuralOperator(chain,op.parameters,states,op.stats)
 end
 
 """
@@ -229,22 +232,24 @@ Returns a `NeuralOperator` containing the trained network, its optimized weights
 function neural_operator(
   solver::NeuralSolver,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  output_space::AbstractOutputSpace;
+  kwargs...
   )
-  
+
   data,stats = fetch_data_and_stats(solver,input_space,output_space)
-  train(solver,data,stats)
+  train(solver,data,stats;kwargs...)
 end
 
 function neural_operator(
   solver::NeuralSolver,
   old_op::NeuralOperator,
   input_space::AbstractInputSpace,
-  output_space::AbstractOutputSpace
+  output_space::AbstractOutputSpace;
+  kwargs...
   )
-  
+
   data,stats = fetch_data_and_stats(solver,old_op,input_space,output_space)
-  train(solver,data,stats)
+  train(solver,data,stats;kwargs...)
 end
 
 function Algebra.solve(

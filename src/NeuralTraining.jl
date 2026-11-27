@@ -101,9 +101,15 @@ function build_model(model::MultiLayerPerceptron,(inputs,outputs))
   build_lux_chain((in_dims,model.hidden_layers...,out_dims),model.activation)
 end
 
+_to_device_loss(loss) = loss
+
+function _to_device_loss(loss::EnergyLoss)
+  EnergyLoss(loss.X,loss.rows |> XDEV,loss.cols |> XDEV,loss.vals |> XDEV)
+end
+
 function train!(solver::NeuralSolver,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(solver)
-  loss = get_loss(solver)
+  loss = _to_device_loss(get_loss(solver))
   logger = get_logger(solver)
   to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
   train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
@@ -111,7 +117,7 @@ end
 
 function train!(solver::RolloutNeuralSolver,train_state,dataloader,stats)
   lr_scheduler = get_scheduler(solver)
-  loss = get_loss(solver)
+  loss = _to_device_loss(get_loss(solver))
   logger = get_logger(solver)
   to_device_batch((x_batch,y_batch)) = (x_batch |> XDEV,y_batch |> XDEV)
   train_model!(
@@ -132,15 +138,33 @@ resolve_data_loader(a) = MLUtils.DataLoader
 resolve_data_loader(a::TwoStageBuckets) = AutoregressiveDataLoader
 resolve_data_loader((input,output)::NamedTuple) = resolve_data_loader(input)
 
-function get_data_loader(solver::NeuralSolver,data;kwargs...)
+function get_data_loader(
+  solver::NeuralSolver,
+  data;
+  rng=Random.default_rng(),
+  shuffle=nothing,
+  partial=false,
+  kwargs...
+  )
+
   batchsize = resolve_batch_size(solver,data)
   dloader = resolve_data_loader(data)
-  dloader(data;batchsize,kwargs...)
+  if dloader === MLUtils.DataLoader
+    ns = num_samples(first(data))
+    do_shuffle = isnothing(shuffle) ? (batchsize < ns) : shuffle
+    if !partial && batchsize > 0 && ns % batchsize != 0 && !do_shuffle
+      dropped = ns % batchsize
+      @warn "Dropping the last $dropped of $ns samples every epoch because `partial=false` and `shuffle=false` (batchsize=$batchsize)."
+    end
+    return dloader(data;batchsize,shuffle=do_shuffle,partial,rng,kwargs...)
+  end
+  dloader_kwargs = isnothing(shuffle) ? kwargs : (;shuffle,kwargs...)
+  dloader(data;batchsize,partial,rng,dloader_kwargs...)
 end
 
 function train(solver::NeuralSolver,data,stats;rng=Random.default_rng(),seed=1234,kwargs...)
   train_state = get_train_state(solver,data;rng,seed)
-  dataloader = get_data_loader(solver,data;kwargs...)
+  dataloader = get_data_loader(solver,data;rng,kwargs...)
   train!(solver,train_state,dataloader,stats)
 end
 
@@ -159,23 +183,38 @@ normalisation bundled into the returned [`NeuralOperator`](@ref).
 function train_model!(train_state,dataloader,stats,lr_scheduler,loss,to_device_batch;logger)
   init!(logger)
 
+  # Pre-transfer a static full-batch tensor once to avoid per-epoch host-to-device copies
+  is_shuffled = hasproperty(dataloader,:shuffle) && dataloader.shuffle
+  single_batch_dev = (length(dataloader) == 1 && !is_shuffled) ? to_device_batch(first(dataloader)) : nothing
+
   Reactant.with_config(;dot_general_precision=Reactant.PrecisionConfig.HIGH) do
     for epoch in 1:logger.max_epochs
       local current_loss = zero(TData)
 
-      for raw_batch in dataloader
-        batch_dev = to_device_batch(raw_batch)
-
+      if !isnothing(single_batch_dev)
         _,loss_val,_,train_state = Lux.Training.single_train_step!(
           Lux.AutoEnzyme(),
           loss,
-          batch_dev,
+          single_batch_dev,
           train_state;
           return_gradients=Val(false)
         )
-        current_loss += TData(loss_val)
+        current_loss = TData(loss_val)
+      else
+        for raw_batch in dataloader
+          batch_dev = to_device_batch(raw_batch)
+
+          _,loss_val,_,train_state = Lux.Training.single_train_step!(
+            Lux.AutoEnzyme(),
+            loss,
+            batch_dev,
+            train_state;
+            return_gradients=Val(false)
+          )
+          current_loss += TData(loss_val)
+        end
+        current_loss /= length(dataloader)
       end
-      current_loss /= length(dataloader)
 
       step_scheduler!(lr_scheduler,train_state.optimizer_state,epoch,current_loss;verbose=logger.verbose)
 
@@ -307,9 +346,11 @@ _edge_dims(s::IntegralStyle) = _edge_dims(get_message_rule(s.measure))
 
 _shape_factor(::MPRule) = 1
 _shape_factor(::PlainMP) = 2
+_shape_factor(::AnchoredMP) = 2
 
 _edge_dims(::MPRule) = 0
 _edge_dims(::PlainMP) = 1
+_edge_dims(::AnchoredMP) = 1
 _edge_dims(::CompositeMP) = 1
 
 function _selected_fixed_dims(::DataFormatter{A,B},fixed_dims::Int,coord_dims::Int) where {A,B}
