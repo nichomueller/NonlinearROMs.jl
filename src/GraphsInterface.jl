@@ -290,14 +290,19 @@ function build_graph(coords::AbstractVector;kwargs...)
   return g
 end
 
-function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
+function build_graph!(
+  g::AbstractGraph,
+  tree::NNTree,
+  coords::AbstractVector{<:Point{D,T}};
+  radius=1.0,scale=10
+  ) where {D,T}
+
   # Scale tolerance with coordinate precision and magnitude so exact distance edges are not dropped
-  rf = float(radius)
-  cmax = isempty(coords) ? zero(rf) : maximum(norm,coords)
-  r_tol = rf + 16 * max(eps(rf),eps(float(cmax)))
+  r = float(radius)
+  rtol = r + scale * max(eps(r),eps(T))
   for (i,coord) in enumerate(coords)
     q = SVector(Tuple(coord))
-    neighbors = inrange(tree,q,r_tol)
+    neighbors = inrange(tree,q,rtol)
     for neighbor in neighbors
       w = norm(coord - coords[neighbor])
       add_edge!(g,i,neighbor,w)
