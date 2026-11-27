@@ -104,12 +104,6 @@ export gather_data
 export scatter_data
 export attention
 export build_graph
-export get_edge_tensors
-export MPRule
-export PlainMP
-export DifferenceMP
-export CompositeMP
-export combine_message
 include("GraphsInterface.jl")
 
 export DiscreteSpace
@@ -131,8 +125,10 @@ export FESpaceMeasure
 export GraphMeasure
 export MPRule
 export PlainMP
+export AnchoredMP
 export DifferenceMP
 export CompositeMP
+export combine_message
 export get_space
 export integration
 include("InducedMeasures.jl")

@@ -30,12 +30,16 @@ function update!(log::TrainingLog,epoch::Int,current_loss::Real)
     @info "Compilation finished in $comp_mins min. Fast training started."
   end
 
-  if epoch == 1 || epoch % log.print_every == 0 || epoch == log.max_epochs
-    elapsed_fast = time() - log.t_start_fast
-    time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
-    eta_seconds = time_per_epoch * (log.max_epochs - epoch)
+  if epoch == 2 || epoch % log.print_every == 0 || epoch == log.max_epochs
+    eta_str = if epoch == 1 && log.max_epochs > 1
+      "--:--"
+    else
+      elapsed_fast = time() - log.t_start_fast
+      time_per_epoch = epoch > 1 ? elapsed_fast / (epoch - 1) : 0.0
+      format_eta(time_per_epoch * (log.max_epochs - epoch))
+    end
 
-    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $(format_eta(eta_seconds))"
+    msg = "> Epoch: $(lpad(epoch,5)) \t Loss: $(TData(current_loss)) \t ETA: $eta_str"
     println(msg)
   end
   return nothing
@@ -219,35 +223,52 @@ function MScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  s = maximum(abs,data)
-  iszero(s) && (s = one(s))
+  # Compute one scale factor per channel so multi-scale fields are balanced
+  s = dropdims(maximum(abs,data;dims=(2,3)),dims=(2,3))
+  T = eltype(s)
+  @inbounds for i in eachindex(s)
+    if s[i] <= floatmin(T)
+      s[i] = one(T)
+    end
+  end
   return MScore(s)
 end
 
-function normalise!(data::AbstractInputData,score::NoMScore)
-  data
-end
+normalise!(data::AbstractInputData,score::MScore{<:Number}) = (data ./= score.scale)
+denormalise!(data::AbstractInputData,score::MScore{<:Number}) = (data .*= score.scale)
 
 function normalise!(data::AbstractInputData,score::MScore)
-  data ./= score.scale
-end
-
-function denormalise!(data::AbstractInputData,score::NoMScore)
-  data
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd ./ score.scale[d]
+  end
 end
 
 function denormalise!(data::AbstractInputData,score::MScore)
-  data .*= score.scale
+  @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
+    data[d,:,:] .= vd .* score.scale[d]
+  end
 end
 
 function combine_scores(score::NoMScore...;kwargs...)
   first(score)
 end
 
-function combine_scores(score::MScore...;kwargs...)
-  m = zero(TData)
+function combine_scores(score::MScore{<:Number}...;kwargs...)
+  m = zero(first(score).scale)
   for s in score
-    m = max(abs(m),s.scale)
+    m = max(m,abs(s.scale))
+  end
+  return MScore(m)
+end
+
+function combine_scores(score::MScore...;kwargs...)
+  D = length(first(score).scale)
+  T = eltype(first(score).scale)
+  m = zeros(T,D)
+  @inbounds for s in score
+    for d in 1:D
+      m[d] = max(m[d],abs(s.scale[d]))
+    end
   end
   return MScore(m)
 end
@@ -269,21 +290,22 @@ function RScore(data::AbstractInputData;normalise=true)
   end
   l = dropdims(minimum(data,dims=(2,3)),dims=(2,3))
   u = dropdims(maximum(data,dims=(2,3)),dims=(2,3))
+  T = eltype(l)
+  # Avoid dividing by zero on constant or near-constant channels without skipping small-scale fields
+  @inbounds for i in eachindex(l)
+    tol = max(floatmin(T),T(16) * eps(T) * max(abs(l[i]),abs(u[i])))
+    if (u[i] - l[i]) <= tol
+      l[i] = zero(T)
+      u[i] = one(T)
+    end
+  end
   return RScore(l,u)
-end
-
-function normalise!(data::AbstractInputData,score::NoRScore)
-  data
 end
 
 function normalise!(data::AbstractInputData,score::RScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .- score.lower[d]) ./ (score.upper[d] - score.lower[d])
   end
-end
-
-function denormalise!(data::AbstractInputData,score::NoRScore)
-  data
 end
 
 function denormalise!(data::AbstractInputData,score::RScore)
@@ -324,21 +346,34 @@ function ZScore(data::AbstractInputData;normalise=true)
     normalise!(data,stats)
     return stats
   end
-  μ = dropdims(mean(data,dims=(2,3)),dims=(2,3))
-  σ = dropdims(std(data,dims=(2,3)),dims=(2,3))
-  # A constant channel has zero variance: leave it unnormalised (identity
-  # transform) instead of dividing by a near-zero σ, which would collapse it to 0
-  @inbounds for i in eachindex(σ)
-    if iszero(σ[i])
-      μ[i] = zero(eltype(μ))
-      σ[i] = one(eltype(σ))
+  D,N,K = size(data)
+  n = N * K
+  T = float(eltype(data))
+  μ = Vector{T}(undef,D)
+  σ = Vector{T}(undef,D)
+  @inbounds for d in 1:D
+    # Two-pass Float64 accumulation avoids allocating a full Float64 copy of data
+    s = 0.0
+    for k in 1:K,i in 1:N
+      s += Float64(data[d,i,k])
+    end
+    m = n > 0 ? s / n : 0.0
+    ss = 0.0
+    for k in 1:K,i in 1:N
+      diff = Float64(data[d,i,k]) - m
+      ss += diff * diff
+    end
+    sd = n > 1 ? sqrt(ss / (n - 1)) : 0.0
+    tol = max(Float64(floatmin(T)),16.0 * Float64(eps(T)) * abs(m))
+    if sd <= tol
+      μ[d] = zero(T)
+      σ[d] = one(T)
+    else
+      μ[d] = T(m)
+      σ[d] = T(sd)
     end
   end
   return ZScore(μ,σ)
-end
-
-function normalise!(data::AbstractInputData,score::NoZScore)
-  data
 end
 
 function normalise!(data::AbstractInputData,stats::ZScore)
@@ -347,13 +382,17 @@ function normalise!(data::AbstractInputData,stats::ZScore)
   end
 end
 
-function denormalise!(data::AbstractInputData,score::NoZScore)
-  data
-end
-
 function denormalise!(data::AbstractInputData,stats::ZScore)
   @inbounds @views for (d,vd) in enumerate(eachslice(data,dims=1))
     data[d,:,:] .= (vd .* stats.σ[d]) .+ stats.μ[d]
+  end
+end
+
+for S in (NoRScore,NoZScore,NoMScore),f in (:normalise!,:denormalise!)
+  @eval begin
+    $f(data,score::$S) = data
+    $f(data::AbstractInputData,score::$S) = data
+    $f(data::TwoStageBuckets,score::$S) = data
   end
 end
 
@@ -407,6 +446,12 @@ struct Normalisation{A<:NamedScores,B<:AbstractScore}
 end
 
 function Normalisation(style::NormStyle,(input,output))
+  if !style.normalise
+    # Return no-op scores without mutating input or output tensors
+    input_score = Score(style.input_style,map(_ -> nothing,input))
+    output_score = Score(style.output_style,nothing)
+    return Normalisation(input_score,output_score)
+  end
   input_score = Score(style.input_style,input)
   output_score = Score(style.output_style,output)
   Normalisation(input_score,output_score)
@@ -429,38 +474,54 @@ end
 assemble_norm(args...) = @abstractmethod
 
 """
-    struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+    struct EnergyLoss{A<:AbstractMatrix,B<:AbstractVector,C<:AbstractVector} <: Lux.AbstractLossFunction
       X::A
+      rows::B
+      cols::B
+      vals::C
     end
 
     EnergyLoss(op::AssembleOperator,f)
 
-MSE between `Xŷ` and `Xy`, with `X` the Gram matrix of the `GridapROMs` norm `op`
-(`ℓ2()`, `L2()`, `H1()`, ...) on `f`'s point layout (see [`assemble_norm`](@ref)).
-`X` is either `(N,N)`, shared by every channel, or `(D*N,D*N)`, block-diagonal
-with one block per channel (the multi-field case).
+Sample-averaged squared energy norm `(1/K) Σ_k (ŷ_k - y_k)' X (ŷ_k - y_k)`,
+with `X` the Gram matrix of the `GridapROMs` norm `op` (`ℓ2()`, `L2()`, `H1()`,
+...) on `f`'s point layout (see [`assemble_norm`](@ref)). `X` is either `(N,N)`,
+shared by every channel, or `(D*N,D*N)`, block-diagonal with one block per
+channel (the multi-field case). The sparse triplets `(rows,cols,vals)` are
+precomputed at construction time (and moved to `XDEV` during training) to avoid
+calling `findnz` at every training step.
 """
-struct EnergyLoss{A<:AbstractMatrix} <: Lux.AbstractLossFunction
+struct EnergyLoss{A<:AbstractMatrix,B<:AbstractVector,C<:AbstractVector} <: Lux.AbstractLossFunction
   X::A
+  rows::B
+  cols::B
+  vals::C
 end
 
+function EnergyLoss(X::AbstractSparseMatrix)
+  rows,cols,vals = findnz(X)
+  vals_t = eltype(vals) === TData ? vals : TData.(vals)
+  EnergyLoss(X,rows,cols,vals_t)
+end
+
+EnergyLoss(X::AbstractMatrix) = EnergyLoss(sparse(X))
 EnergyLoss(op::AssembleOperator,f) = EnergyLoss(assemble_norm(op,f))
 
 function Lux.unsafe_apply_loss(loss::EnergyLoss,ŷ,y)
-  Xŷ = _norm_mul_data(loss.X,ŷ)
-  Xy = _norm_mul_data(loss.X,y)
-  return Lux.unsafe_apply_loss(Lux.MSELoss(;agg=mean),Xŷ,Xy)
-end
-
-function _norm_mul_data(X::AbstractMatrix,x::AbstractInputData)
-  D,N,K = size(x)
-  if size(X,1) == N
-    _mat_mul_data(X,x)
+  e = ŷ .- y
+  D,N,K = size(e)
+  w = reshape(loss.vals,1,1,length(loss.vals))
+  if size(loss.X,1) == N
+    e_p = permutedims(e,(1,3,2))
+    gathered = NNlib.gather(e_p,loss.cols)
+    Xe_p = NNlib.scatter(+,gathered .* w,loss.rows;dstsize=(D,K,N))
+    return sum(e_p .* Xe_p) / TData(K)
   else
-    @check size(X,1) == D*N "Norm matrix of size $(size(X)) incompatible with data of size $(size(x))"
-    x_flat = reshape(permutedims(x,(2,1,3)),1,N*D,K)
-    y_flat = _mat_mul_data(X,x_flat)
-    permutedims(reshape(y_flat,N,D,K),(2,1,3))
+    @check size(loss.X,1) == D * N "Norm matrix of size $(size(loss.X)) incompatible with data of size $(size(e))"
+    e_p = reshape(permutedims(e,(3,2,1)),1,K,N * D)
+    gathered = NNlib.gather(e_p,loss.cols)
+    Xe_p = NNlib.scatter(+,gathered .* w,loss.rows;dstsize=(1,K,N * D))
+    return sum(e_p .* Xe_p) / TData(K)
   end
 end
 
