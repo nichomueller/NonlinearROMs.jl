@@ -290,11 +290,11 @@ function build_graph(coords::AbstractVector;kwargs...)
   return g
 end
 
-function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0)
+function build_graph!(g::AbstractGraph,tree::NNTree,coords::AbstractVector;radius=1.0,inflation=10)
   # Scale tolerance with coordinate precision and magnitude so exact distance edges are not dropped
   rf = float(radius)
   cmax = isempty(coords) ? zero(rf) : maximum(norm,coords)
-  r_tol = rf + 16 * max(eps(rf),eps(float(cmax)))
+  r_tol = rf + inflation * max(eps(rf),eps(float(cmax)))
   for (i,coord) in enumerate(coords)
     q = SVector(Tuple(coord))
     neighbors = inrange(tree,q,r_tol)
