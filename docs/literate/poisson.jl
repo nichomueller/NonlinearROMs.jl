@@ -96,15 +96,11 @@ hμ(μ) = parameterise(h,μ)
 stiffness(μ,u,v) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
 rhs(μ,v) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
 
-trian_res = (Ω,Γn)
-trian_stiffness = (Ω,)
-domains = FEDomains(trian_res,trian_stiffness)
-
 reffe = ReferenceFE(lagrangian,Float64,order)
 test = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
 trial = ParamTrialFESpace(test,gμ)
 
-feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test,domains)
+feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test)
 fesolver = LinearFESolver(LUSolver())
 
 # ## 5. Generating FE snapshots
@@ -201,8 +197,8 @@ loss = EnergyLoss(H1(),fspace)
 # 1. a pointwise **Lift** (`Dense`) from the input channels to the first
 #    hidden width,
 # 2. one [`KernelNeuralLayer`](@ref) *per interior transition* of
-#    `hidden_layers` (here `hidden_layers=(16,16)` has only one such
-#    transition, so there is exactly **one** non-local layer),
+#    `hidden_layers` (here `hidden_layers=(64,64,64)` has two such
+#    transitions, so there are exactly **two** non-local layers),
 # 3. a pointwise **Project** (`Dense`) down to the output dimension.
 #
 # What makes a layer "non-local" is how the integral ``(K_t v)(x)`` is
@@ -234,8 +230,8 @@ loss = EnergyLoss(H1(),fspace)
 # [`visualise`](@ref) writes the true/predicted/error fields to a `.vtu` file
 # for inspection in ParaView.
 
-fmodel = KernelNeuralModel(fspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(fmodel;epochs=200,loss=loss,print_every=50)
+fmodel = KernelNeuralModel(fspace;hidden_layers=(64,64,64),activation=tanh)
+solver = NeuralSolver(fmodel;epochs=1000,loss=loss,print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
@@ -263,8 +259,8 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gridap")
 
 mesh_size = 1/N
 gspace = GraphInducedSpace(test;radius=2*mesh_size)
-gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(gmodel;epochs=200,loss=loss,print_every=50)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(64,64,64),activation=tanh)
+solver = NeuralSolver(gmodel;epochs=1000,loss=loss,print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
@@ -281,6 +277,7 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 # (K_t v)(x) = \mathcal F^{-1}\big(R_\theta\cdot(\mathcal F v)\big)(x),
 # \qquad (R_\theta)_k = 0 \ \text{for } k > \texttt{truncation}.
 # ```
+# Here, `R_\theta\cdot` represents the action of the (truncated) kernel function.
 # No `InducedMeasure` is involved, so the model is built from the style alone,
 # and its kernel sees only the running hidden state `v` (the default
 # [`DataFormatter`](@ref) of a `FourierStyle` passes neither `x` nor `a(x)`).
@@ -292,8 +289,8 @@ visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
 #     trainable global operator whose meaning depends on the dof ordering, so
 #     the result should not be read as a faithful FNO.
 
-kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(kmodel;epochs=200,loss=loss,print_every=50)
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(64,64,64),activation=tanh)
+solver = NeuralSolver(kmodel;epochs=1000,loss=loss,print_every=50)
 op = neural_operator(solver,input_space(μ_train),output_space)
 pred_uμ = solve(solver,op,input_space(μ))
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)

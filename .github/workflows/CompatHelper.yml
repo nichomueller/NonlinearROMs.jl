@@ -7,7 +7,6 @@ jobs:
   CompatHelper:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v3
         with:
           version: '1.12'

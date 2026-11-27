@@ -3,6 +3,7 @@ using Gridap
 using GridapEmbedded
 using GridapROMs
 using NonlinearROMs
+import Gridap.ODEs: get_test
 
 L = 2
 W = 2
@@ -54,7 +55,7 @@ function pde(R,x0)
   trial = ParamTrialFESpace(test,gμ)
   feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test)
 
-  return (test,trial,feop)
+  return feop
 end
 
 fesolver = LinearFESolver(LUSolver())
@@ -64,35 +65,46 @@ dir = datadir("moving_poisson")
 features(μ) = FeatureBundle((aμ(μ),fμ(μ),gμ(μ)))
 
 # PDE 1
-test1,trial1,feop1 = pde(0.1,Point(0.5,1.5))
+feop1 = pde(0.1,Point(0.5,1.5))
+test1 = get_test(feop1)
 μ_train1 = realisation(pspace;nparams=25)
 uhμ_train1 = solve(fesolver,feop1,μ_train1)
 
 # PDE 2
-test2,trial2,feop2 = pde(0.2,Point(1.5,0.5))
+feop2 = pde(0.2,Point(1.5,0.5))
+test2 = get_test(feop2)
 μ_train2 = realisation(pspace;nparams=25)
 uhμ_train2 = solve(fesolver,feop2,μ_train2)
 
 # PDE 3
-test,trial,feop = pde(0.3,Point(1.0,1.0))
+feop = pde(0.3,Point(1.0,1.0))
+test = get_test(feop)
 μ = realisation(pspace;nparams=1)
 uhμ = solve(fesolver,feop,μ)
-
-# on variable meshes, we need a graph-based approach
 
 # training data of the two PDEs stacked sample-wise on the union of their points
 input_space = InputSpace(InputSpace(test1,features(μ_train1)),InputSpace(test2,features(μ_train2)))
 output_space = OutputSpace(uhμ_train1,uhμ_train2)
-# one local graph per PDE: every sample is integrated on its own graph only
-gspace = GraphInducedSpace(output_space;radius=2*hd)
-gmodel = KernelNeuralModel(gspace;hidden_layers=(16,16),activation=tanh)
-solver = NeuralSolver(gmodel;epochs=200,print_every=50)
-op = neural_operator(solver,input_space,output_space)
 
+# 1) GNO
+gspace = GraphInducedSpace(output_space;radius=hd)
+gmodel = KernelNeuralModel(gspace;hidden_layers=(64,64,64),activation=tanh)
+solver = NeuralSolver(gmodel;epochs=1000,loss=EnergyLoss(H1(),fspace),print_every=50)
+op = neural_operator(solver,input_space,output_space)
 # evaluation on a new mesh: same trained network, kernels integrated on the new graph
-gspace_test = GraphInducedSpace(test;radius=1.2*hd)
+gspace_test = GraphInducedSpace(test;radius=hd)
 op_test = replace_space(op,gspace_test)
-input_space = InputSpace(test,features(μ))
-pred_uμ = solve(solver,op_test,input_space)
+eval_input_space = InputSpace(test,features(μ))
+pred_uμ = solve(solver,op_test,eval_input_space)
 pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
 visualise(dir,uhμ,pred_uhμ;variable_name="uh_gno")
+
+# 2) FNO
+kmodel = KernelNeuralModel(FourierStyle(truncation=12);hidden_layers=(64,64,64,64),activation=tanh)
+solver = NeuralSolver(kmodel;epochs=1000,print_every=50)
+op = neural_operator(solver,input_space,output_space)
+# no new mesh: integral is in the Fourier domain
+eval_input_space = InputSpace(test,features(μ))
+pred_uμ = solve(solver,op,eval_input_space)
+pred_uhμ = to_element(OutputSpace(uhμ),pred_uμ)
+visualise(dir,uhμ,pred_uhμ;variable_name="uh_fno")

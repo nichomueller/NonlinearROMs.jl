@@ -2,7 +2,7 @@
 
 | **Documentation** |
 |:------------ |
-| [![docdev](https://img.shields.io/badge/docs-dev-blue.svg)](https://nicholasmueller.co/NonlinearROMs.jl/dev/) |
+| [![docdev](https://img.shields.io/badge/docs-dev-blue.svg)](https://nichomueller.github.io/NonlinearROMs.jl/dev/) |
 | **Build Status** |
 | [![CI](https://github.com/nichomueller/NonlinearROMs.jl/actions/workflows/ci.yml/badge.svg)](https://github.com/nichomueller/NonlinearROMs.jl/actions/workflows/ci.yml) [![codecov](https://codecov.io/gh/nichomueller/NonlinearROMs.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/nichomueller/NonlinearROMs.jl) |
 

@@ -108,15 +108,11 @@ evaluate one at.
 stiffness(μ,u,v) = ∫(aμ(μ)*∇(v)⋅∇(u))dΩ
 rhs(μ,v) = ∫(fμ(μ)*v)dΩ + ∫(hμ(μ)*v)dΓn
 
-trian_res = (Ω,Γn)
-trian_stiffness = (Ω,)
-domains = FEDomains(trian_res,trian_stiffness)
-
 reffe = ReferenceFE(lagrangian,Float64,order)
 test = TestFESpace(Ω,reffe;conformity=:H1,dirichlet_tags=[1,3,7])
 trial = ParamTrialFESpace(test,gμ)
 
-feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test,domains)
+feop = LinearParamFEOperator(rhs,stiffness,pspace,trial,test)
 fesolver = LinearFESolver(LUSolver())
 ````
 
